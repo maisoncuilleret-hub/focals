@@ -20,6 +20,18 @@
     }
     return "";
   };
+  const pickAttr = (selectors, attr) => {
+    for (const selector of selectors) {
+      const el = q(selector);
+      if (el) {
+        const value = el.getAttribute(attr);
+        if (value) {
+          return value.trim();
+        }
+      }
+    }
+    return "";
+  };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
     if (/\bcdi\b/.test(normalized)) return "CDI";
@@ -66,22 +78,31 @@
 
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
-    const name =
+    const rawName =
       pickText(
         ".pv-text-details__left-panel h1",
         "div[data-view-name='profile-card'] h1",
         "main section h1.inline.t-24.v-align-middle.break-words",
         "h1.inline.t-24.v-align-middle.break-words",
+        "a[href*='/overlay/about-this-profile/'] h1",
         ".text-heading-xlarge",
         "h1"
-      ) || "";
+      ) ||
+      pickAttr([
+        "a[href*='/overlay/about-this-profile/']",
+        "a[href*='overlay/about-this-profile']",
+        "a[href*='/overlay/contact-info/']",
+      ], "aria-label") ||
+      "";
+    const name = rawName.replace(/\s+/g, " ").trim();
 
     const headline =
       pickText(
         ".pv-text-details__left-panel .text-body-medium.break-words",
         ".text-body-medium.break-words",
         "div[data-view-name='profile-card'] .text-body-medium",
-        ".display-flex.full-width .hoverable-link-text span[aria-hidden='true']"
+        ".display-flex.full-width .hoverable-link-text span[aria-hidden='true']",
+        ".display-flex.full-width .hoverable-link-text"
       ) || "";
 
     const localisation =
@@ -103,7 +124,8 @@
       ".pv-text-details__left-panel .inline.t-16.t-black.t-normal",
       ".display-flex.full-width .t-14.t-normal span[aria-hidden='true']",
       ".display-flex.full-width .t-14.t-normal",
-      "div[data-view-name='profile-card'] .t-14.t-normal span[aria-hidden='true']"
+      "div[data-view-name='profile-card'] .t-14.t-normal span[aria-hidden='true']",
+      "div[data-view-name='profile-card'] .t-14.t-normal"
     );
     const topCardCompany = parseCompanyAndContract(topCardCompanyRaw);
     let current_company = topCardCompany.company;
