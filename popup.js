@@ -55,9 +55,32 @@ function fillUI(data, source = "standard") {
 }
 
 // demande les données au content script
+function handleResponse(res, sourceLabel) {
+  if (!res) {
+    setErr("Impossible de récupérer les infos sur cette page.");
+    setMode("Mode : échec");
+    return false;
+  }
+
+  if (res.error) {
+    setErr(res.error || "Impossible de récupérer les infos sur cette page.");
+    setMode("Mode : erreur");
+    return false;
+  }
+
+  if (!res.data) {
+    setErr("Impossible de récupérer les infos sur cette page.");
+    setMode("Mode : échec");
+    return false;
+  }
+
+  fillUI(res.data, sourceLabel);
+  return true;
+}
+
 function requestDataFromTab(tabId, sourceLabel) {
   chrome.tabs.sendMessage(tabId, { type: "GET_CANDIDATE_DATA" }, (res) => {
-    if (chrome.runtime.lastError || !res || !res.data) {
+    if (chrome.runtime.lastError || !res) {
       // pas de réponse → on injecte content-main.js puis on redemande
       chrome.scripting.executeScript(
         {
@@ -67,18 +90,16 @@ function requestDataFromTab(tabId, sourceLabel) {
         () => {
           // on redemande
           chrome.tabs.sendMessage(tabId, { type: "GET_CANDIDATE_DATA" }, (res2) => {
-            if (chrome.runtime.lastError || !res2 || !res2.data) {
-              setErr("Impossible de récupérer les infos sur cette page.");
-              setMode("Mode : échec");
-              return;
-            }
-            fillUI(res2.data, sourceLabel + " (après injection)");
+            handleResponse(res2, sourceLabel + " (après injection)");
           });
         }
       );
       return;
     }
-    fillUI(res.data, sourceLabel);
+
+    if (!handleResponse(res, sourceLabel)) {
+      setMode("Mode : échec");
+    }
   });
 }
 
