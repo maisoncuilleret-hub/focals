@@ -11,7 +11,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     try {
       const data = scrapePublicProfile();
       console.log("[Focals] Scraped data:", data);
-      sendResponse(data);
+      sendResponse({ data });
     } catch (e) {
       console.error("[Focals] scrape error", e);
       sendResponse({ error: e.message });
