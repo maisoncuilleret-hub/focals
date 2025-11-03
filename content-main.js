@@ -142,22 +142,21 @@
     let contract = topCardCompany.contract;
 
     const expBlock = q("section[id*='experience'] ul") || q(".pvs-list__outer-container");
+    let expTitle = "";
+    let expCompany = "";
+
     if (expBlock) {
       const first = expBlock.querySelector("li") || expBlock.querySelector(".pvs-entity");
       if (first) {
-        if (!current_title) {
-          current_title =
-            getText(first.querySelector(".mr1.t-bold span[aria-hidden='true']")) ||
-            getText(first.querySelector(".t-bold span[aria-hidden='true']")) ||
-            "";
-        }
+        expTitle =
+          getText(first.querySelector(".mr1.t-bold span[aria-hidden='true']")) ||
+          getText(first.querySelector(".t-bold span[aria-hidden='true']")) ||
+          "";
 
-        if (!current_company) {
-          current_company =
-            getText(first.querySelector(".t-14.t-normal span[aria-hidden='true']")) ||
-            getText(first.querySelector(".t-normal.t-black--light span[aria-hidden='true']")) ||
-            "";
-        }
+        expCompany =
+          getText(first.querySelector(".t-14.t-normal span[aria-hidden='true']")) ||
+          getText(first.querySelector(".t-normal.t-black--light span[aria-hidden='true']")) ||
+          "";
 
         // Détection contrat
         const contractFromExp = detectContract(first.innerText);
@@ -165,6 +164,18 @@
           contract = contractFromExp;
         }
       }
+    }
+
+    if (expTitle) {
+      current_title = expTitle;
+    }
+
+    if (expCompany) {
+      const parsedExpCompany = parseCompanyAndContract(expCompany);
+      if (!contract && parsedExpCompany.contract) {
+        contract = parsedExpCompany.contract;
+      }
+      current_company = parsedExpCompany.company || expCompany;
     }
 
     if (!contract) {
