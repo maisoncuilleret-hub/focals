@@ -33,6 +33,18 @@
     }
     return "";
   };
+  const pickTextFrom = (root, selectors) => {
+    if (!root) return "";
+    const list = Array.isArray(selectors) ? selectors : [selectors];
+    for (const selector of list) {
+      const el = root.querySelector(selector);
+      const text = getText(el);
+      if (text) {
+        return text;
+      }
+    }
+    return "";
+  };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
     if (/\bcdi\b/.test(normalized)) return "CDI";
@@ -61,6 +73,23 @@
       contract = detectContract(trimmed);
     }
     return { company, contract };
+  };
+  const findExperienceSection = () => {
+    const anchor = q("#experience");
+    if (anchor) {
+      const section = anchor.closest("section");
+      if (section) {
+        return section;
+      }
+    }
+    const cards = Array.from(document.querySelectorAll("section.artdeco-card"));
+    for (const card of cards) {
+      const heading = pickTextFrom(card, ["h2 span[aria-hidden='true']", "h2"]);
+      if (heading && /expérience/i.test(heading)) {
+        return card;
+      }
+    }
+    return null;
   };
 
   // === Listener ===
@@ -141,27 +170,51 @@
     let current_company = topCardCompany.company;
     let contract = topCardCompany.contract;
 
-    const expBlock = q("section[id*='experience'] ul") || q(".pvs-list__outer-container");
+    const experienceSection = findExperienceSection();
     let expTitle = "";
     let expCompany = "";
+    let expContainerText = "";
 
-    if (expBlock) {
-      const first = expBlock.querySelector("li") || expBlock.querySelector(".pvs-entity");
-      if (first) {
+    if (experienceSection) {
+      const listItems = Array.from(experienceSection.querySelectorAll("ul li"));
+      let firstEntity = null;
+      for (const item of listItems) {
+        const entity = item.querySelector("[data-view-name='profile-component-entity']");
+        if (entity) {
+          firstEntity = entity;
+          break;
+        }
+      }
+      if (!firstEntity) {
+        firstEntity = experienceSection.querySelector("[data-view-name='profile-component-entity']");
+      }
+
+      if (firstEntity) {
+        const roleSource =
+          firstEntity.querySelector(".pvs-entity__sub-components") || firstEntity;
         expTitle =
-          getText(first.querySelector(".mr1.t-bold span[aria-hidden='true']")) ||
-          getText(first.querySelector(".t-bold span[aria-hidden='true']")) ||
-          "";
+          pickTextFrom(roleSource, [
+            ".hoverable-link-text span[aria-hidden='true']",
+            ".hoverable-link-text",
+            ".t-bold span[aria-hidden='true']",
+            ".t-bold",
+          ]) || "";
 
         expCompany =
-          getText(first.querySelector(".t-14.t-normal span[aria-hidden='true']")) ||
-          getText(first.querySelector(".t-normal.t-black--light span[aria-hidden='true']")) ||
-          "";
+          pickTextFrom(firstEntity, [
+            ".pvs-entity__sub-components li .t-14.t-normal:not(.t-black--light) span[aria-hidden='true']",
+            ".pvs-entity__sub-components li .t-14.t-normal:not(.t-black--light)",
+            ".t-14.t-normal:not(.t-black--light) span[aria-hidden='true']",
+            ".t-14.t-normal:not(.t-black--light)",
+            ".t-14.t-normal span[aria-hidden='true']",
+          ]) || "";
 
-        // Détection contrat
-        const contractFromExp = detectContract(first.innerText);
-        if (!contract && contractFromExp) {
-          contract = contractFromExp;
+        expContainerText = firstEntity.innerText || "";
+
+        if (!expCompany) {
+          expCompany = pickTextFrom(firstEntity, [
+            "a[data-field='experience_company_logo'] span[aria-hidden='true']",
+          ]);
         }
       }
     }
@@ -179,7 +232,7 @@
     }
 
     if (!contract) {
-      contract = detectContract(current_company);
+      contract = detectContract(expContainerText || current_company);
     }
 
     // Nettoyage
