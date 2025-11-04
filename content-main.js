@@ -273,6 +273,21 @@
               continue;
             }
 
+            const anchorsWithDataField = item.querySelectorAll("a[data-field]");
+            if (anchorsWithDataField.length) {
+              let shouldSkip = false;
+              for (const anchor of anchorsWithDataField) {
+                const fieldName = anchor.getAttribute("data-field") || "";
+                if (/skill/i.test(fieldName)) {
+                  shouldSkip = true;
+                  break;
+                }
+              }
+              if (shouldSkip) {
+                continue;
+              }
+            }
+
             const candidateText = pickRoleText(item);
             const candidateCompany = pickCompanyText(item);
             if (!candidateText && !candidateCompany) {
