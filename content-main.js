@@ -57,6 +57,7 @@
     }
     return "";
   };
+  const cleanMetadataValue = (text) => normalizeText((text || "").replace(/^·\s*/, ""));
   const pickRoleText = (node) => {
     if (!node) return "";
     const fromSelectors = pickTextFrom(node, [
@@ -154,17 +155,30 @@
       ".pvs-profile-actions__custom-action",
       ".pvs-profile-actions__custom button",
       ".pvs-profile-actions button",
+      "[data-test-profile-top-card] button",
+      "[data-test-profile-actions] button",
+      "[data-test-top-card-actions] button",
+      ".artdeco-entity-lockup button",
+      ".lockup__content-title-right-container button",
     ].join(", ");
     return Array.from(document.querySelectorAll(selector));
   };
   const computeConnectionInfo = () => {
-    const premiumBadge = q(".pv-member-badge--for-top-card");
+    const premiumBadge =
+      q(".pv-member-badge--for-top-card") ||
+      document.querySelector("svg[data-test-icon*='linkedin-bug-premium']") ||
+      document.querySelector("svg[data-test-icon='linkedin-bug-premium-xsmall']");
     const isPremium = !!premiumBadge;
 
-    const badge = q(".distance-badge");
+    const badge =
+      q(".distance-badge") ||
+      q("[data-test-lockup-degree] .artdeco-entity-lockup__degree") ||
+      q("[data-test-lockup-degree]") ||
+      q(".artdeco-entity-lockup__badge");
     const labelCandidates = [];
     if (badge) {
       labelCandidates.push(getText(badge.querySelector(".visually-hidden")));
+      labelCandidates.push(getText(badge.querySelector(".a11y-text")));
       labelCandidates.push(getText(badge.querySelector(".dist-value")));
       labelCandidates.push(getText(badge));
     }
@@ -262,6 +276,122 @@
     }
     return { company, contract };
   };
+  const isRecruiterProfile = () => {
+    if (/linkedin\.com\/(talent|recruiter)/i.test(location.href)) {
+      return true;
+    }
+    return !!(
+      document.querySelector("[data-test-row-lockup-full-name]") ||
+      document.querySelector("[data-test-profile-background-card] .experience-card")
+    );
+  };
+  const findRecruiterExperienceCard = () =>
+    document.querySelector("[data-test-profile-background-card] .experience-card") ||
+    document.querySelector(".experience-card");
+  const extractRecruiterGroupExperience = (container) => {
+    if (!container) return { role: "", company: "", contract: "" };
+    const companyRaw = pickTextFrom(container, [
+      "[data-test-grouped-position-entity-company-name]",
+      ".grouped-position-entity__company-name",
+      "strong.grouped-position-entity__company-name",
+    ]);
+    const parsedCompany = parseCompanyAndContract(companyRaw);
+    const metadataNodes = Array.from(
+      container.querySelectorAll("[data-test-grouped-position-entity-metadata-container]")
+    );
+    for (const metaNode of metadataNodes) {
+      const roleText = pickTextFrom(metaNode, [
+        "[data-test-grouped-position-entity-title] a",
+        "[data-test-grouped-position-entity-title]",
+        ".position-item__position-title-link",
+        ".t-16",
+      ]);
+      const normalizedRole = normalizeText(roleText);
+      if (!normalizedRole) {
+        continue;
+      }
+
+      const companyCandidate = firstNonEmpty(
+        pickTextFrom(metaNode, [
+          "[data-test-position-entity-company-name]",
+          ".position-item__company-link",
+        ]),
+        parsedCompany.company,
+        companyRaw
+      );
+      const parsedCandidate = parseCompanyAndContract(companyCandidate);
+      const contractHint = firstNonEmpty(
+        pickTextFrom(metaNode, ["[data-test-position-entity-employment-status]"]),
+        parsedCandidate.contract,
+        parsedCompany.contract,
+        detectContract(metaNode ? metaNode.innerText : "")
+      );
+
+      return {
+        role: normalizedRole,
+        company: firstNonEmpty(parsedCandidate.company, companyCandidate, parsedCompany.company, companyRaw),
+        contract: firstNonEmpty(detectContract(contractHint), contractHint),
+      };
+    }
+
+    return {
+      role: "",
+      company: parsedCompany.company || companyRaw || "",
+      contract: parsedCompany.contract || "",
+    };
+  };
+  const extractRecruiterSingleExperience = (container) => {
+    if (!container) return { role: "", company: "", contract: "" };
+    const roleText = pickTextFrom(container, [
+      "[data-test-position-entity-title]",
+      ".position-item__position-title-link",
+      ".background-entity__summary-definition--title",
+      ".t-16",
+    ]);
+    const normalizedRole = normalizeText(roleText);
+    if (!normalizedRole) {
+      return { role: "", company: "", contract: "" };
+    }
+
+    const companyRaw = firstNonEmpty(
+      pickTextFrom(container, [
+        "[data-test-position-entity-company-name]",
+        ".position-item__company-link",
+        ".background-entity__summary-definition--subtitle",
+      ]),
+      pickTextFrom(container, [".background-entity__summary-definition--title a"])
+    );
+    const parsedCompany = parseCompanyAndContract(companyRaw);
+    const contractHint = firstNonEmpty(
+      pickTextFrom(container, ["[data-test-position-entity-employment-status]"]),
+      parsedCompany.contract,
+      detectContract(container ? container.innerText : ""),
+      detectContract(companyRaw)
+    );
+
+    return {
+      role: normalizedRole,
+      company: parsedCompany.company || companyRaw || "",
+      contract: firstNonEmpty(detectContract(contractHint), contractHint),
+    };
+  };
+  const extractRecruiterExperience = (experienceCard) => {
+    if (!experienceCard) {
+      return { role: "", company: "", contract: "" };
+    }
+    const containers = Array.from(
+      experienceCard.querySelectorAll("[data-test-group-position-list-container], [data-test-position-list-container]")
+    );
+    for (const container of containers) {
+      const data = container.hasAttribute("data-test-group-position-list-container")
+        ? extractRecruiterGroupExperience(container)
+        : extractRecruiterSingleExperience(container);
+      if (data.role || data.company) {
+        return data;
+      }
+    }
+    return { role: "", company: "", contract: "" };
+  };
   const findExperienceSection = () => {
     const anchor = q("#experience");
     if (anchor) {
@@ -294,8 +424,100 @@
     }
   });
 
+  const scrapeRecruiterProfile = () => {
+    const topCard =
+      document.querySelector("[data-test-row-lockup-full-name]")?.closest(".artdeco-entity-lockup__content") ||
+      document.querySelector(".artdeco-entity-lockup__content") ||
+      document.querySelector("[data-test-profile-top-card]");
+
+    const name = normalizeText(
+      firstNonEmpty(
+        pickTextFrom(topCard, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title"]),
+        pickTextFrom(topCard, [".artdeco-entity-lockup__title"]),
+        pickText("[data-test-row-lockup-full-name]")
+      )
+    );
+
+    const headline = firstNonEmpty(
+      pickTextFrom(topCard, ["[data-test-row-lockup-headline]", ".artdeco-entity-lockup__subtitle"]),
+      pickText("[data-test-row-lockup-headline]")
+    );
+
+    const localisation = cleanMetadataValue(
+      firstNonEmpty(
+        pickTextFrom(topCard, ["[data-test-row-lockup-location]"]),
+        pickText("[data-test-row-lockup-location]")
+      )
+    );
+
+    const photo_url =
+      pickAttr(
+        [
+          ".artdeco-entity-lockup__image img[data-test-avatar-image]",
+          ".artdeco-entity-lockup__image img",
+          "img[data-test-row-lockup-profile-image]",
+          "img[data-test-avatar-image]",
+        ],
+        "src"
+      ) || "";
+
+    const topCardCompanyRaw = firstNonEmpty(
+      pickTextFrom(topCard, ["[data-test-topcard-condensed-lockup-current-employer]"]),
+      pickText("[data-test-topcard-condensed-lockup-current-employer]")
+    );
+    const topCardCompany = parseCompanyAndContract(topCardCompanyRaw);
+
+    let current_title = headline || "";
+    let current_company = topCardCompany.company;
+    let contract = topCardCompany.contract;
+
+    const experienceCard = findRecruiterExperienceCard();
+    if (experienceCard) {
+      const experience = extractRecruiterExperience(experienceCard);
+      if (experience.role) {
+        current_title = experience.role;
+      }
+      if (experience.company) {
+        current_company = experience.company;
+      }
+      if (!contract && experience.contract) {
+        contract = experience.contract;
+      }
+    }
+
+    if (!contract) {
+      contract = detectContract(current_company);
+    }
+
+    const [firstName, ...rest] = (name || "").split(/\s+/);
+    const lastName = rest.join(" ").trim();
+
+    const connectionInfo = computeConnectionInfo();
+
+    return {
+      name: name || "—",
+      current_title: current_title || headline || "—",
+      current_company: current_company || "—",
+      contract: contract || "—",
+      localisation: localisation || "—",
+      linkedin_url: location.href || "—",
+      photo_url,
+      firstName,
+      lastName,
+      connection_status: connectionInfo.connection_status,
+      connection_degree: connectionInfo.connection_degree,
+      connection_label: connectionInfo.connection_label,
+      connection_summary: connectionInfo.connection_summary,
+      is_premium: connectionInfo.is_premium,
+      can_message_without_connect: connectionInfo.can_message_without_connect,
+    };
+  };
+
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
+    if (isRecruiterProfile()) {
+      return scrapeRecruiterProfile();
+    }
     const rawName =
       pickText(
         ".pv-text-details__left-panel h1",
