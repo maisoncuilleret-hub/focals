@@ -401,8 +401,7 @@
             }
 
             const candidateText = pickRoleText(item);
-            const candidateCompany = pickCompanyText(item);
-            if (!candidateText && !candidateCompany) {
+            if (!candidateText) {
               continue;
             }
 
@@ -429,13 +428,18 @@
           } else if (headerCompanyText) {
             companyCandidates.push(headerCompanyText);
           }
-          const roleCompany = pickCompanyText(roleNode);
-          if (roleCompany) {
-            companyCandidates.push(roleCompany);
-          }
+
           const firstEntityCompany = pickCompanyText(firstEntity);
           if (firstEntityCompany) {
             companyCandidates.push(firstEntityCompany);
+          }
+
+          let roleCompany = "";
+          if (roleNode && roleNode.querySelector("a[data-field='experience_company_logo']")) {
+            roleCompany = pickCompanyText(roleNode);
+          }
+          if (roleCompany) {
+            companyCandidates.push(roleCompany);
           }
         } else {
           companyCandidates.push(pickCompanyText(firstEntity));
