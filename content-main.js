@@ -45,6 +45,17 @@
     }
     return "";
   };
+  const firstNonEmpty = (...values) => {
+    for (const value of values) {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+    return "";
+  };
   const pickRoleText = (node) => {
     if (!node) return "";
     const fromSelectors = pickTextFrom(node, [
@@ -124,6 +135,9 @@
     }
     if (!contract) {
       contract = detectContract(trimmed);
+    }
+    if (contract && company && detectContract(company) === contract) {
+      company = "";
     }
     return { company, contract };
   };
@@ -243,6 +257,7 @@
           firstEntity.querySelectorAll(".pvs-entity__sub-components ul li")
         );
         let roleNode = firstEntity;
+        let multiRoleMatch = false;
         if (multiRoleItems.length) {
           for (const item of multiRoleItems) {
             const optionalAnchor = item.querySelector("a.optional-action-target-wrapper");
@@ -260,16 +275,41 @@
             }
 
             roleNode = item;
+            multiRoleMatch = roleNode !== firstEntity;
             break;
           }
         }
 
-        const roleText = pickRoleText(roleNode) || pickRoleText(firstEntity);
-        const companyText = pickCompanyText(firstEntity) || pickCompanyText(roleNode);
-        const parsedCompany = parseCompanyAndContract(companyText);
-
+        const topLevelRoleText = pickRoleText(firstEntity);
+        const roleText = pickRoleText(roleNode) || topLevelRoleText;
         if (roleText) {
           current_title = roleText;
+        }
+
+        const companyCandidates = [];
+        if (multiRoleMatch) {
+          companyCandidates.push(pickCompanyText(firstEntity));
+          if (roleNode !== firstEntity) {
+            companyCandidates.push(pickCompanyText(roleNode));
+          }
+          if (topLevelRoleText && topLevelRoleText !== roleText) {
+            companyCandidates.push(topLevelRoleText);
+          }
+        } else {
+          companyCandidates.push(pickCompanyText(firstEntity));
+          if (roleNode !== firstEntity) {
+            companyCandidates.push(pickCompanyText(roleNode));
+          }
+        }
+
+        let companyText = firstNonEmpty(...companyCandidates);
+        let parsedCompany = parseCompanyAndContract(companyText);
+
+        if (!parsedCompany.company && multiRoleMatch && topLevelRoleText) {
+          parsedCompany = parseCompanyAndContract(topLevelRoleText);
+          if (!companyText) {
+            companyText = topLevelRoleText;
+          }
         }
 
         if (parsedCompany.company) {
@@ -278,14 +318,19 @@
           current_company = companyText;
         }
 
-        const contractFromCompany = parsedCompany.contract;
-        const contractSource = roleNode || firstEntity;
-        const contractFromRoleBlock = detectContract(
-          (contractSource && contractSource.innerText) || firstEntity.innerText || ""
-        );
+        const contractHints = [
+          parsedCompany.contract,
+          companyText ? detectContract(companyText) : "",
+          multiRoleMatch && topLevelRoleText ? detectContract(topLevelRoleText) : "",
+          detectContract(roleNode ? roleNode.innerText : ""),
+          detectContract(firstEntity.innerText || ""),
+        ];
 
-        if (!contract) {
-          contract = contractFromCompany || contractFromRoleBlock || contract;
+        for (const hint of contractHints) {
+          if (!contract && hint) {
+            contract = hint;
+            break;
+          }
         }
       }
     }
