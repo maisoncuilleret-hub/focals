@@ -33,6 +33,20 @@
     }
     return "";
   };
+  const pickAttrFrom = (root, selectors, attr) => {
+    if (!root) return "";
+    const list = Array.isArray(selectors) ? selectors : [selectors];
+    for (const selector of list) {
+      const el = root.querySelector(selector);
+      if (el) {
+        const value = el.getAttribute(attr);
+        if (value) {
+          return value.trim();
+        }
+      }
+    }
+    return "";
+  };
   const normalizeText = (text) => (text || "").replace(/\s+/g, " ").trim();
   const pickTextFrom = (root, selectors) => {
     if (!root) return "";
@@ -160,6 +174,9 @@
       "[data-test-top-card-actions] button",
       ".artdeco-entity-lockup button",
       ".lockup__content-title-right-container button",
+      ".profile-item-actions button",
+      ".topcard-condensed__actions button",
+      "[data-live-test-profile-item-actions] button",
     ].join(", ");
     return Array.from(document.querySelectorAll(selector));
   };
@@ -170,11 +187,20 @@
       document.querySelector("svg[data-test-icon='linkedin-bug-premium-xsmall']");
     const isPremium = !!premiumBadge;
 
-    const badge =
-      q(".distance-badge") ||
-      q("[data-test-lockup-degree] .artdeco-entity-lockup__degree") ||
-      q("[data-test-lockup-degree]") ||
-      q(".artdeco-entity-lockup__badge");
+    const badgeCandidates = [];
+    const pushCandidate = (node) => {
+      if (node) {
+        badgeCandidates.push(node);
+      }
+    };
+    pushCandidate(q(".distance-badge"));
+    pushCandidate(q("[data-test-lockup-degree]"));
+    const lockupBadges = Array.from(document.querySelectorAll(".artdeco-entity-lockup__badge"));
+    const degreeBadge = lockupBadges.find((node) => node.querySelector(".artdeco-entity-lockup__degree"));
+    pushCandidate(degreeBadge);
+    const labelledBadge = lockupBadges.find((node) => /(relation|degree|degr[ée])/i.test(node.innerText || ""));
+    pushCandidate(labelledBadge);
+    const badge = badgeCandidates.find(Boolean);
     const labelCandidates = [];
     if (badge) {
       labelCandidates.push(getText(badge.querySelector(".visually-hidden")));
@@ -425,32 +451,54 @@
   });
 
   const scrapeRecruiterProfile = () => {
+    const topCardWrapper =
+      document.querySelector(".profile__topcard-wrapper") ||
+      document.querySelector("[data-test-topcard-condensed-lockup]")?.closest(".profile__topcard-wrapper") ||
+      document.querySelector("[data-test-profile-top-card]") ||
+      document.body;
+
     const topCard =
-      document.querySelector("[data-test-row-lockup-full-name]")?.closest(".artdeco-entity-lockup__content") ||
-      document.querySelector(".artdeco-entity-lockup__content") ||
-      document.querySelector("[data-test-profile-top-card]");
+      (topCardWrapper &&
+        (topCardWrapper.querySelector("[data-test-topcard-condensed-lockup] .artdeco-entity-lockup__content") ||
+          topCardWrapper.querySelector(".artdeco-entity-lockup__content"))) ||
+      document.querySelector("[data-test-row-lockup-full-name]")?.closest(".artdeco-entity-lockup__content");
 
     const name = normalizeText(
       firstNonEmpty(
         pickTextFrom(topCard, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title"]),
-        pickTextFrom(topCard, [".artdeco-entity-lockup__title"]),
+        pickTextFrom(topCard, ["[data-test-row-lockup-full-name]"]),
+        pickTextFrom(topCardWrapper, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title"]),
+        pickTextFrom(topCardWrapper, ["[data-test-row-lockup-full-name]"]),
+        pickTextFrom(topCardWrapper, [".artdeco-entity-lockup__title"]),
         pickText("[data-test-row-lockup-full-name]")
       )
     );
 
     const headline = firstNonEmpty(
       pickTextFrom(topCard, ["[data-test-row-lockup-headline]", ".artdeco-entity-lockup__subtitle"]),
+      pickTextFrom(topCardWrapper, ["[data-test-row-lockup-headline]", ".artdeco-entity-lockup__subtitle"]),
       pickText("[data-test-row-lockup-headline]")
     );
 
     const localisation = cleanMetadataValue(
       firstNonEmpty(
         pickTextFrom(topCard, ["[data-test-row-lockup-location]"]),
+        pickTextFrom(topCardWrapper, ["[data-test-row-lockup-location]"]),
         pickText("[data-test-row-lockup-location]")
       )
     );
 
     const photo_url =
+      pickAttrFrom(
+        topCardWrapper,
+        [
+          ".artdeco-entity-lockup__image img[data-test-avatar-image]",
+          ".artdeco-entity-lockup__image img",
+          "img[data-test-row-lockup-profile-image]",
+          "img[data-test-avatar-image]",
+        ],
+        "src"
+      ) ||
       pickAttr(
         [
           ".artdeco-entity-lockup__image img[data-test-avatar-image]",
@@ -459,10 +507,12 @@
           "img[data-test-avatar-image]",
         ],
         "src"
-      ) || "";
+      ) ||
+      "";
 
     const topCardCompanyRaw = firstNonEmpty(
       pickTextFrom(topCard, ["[data-test-topcard-condensed-lockup-current-employer]"]),
+      pickTextFrom(topCardWrapper, ["[data-test-topcard-condensed-lockup-current-employer]"]),
       pickText("[data-test-topcard-condensed-lockup-current-employer]")
     );
     const topCardCompany = parseCompanyAndContract(topCardCompanyRaw);
