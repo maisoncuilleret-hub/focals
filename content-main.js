@@ -77,6 +77,11 @@
     }
     return "";
   };
+  const isDurationText = (text) => {
+    if (!text) return false;
+    const normalized = text.toLowerCase();
+    return /\b(ans?|ann[ée]e?s?|mois|years?|months?|an[s ]+\d|\d+\s*(ans|an|mois|years|year|months|month))/.test(normalized);
+  };
   const pickCompanyText = (node) => {
     if (!node) return "";
     const anchor = node.querySelector("a[data-field='experience_company_logo']");
@@ -85,7 +90,7 @@
       for (const candidate of anchorCandidates) {
         if (candidate.classList.contains("t-black--light")) continue;
         const text = getText(candidate);
-        if (text) {
+        if (text && !isDurationText(text)) {
           return text;
         }
       }
@@ -99,7 +104,7 @@
     for (const candidate of candidates) {
       if (candidate.classList.contains("t-black--light")) continue;
       const text = getText(candidate);
-      if (text) {
+      if (text && !isDurationText(text)) {
         return text;
       }
     }
@@ -286,14 +291,24 @@
           current_title = roleText;
         }
 
+        const headerCompanyText =
+          multiRoleMatch && topLevelRoleText && topLevelRoleText !== roleText ? topLevelRoleText : "";
+        const parsedHeaderCompany = headerCompanyText ? parseCompanyAndContract(headerCompanyText) : { company: "", contract: "" };
+
         const companyCandidates = [];
         if (multiRoleMatch) {
-          companyCandidates.push(pickCompanyText(firstEntity));
-          if (roleNode !== firstEntity) {
-            companyCandidates.push(pickCompanyText(roleNode));
+          if (parsedHeaderCompany.company) {
+            companyCandidates.push(parsedHeaderCompany.company);
+          } else if (headerCompanyText) {
+            companyCandidates.push(headerCompanyText);
           }
-          if (topLevelRoleText && topLevelRoleText !== roleText) {
-            companyCandidates.push(topLevelRoleText);
+          const roleCompany = pickCompanyText(roleNode);
+          if (roleCompany) {
+            companyCandidates.push(roleCompany);
+          }
+          const firstEntityCompany = pickCompanyText(firstEntity);
+          if (firstEntityCompany) {
+            companyCandidates.push(firstEntityCompany);
           }
         } else {
           companyCandidates.push(pickCompanyText(firstEntity));
@@ -305,10 +320,10 @@
         let companyText = firstNonEmpty(...companyCandidates);
         let parsedCompany = parseCompanyAndContract(companyText);
 
-        if (!parsedCompany.company && multiRoleMatch && topLevelRoleText) {
-          parsedCompany = parseCompanyAndContract(topLevelRoleText);
+        if (!parsedCompany.company && parsedHeaderCompany.company) {
+          parsedCompany = parsedHeaderCompany;
           if (!companyText) {
-            companyText = topLevelRoleText;
+            companyText = parsedHeaderCompany.company;
           }
         }
 
@@ -320,6 +335,7 @@
 
         const contractHints = [
           parsedCompany.contract,
+          parsedHeaderCompany.contract,
           companyText ? detectContract(companyText) : "",
           multiRoleMatch && topLevelRoleText ? detectContract(topLevelRoleText) : "",
           detectContract(roleNode ? roleNode.innerText : ""),
