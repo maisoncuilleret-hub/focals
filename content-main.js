@@ -239,11 +239,32 @@
       }
 
       if (firstEntity) {
-        const multiRoleItem = firstEntity.querySelector(
-          ".pvs-entity__sub-components ul li"
+        const multiRoleItems = Array.from(
+          firstEntity.querySelectorAll(".pvs-entity__sub-components ul li")
         );
-        const roleNode = multiRoleItem || firstEntity;
-        const roleText = pickRoleText(roleNode);
+        let roleNode = firstEntity;
+        if (multiRoleItems.length) {
+          for (const item of multiRoleItems) {
+            const optionalAnchor = item.querySelector("a.optional-action-target-wrapper");
+            if (optionalAnchor && !optionalAnchor.hasAttribute("data-field")) {
+              continue;
+            }
+            if (item.querySelector(".pvs-thumbnail__wrapper")) {
+              continue;
+            }
+
+            const candidateText = pickRoleText(item);
+            const candidateCompany = pickCompanyText(item);
+            if (!candidateText && !candidateCompany) {
+              continue;
+            }
+
+            roleNode = item;
+            break;
+          }
+        }
+
+        const roleText = pickRoleText(roleNode) || pickRoleText(firstEntity);
         const companyText = pickCompanyText(firstEntity) || pickCompanyText(roleNode);
         const parsedCompany = parseCompanyAndContract(companyText);
 
@@ -258,8 +279,9 @@
         }
 
         const contractFromCompany = parsedCompany.contract;
+        const contractSource = roleNode || firstEntity;
         const contractFromRoleBlock = detectContract(
-          (multiRoleItem && multiRoleItem.innerText) || firstEntity.innerText || ""
+          (contractSource && contractSource.innerText) || firstEntity.innerText || ""
         );
 
         if (!contract) {
