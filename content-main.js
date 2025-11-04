@@ -270,6 +270,97 @@
       connection_summary: connectionSummary,
     };
   };
+
+  const extractAttributeValue = (element, matcher) => {
+    if (!element) return "";
+    const attrNames = element.getAttributeNames ? element.getAttributeNames() : [];
+    for (const name of attrNames) {
+      const value = element.getAttribute(name);
+      if (value && matcher(name, value)) {
+        return value.trim();
+      }
+    }
+    if (element.dataset) {
+      for (const [key, value] of Object.entries(element.dataset)) {
+        if (value && matcher(key, value)) {
+          return value.trim();
+        }
+      }
+    }
+    return "";
+  };
+
+  const extractPublicProfileUrl = () => {
+    const trigger = document.querySelector("[data-test-public-profile-trigger]");
+    if (trigger) {
+      const hoverEvents = ["mouseenter", "mouseover", "focusin", "focus"];
+      for (const type of hoverEvents) {
+        try {
+          trigger.dispatchEvent(
+            new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+          );
+        } catch (err) {
+          // ignore synthetic event failures
+        }
+      }
+    }
+
+    const candidateSelectors = [
+      "a[data-test-public-profile-link]",
+      ".artdeco-hoverable-content a[data-test-public-profile-link]",
+      "a.topcard-condensed__public-profile-hovercard",
+    ];
+
+    for (const selector of candidateSelectors) {
+      const el = document.querySelector(selector);
+      const href = el ? el.getAttribute("href") : "";
+      if (href && /linkedin\.com\/in\//i.test(href)) {
+        return href.trim();
+      }
+    }
+
+    const copyButton = document.querySelector("button[data-test-copy-public-profile-link-btn]");
+    const copyValue = extractAttributeValue(copyButton, (name, value) =>
+      /clipboard|public[-_]?profile|link/i.test(name) && /linkedin\.com\//i.test(value)
+    );
+    if (copyValue) {
+      return copyValue;
+    }
+
+    const triggerValue = extractAttributeValue(trigger, (name, value) =>
+      /public[-_]?profile|link|href/i.test(name) && /linkedin\.com\/in\//i.test(value)
+    );
+    if (triggerValue) {
+      return triggerValue;
+    }
+
+    const metadataSelectors = [
+      'meta[property="og:url"]',
+      'meta[name="twitter:url"]',
+      'link[rel="canonical"]',
+    ];
+    for (const selector of metadataSelectors) {
+      const node = document.querySelector(selector);
+      const value = getAttr(node, "content") || getAttr(node, "href");
+      if (value && /linkedin\.com\/in\//i.test(value)) {
+        return value.trim();
+      }
+    }
+
+    const genericLinks = Array.from(document.querySelectorAll("a[href*='linkedin.com/in/']"));
+    for (const link of genericLinks) {
+      const href = link.getAttribute("href");
+      if (!href) continue;
+      const inTopCard = !!link.closest(
+        ".profile__topcard-wrapper, .lockup, .artdeco-entity-lockup, [data-test-row-lockup-full-name]"
+      );
+      if (inTopCard || /topcard|profil public|public profile/i.test(link.outerHTML)) {
+        return href.trim();
+      }
+    }
+
+    return "";
+  };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
     if (/\bcdi\b/.test(normalized)) return "CDI";
@@ -543,6 +634,7 @@
     const lastName = rest.join(" ").trim();
 
     const connectionInfo = computeConnectionInfo();
+    const publicProfileUrl = extractPublicProfileUrl();
 
     return {
       name: name || "—",
@@ -550,7 +642,7 @@
       current_company: current_company || "—",
       contract: contract || "—",
       localisation: localisation || "—",
-      linkedin_url: location.href || "—",
+      linkedin_url: publicProfileUrl || location.href || "—",
       photo_url,
       firstName,
       lastName,
@@ -763,6 +855,7 @@
     const lastName = rest.join(" ").trim();
 
     const connectionInfo = computeConnectionInfo();
+    const publicProfileUrl = extractPublicProfileUrl();
 
     return {
       name: name || "—",
@@ -770,7 +863,7 @@
       current_company: current_company || "—",
       contract: contract || "—",
       localisation: localisation || "—",
-      linkedin_url: location.href || "—",
+      linkedin_url: publicProfileUrl || location.href || "—",
       photo_url: photo_url || "",
       firstName,
       lastName,
