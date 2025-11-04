@@ -33,6 +33,7 @@
     }
     return "";
   };
+  const normalizeText = (text) => (text || "").replace(/\s+/g, " ").trim();
   const pickTextFrom = (root, selectors) => {
     if (!root) return "";
     const list = Array.isArray(selectors) ? selectors : [selectors];
@@ -117,6 +118,117 @@
       "a[data-field='experience_company_logo'] span[aria-hidden='true']",
       "a[data-field='experience_company_logo']",
     ]);
+  };
+  const parseConnectionDegree = (text) => {
+    const normalized = normalizeText(text).toLowerCase();
+    if (!normalized) {
+      return { degree: "", status: "unknown" };
+    }
+
+    const markers = [
+      { regex: /\b1(?:er|re|st|ère)\b|premier|first|1st|1er/, degree: "1er", status: "connected" },
+      { regex: /\b2(?:e|nd|ème)\b|deuxi[eè]me|second|second-degree|2nd|relation de 2/, degree: "2e", status: "not_connected" },
+      { regex: /\b3(?:e|rd|ème)\b|troisi[eè]me|third|3rd|relation de 3/, degree: "3e", status: "not_connected" },
+    ];
+
+    for (const marker of markers) {
+      if (marker.regex.test(normalized)) {
+        return { degree: marker.degree, status: marker.status };
+      }
+    }
+
+    if (/suivi|follower/.test(normalized)) {
+      return { degree: "Follower", status: "not_connected" };
+    }
+    if (/hors du r[ée]seau|out of network|hors r[ée]seau/.test(normalized)) {
+      return { degree: "Hors réseau", status: "not_connected" };
+    }
+
+    return { degree: normalizeText(text), status: "unknown" };
+  };
+  const collectTopCardButtons = () => {
+    const selector = [
+      ".pv-top-card button",
+      ".pv-top-card-v2-ctas button",
+      ".pvs-profile-actions__action button",
+      ".pvs-profile-actions__custom-action",
+      ".pvs-profile-actions__custom button",
+      ".pvs-profile-actions button",
+    ].join(", ");
+    return Array.from(document.querySelectorAll(selector));
+  };
+  const computeConnectionInfo = () => {
+    const premiumBadge = q(".pv-member-badge--for-top-card");
+    const isPremium = !!premiumBadge;
+
+    const badge = q(".distance-badge");
+    const labelCandidates = [];
+    if (badge) {
+      labelCandidates.push(getText(badge.querySelector(".visually-hidden")));
+      labelCandidates.push(getText(badge.querySelector(".dist-value")));
+      labelCandidates.push(getText(badge));
+    }
+    const connectionLabel = firstNonEmpty(...labelCandidates);
+    const degreeInfo = parseConnectionDegree(connectionLabel);
+    let connectionStatus = degreeInfo.status;
+    let connectionDegree = degreeInfo.degree;
+
+    if ((!connectionLabel || connectionStatus === "unknown") && badge) {
+      const fallbackText = getText(badge.querySelector(".dist-value"));
+      if (fallbackText) {
+        const fallbackInfo = parseConnectionDegree(fallbackText);
+        if (!connectionDegree) connectionDegree = fallbackInfo.degree;
+        if (connectionStatus === "unknown" && fallbackInfo.status !== "unknown") {
+          connectionStatus = fallbackInfo.status;
+        }
+      }
+    }
+
+    const buttons = collectTopCardButtons();
+    const buttonTexts = buttons.map((btn) => normalizeText(btn ? btn.innerText || btn.textContent : "")).filter(Boolean);
+    const lowerButtonTexts = buttonTexts.map((text) => text.toLowerCase());
+    const hasConnectButton = lowerButtonTexts.some((text) => /se connecter|connect|conectar|connettersi/.test(text));
+    const hasFollowButton = lowerButtonTexts.some((text) => /suivre|follow/.test(text));
+    const hasMessageButton = lowerButtonTexts.some((text) => /message|messagerie|inmail|envoyer un message|send message/.test(text));
+
+    if (connectionStatus === "unknown") {
+      if (hasConnectButton || hasFollowButton) {
+        connectionStatus = "not_connected";
+      } else if (hasMessageButton) {
+        connectionStatus = "connected";
+      }
+    }
+
+    const canMessageWithoutConnect =
+      connectionStatus !== "connected" &&
+      hasMessageButton &&
+      (connectionStatus === "not_connected" || hasConnectButton || hasFollowButton || isPremium);
+
+    const summaryParts = [];
+    if (connectionStatus === "connected") {
+      summaryParts.push("Connecté");
+    } else if (connectionStatus === "not_connected") {
+      summaryParts.push("Non connecté");
+    }
+    if (connectionDegree) {
+      summaryParts.push(connectionDegree);
+    } else if (connectionLabel && (!summaryParts.length || summaryParts[summaryParts.length - 1] !== connectionLabel)) {
+      summaryParts.push(connectionLabel);
+    }
+    if (canMessageWithoutConnect && connectionStatus !== "connected") {
+      summaryParts.push("Message direct possible");
+    }
+
+    const connectionSummary = normalizeText(summaryParts.join(" · "));
+
+    return {
+      connection_status: connectionStatus,
+      connection_degree: connectionDegree,
+      connection_label: connectionLabel,
+      is_premium: isPremium,
+      can_message_without_connect: canMessageWithoutConnect,
+      connection_summary: connectionSummary,
+    };
   };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
@@ -374,6 +486,8 @@
     const [firstName, ...rest] = (name || "").split(/\s+/);
     const lastName = rest.join(" ").trim();
 
+    const connectionInfo = computeConnectionInfo();
+
     return {
       name: name || "—",
       current_title: current_title || headline || "—",
@@ -384,6 +498,12 @@
       photo_url: photo_url || "",
       firstName,
       lastName,
+      connection_status: connectionInfo.connection_status,
+      connection_degree: connectionInfo.connection_degree,
+      connection_label: connectionInfo.connection_label,
+      connection_summary: connectionInfo.connection_summary,
+      is_premium: connectionInfo.is_premium,
+      can_message_without_connect: connectionInfo.can_message_without_connect,
     };
   }
 })();

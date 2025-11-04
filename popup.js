@@ -27,6 +27,39 @@ function setMode(msg) {
   if (el) el.textContent = msg || "";
 }
 
+function formatConnectionSummary(data) {
+  if (!data) return "—";
+  const parts = [];
+  const status = data.connection_status;
+  if (status === "connected") {
+    parts.push("Connecté");
+  } else if (status === "not_connected") {
+    parts.push("Non connecté");
+  }
+
+  if (data.connection_degree) {
+    parts.push(data.connection_degree);
+  } else if (data.connection_label) {
+    parts.push(data.connection_label);
+  }
+
+  if (data.can_message_without_connect && status !== "connected") {
+    parts.push("Message direct possible");
+  }
+
+  if (!parts.length && data.connection_summary) {
+    return data.connection_summary;
+  }
+
+  return parts.length ? parts.join(" · ") : "—";
+}
+
+function formatPremium(value) {
+  if (value === true) return "Oui";
+  if (value === false) return "Non";
+  return "—";
+}
+
 function fillUI(data, source = "standard") {
   if (!data) return;
   lastData = data;
@@ -36,6 +69,8 @@ function fillUI(data, source = "standard") {
   setText("hd", data.current_title);
   setText("co", data.current_company);
   setText("ct", data.contract);          // 👈 ajout
+  setText("cx", formatConnectionSummary(data));
+  setText("pr", formatPremium(data.is_premium));
   setText("lc", data.localisation);
   setText("lnk", data.linkedin_url);
 
@@ -129,6 +164,12 @@ function copyJson() {
     current_title: document.getElementById("hd")?.textContent || "",
     current_company: document.getElementById("co")?.textContent || "",
     contract: document.getElementById("ct")?.textContent || "",
+    connection_status: "",
+    connection_degree: "",
+    connection_label: "",
+    connection_summary: document.getElementById("cx")?.textContent || "",
+    is_premium: undefined,
+    can_message_without_connect: undefined,
     localisation: document.getElementById("lc")?.textContent || "",
     linkedin_url: document.getElementById("lnk")?.textContent || "",
     photo_url: document.getElementById("ph")?.src || "",
