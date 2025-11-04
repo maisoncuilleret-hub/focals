@@ -45,6 +45,59 @@
     }
     return "";
   };
+  const pickRoleText = (node) => {
+    if (!node) return "";
+    const fromSelectors = pickTextFrom(node, [
+      ".display-flex.full-width .hoverable-link-text span[aria-hidden='true']",
+      ".hoverable-link-text span[aria-hidden='true']",
+      ".hoverable-link-text",
+      ".t-bold span[aria-hidden='true']",
+      ".t-bold",
+    ]);
+    if (fromSelectors) {
+      return fromSelectors;
+    }
+    const bolds = node.querySelectorAll(".t-bold");
+    for (const bold of bolds) {
+      const text = getText(bold);
+      if (text) {
+        return text;
+      }
+    }
+    return "";
+  };
+  const pickCompanyText = (node) => {
+    if (!node) return "";
+    const anchor = node.querySelector("a[data-field='experience_company_logo']");
+    if (anchor) {
+      const anchorCandidates = anchor.querySelectorAll(".t-14.t-normal");
+      for (const candidate of anchorCandidates) {
+        if (candidate.classList.contains("t-black--light")) continue;
+        const text = getText(candidate);
+        if (text) {
+          return text;
+        }
+      }
+      const ariaText = anchor.getAttribute("aria-label");
+      if (ariaText) {
+        return ariaText.trim();
+      }
+    }
+
+    const candidates = node.querySelectorAll(".t-14.t-normal");
+    for (const candidate of candidates) {
+      if (candidate.classList.contains("t-black--light")) continue;
+      const text = getText(candidate);
+      if (text) {
+        return text;
+      }
+    }
+
+    return pickTextFrom(node, [
+      "a[data-field='experience_company_logo'] span[aria-hidden='true']",
+      "a[data-field='experience_company_logo']",
+    ]);
+  };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
     if (/\bcdi\b/.test(normalized)) return "CDI";
@@ -171,10 +224,6 @@
     let contract = topCardCompany.contract;
 
     const experienceSection = findExperienceSection();
-    let expTitle = "";
-    let expCompany = "";
-    let expContainerText = "";
-
     if (experienceSection) {
       const listItems = Array.from(experienceSection.querySelectorAll("ul li"));
       let firstEntity = null;
@@ -190,49 +239,37 @@
       }
 
       if (firstEntity) {
-        const roleSource =
-          firstEntity.querySelector(".pvs-entity__sub-components") || firstEntity;
-        expTitle =
-          pickTextFrom(roleSource, [
-            ".hoverable-link-text span[aria-hidden='true']",
-            ".hoverable-link-text",
-            ".t-bold span[aria-hidden='true']",
-            ".t-bold",
-          ]) || "";
+        const multiRoleItem = firstEntity.querySelector(
+          ".pvs-entity__sub-components ul li"
+        );
+        const roleNode = multiRoleItem || firstEntity;
+        const roleText = pickRoleText(roleNode);
+        const companyText = pickCompanyText(firstEntity) || pickCompanyText(roleNode);
+        const parsedCompany = parseCompanyAndContract(companyText);
 
-        expCompany =
-          pickTextFrom(firstEntity, [
-            ".pvs-entity__sub-components li .t-14.t-normal:not(.t-black--light) span[aria-hidden='true']",
-            ".pvs-entity__sub-components li .t-14.t-normal:not(.t-black--light)",
-            ".t-14.t-normal:not(.t-black--light) span[aria-hidden='true']",
-            ".t-14.t-normal:not(.t-black--light)",
-            ".t-14.t-normal span[aria-hidden='true']",
-          ]) || "";
+        if (roleText) {
+          current_title = roleText;
+        }
 
-        expContainerText = firstEntity.innerText || "";
+        if (parsedCompany.company) {
+          current_company = parsedCompany.company;
+        } else if (companyText) {
+          current_company = companyText;
+        }
 
-        if (!expCompany) {
-          expCompany = pickTextFrom(firstEntity, [
-            "a[data-field='experience_company_logo'] span[aria-hidden='true']",
-          ]);
+        const contractFromCompany = parsedCompany.contract;
+        const contractFromRoleBlock = detectContract(
+          (multiRoleItem && multiRoleItem.innerText) || firstEntity.innerText || ""
+        );
+
+        if (!contract) {
+          contract = contractFromCompany || contractFromRoleBlock || contract;
         }
       }
     }
 
-    if (expTitle) {
-      current_title = expTitle;
-    }
-
-    if (expCompany) {
-      const parsedExpCompany = parseCompanyAndContract(expCompany);
-      if (!contract && parsedExpCompany.contract) {
-        contract = parsedExpCompany.contract;
-      }
-      current_company = parsedExpCompany.company || expCompany;
-    }
-
     if (!contract) {
-      contract = detectContract(expContainerText || current_company);
+      contract = detectContract(current_company);
     }
 
     // Nettoyage
