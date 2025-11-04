@@ -79,7 +79,11 @@
   };
   const isDurationText = (text) => {
     if (!text) return false;
-    const normalized = text.toLowerCase();
+    const normalized = text
+      .toLowerCase()
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     return /\b(ans?|ann[ée]e?s?|mois|years?|months?|an[s ]+\d|\d+\s*(ans|an|mois|years|year|months|month))/.test(normalized);
   };
   const pickCompanyText = (node) => {
@@ -265,10 +269,6 @@
         let multiRoleMatch = false;
         if (multiRoleItems.length) {
           for (const item of multiRoleItems) {
-            const optionalAnchor = item.querySelector("a.optional-action-target-wrapper");
-            if (optionalAnchor && !optionalAnchor.hasAttribute("data-field")) {
-              continue;
-            }
             if (item.querySelector(".pvs-thumbnail__wrapper")) {
               continue;
             }
