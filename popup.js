@@ -1,6 +1,12 @@
 // popup.js — adapté à popup.html (ph, nm, hd, co, lc, lnk, go, copy, retry)
 
 let lastData = null;
+let pipelinePort = null;
+let pipelineButton = null;
+let pipelineProgressContainer = null;
+let pipelineProgressBar = null;
+let pipelineProgressLabel = null;
+let pipelineHideTimeout = null;
 
 function setText(id, value) {
   const el = document.getElementById(id);
@@ -25,6 +31,157 @@ function setErr(msg) {
 function setMode(msg) {
   const el = document.getElementById("mode");
   if (el) el.textContent = msg || "";
+}
+
+function ensurePipelineElements() {
+  if (!pipelineProgressContainer) {
+    pipelineProgressContainer = document.getElementById("pipelineProgress");
+  }
+  if (!pipelineProgressBar) {
+    pipelineProgressBar = document.getElementById("pipelineProgressBar");
+  }
+  if (!pipelineProgressLabel) {
+    pipelineProgressLabel = document.getElementById("pipelineProgressLabel");
+  }
+}
+
+function hidePipelineProgress() {
+  ensurePipelineElements();
+  if (pipelineHideTimeout) {
+    clearTimeout(pipelineHideTimeout);
+    pipelineHideTimeout = null;
+  }
+  if (pipelineProgressContainer) {
+    pipelineProgressContainer.classList.remove("progress--active");
+  }
+  if (pipelineProgressBar) {
+    pipelineProgressBar.style.width = "0%";
+  }
+  if (pipelineProgressLabel) {
+    pipelineProgressLabel.classList.remove("progress__label--active");
+    pipelineProgressLabel.textContent = "";
+  }
+}
+
+function formatPipelineStage(state, percent) {
+  const labels = {
+    prepare: "Préparation",
+    collect: "Chargement de la liste",
+    profile: "Profils",
+    "public-url": "Récupération des URL",
+    finalize: "Finalisation",
+    download: "Téléchargement",
+  };
+  if (!state) return "";
+  if (state.status === "complete") {
+    return "Téléchargement du CSV…";
+  }
+  const stageLabel = labels[state.stage] || "Export en cours";
+  const total = state.total ?? 0;
+  const completed = Math.min(total, Math.max(0, state.progress ?? 0));
+  const countInfo = total ? `(${completed}/${total})` : "";
+  return `${stageLabel} · ${percent}% ${countInfo}`.trim();
+}
+
+function updatePipelineProgress(state) {
+  ensurePipelineElements();
+  if (!pipelineProgressContainer || !pipelineProgressBar || !pipelineProgressLabel) {
+    return;
+  }
+
+  if (!state) {
+    hidePipelineProgress();
+    return;
+  }
+
+  if (pipelineHideTimeout) {
+    clearTimeout(pipelineHideTimeout);
+    pipelineHideTimeout = null;
+  }
+
+  const total = state.total ?? 0;
+  const completed = Math.min(total, Math.max(0, state.progress ?? 0));
+  const percent = total ? Math.round((completed / total) * 100) : 0;
+
+  pipelineProgressContainer.classList.add("progress--active");
+  pipelineProgressBar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  pipelineProgressLabel.classList.add("progress__label--active");
+  pipelineProgressLabel.textContent = formatPipelineStage(state, percent);
+
+  if (state.status === "complete") {
+    pipelineHideTimeout = setTimeout(() => {
+      hidePipelineProgress();
+      pipelineHideTimeout = null;
+    }, 2500);
+  }
+}
+
+function handlePipelinePortMessage(msg) {
+  if (!msg) return;
+
+  if (msg.type === "PIPELINE_STATUS" || msg.type === "PIPELINE_EXPORT_PROGRESS") {
+    updatePipelineProgress(msg.state);
+    setMode("Mode : export pipeline (en cours)");
+    if (pipelineButton) pipelineButton.disabled = true;
+  } else if (msg.type === "PIPELINE_EXPORT_COMPLETE") {
+    updatePipelineProgress({
+      status: "complete",
+      progress: msg.result?.count ?? 25,
+      total: msg.result?.count ?? 25,
+      stage: "download",
+    });
+    if (pipelineButton) pipelineButton.disabled = false;
+    const count = msg.result?.count ?? 0;
+    setErr(`${count} profils exportés ✅ (téléchargement en cours)`);
+    setMode("Mode : export pipeline (terminé)");
+  } else if (msg.type === "PIPELINE_ERROR") {
+    if (pipelineButton) pipelineButton.disabled = false;
+    updatePipelineProgress(null);
+    setErr(msg.error || "Export pipeline impossible.");
+    setMode("Mode : export pipeline (erreur)");
+  } else if (msg.type === "PIPELINE_LAST_RESULT") {
+    if (msg.result) {
+      if (msg.result.success) {
+        setErr(`Dernier export : ${msg.result.count ?? 0} profils ✅`);
+      } else if (msg.result.error) {
+        setErr(`Dernier export : ${msg.result.error}`);
+      }
+    }
+    if (pipelineButton) pipelineButton.disabled = false;
+  }
+}
+
+function ensurePipelinePort() {
+  if (pipelinePort) {
+    return pipelinePort;
+  }
+  try {
+    pipelinePort = chrome.runtime.connect({ name: "pipeline-export" });
+    pipelinePort.onMessage.addListener(handlePipelinePortMessage);
+    pipelinePort.onDisconnect.addListener(() => {
+      pipelinePort = null;
+    });
+    pipelinePort.postMessage({ type: "REQUEST_PIPELINE_STATUS" });
+  } catch (err) {
+    console.error("[Focals] pipeline port connection failed", err);
+  }
+  return pipelinePort;
+}
+
+function startPipelineExportForTab(tabId) {
+  ensurePipelinePort();
+  if (!pipelinePort) {
+    setErr("Impossible de contacter le service d'export.");
+    setMode("Mode : export pipeline (erreur)");
+    if (pipelineButton) pipelineButton.disabled = false;
+    return;
+  }
+
+  setErr("");
+  setMode("Mode : export pipeline…");
+  updatePipelineProgress({ status: "starting", progress: 0, total: 25, stage: "prepare" });
+  pipelineButton.disabled = true;
+  pipelinePort.postMessage({ type: "START_PIPELINE_EXPORT", tabId });
 }
 
 function formatConnectionSummary(data) {
@@ -113,57 +270,6 @@ function handleResponse(res, sourceLabel) {
   return true;
 }
 
-function downloadCsv(content, filename) {
-  try {
-    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    return true;
-  } catch (err) {
-    console.error("[Focals] download csv error", err);
-    return false;
-  }
-}
-
-function handlePipelineResponse(res) {
-  if (!res) {
-    setErr("Aucune réponse pour l’export pipeline.");
-    setMode("Mode : export pipeline (échec)");
-    return;
-  }
-
-  if (res.error) {
-    setErr(res.error || "Export pipeline impossible.");
-    setMode("Mode : export pipeline (erreur)");
-    return;
-  }
-
-  const data = res.data;
-  if (!data || !data.csv) {
-    setErr("Impossible de générer le CSV pipeline.");
-    setMode("Mode : export pipeline (échec)");
-    return;
-  }
-
-  const count = data.count ?? (Array.isArray(data.entries) ? data.entries.length : 0);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `pipeline-${timestamp}.csv`;
-  const ok = downloadCsv(data.csv, filename);
-  if (ok) {
-    setErr(`${count} profils exportés ✅`);
-    setMode("Mode : export pipeline (ok)");
-  } else {
-    setErr("Impossible de télécharger le CSV ❌");
-    setMode("Mode : export pipeline (erreur)");
-  }
-}
-
 function requestDataFromTab(tabId, sourceLabel) {
   chrome.tabs.sendMessage(tabId, { type: "GET_CANDIDATE_DATA" }, (res) => {
     if (chrome.runtime.lastError || !res) {
@@ -189,27 +295,6 @@ function requestDataFromTab(tabId, sourceLabel) {
   });
 }
 
-function requestPipelineData(tabId) {
-  chrome.tabs.sendMessage(tabId, { type: "GET_PIPELINE_DATA" }, (res) => {
-    if (chrome.runtime.lastError || !res) {
-      chrome.scripting.executeScript(
-        {
-          target: { tabId },
-          files: ["content-main.js"],
-        },
-        () => {
-          chrome.tabs.sendMessage(tabId, { type: "GET_PIPELINE_DATA" }, (res2) => {
-            handlePipelineResponse(res2);
-          });
-        }
-      );
-      return;
-    }
-
-    handlePipelineResponse(res);
-  });
-}
-
 function fetchData() {
   setErr("");
   setMode("Mode : chargement…");
@@ -231,7 +316,6 @@ function fetchData() {
 
 function exportPipelineCsv() {
   setErr("");
-  setMode("Mode : export pipeline…");
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs || !tabs.length) {
       setErr("Aucun onglet actif.");
@@ -246,7 +330,8 @@ function exportPipelineCsv() {
       return;
     }
 
-    requestPipelineData(tab.id);
+    if (pipelineButton) pipelineButton.disabled = true;
+    startPipelineExportForTab(tab.id);
   });
 }
 
@@ -286,6 +371,10 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnCopy) btnCopy.addEventListener("click", copyJson);
   if (btnFromIn) btnFromIn.addEventListener("click", fetchData); // même action pour l'instant
   if (btnExport) btnExport.addEventListener("click", exportPipelineCsv);
+
+  pipelineButton = btnExport;
+  ensurePipelineElements();
+  ensurePipelinePort();
 
   // on charge direct à l'ouverture
   fetchData();

@@ -65,6 +65,21 @@
       setTimeout(resolve, ms);
     });
   const randomBetween = (min, max) => min + Math.random() * (max - min);
+  const sendRuntimeMessage = (message) => {
+    try {
+      const result = chrome.runtime.sendMessage(message);
+      if (result && typeof result.then === "function") {
+        return result;
+      }
+    } catch (err) {
+      // ignore messaging failures (e.g. background stopped)
+    }
+    return Promise.resolve();
+  };
+  const pipelineProgress = (requestId, payload = {}) => {
+    if (!requestId) return;
+    sendRuntimeMessage({ type: "PIPELINE_EXPORT_PROGRESS", requestId, ...payload });
+  };
   const firstNonEmpty = (...values) => {
     for (const value of values) {
       if (typeof value === "string") {
@@ -295,21 +310,7 @@
     return "";
   };
 
-  const extractPublicProfileUrl = () => {
-    const trigger = document.querySelector("[data-test-public-profile-trigger]");
-    if (trigger) {
-      const hoverEvents = ["mouseenter", "mouseover", "focusin", "focus"];
-      for (const type of hoverEvents) {
-        try {
-          trigger.dispatchEvent(
-            new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
-          );
-        } catch (err) {
-          // ignore synthetic event failures
-        }
-      }
-    }
-
+  const findPublicProfileUrl = () => {
     const candidateSelectors = [
       "a[data-test-public-profile-link]",
       ".artdeco-hoverable-content a[data-test-public-profile-link]",
@@ -332,6 +333,9 @@
       return copyValue;
     }
 
+    const trigger =
+      document.querySelector("[data-test-public-profile-trigger]") ||
+      document.querySelector("#topcard-public-profile-hoverable-btn");
     const triggerValue = extractAttributeValue(trigger, (name, value) =>
       /public[-_]?profile|link|href/i.test(name) && /linkedin\.com\/in\//i.test(value)
     );
@@ -365,6 +369,57 @@
     }
 
     return "";
+  };
+
+  const openPublicProfileFlyout = async () => {
+    const trigger =
+      document.querySelector("[data-test-public-profile-trigger]") ||
+      document.querySelector("#topcard-public-profile-hoverable-btn");
+    if (!trigger) {
+      return false;
+    }
+
+    try {
+      trigger.scrollIntoView({ behavior: "instant", block: "center" });
+    } catch (err) {
+      // ignore scroll issues
+    }
+
+    const hoverEvents = ["mouseenter", "mouseover", "focusin", "focus"];
+    for (const type of hoverEvents) {
+      try {
+        trigger.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+        );
+      } catch (err) {
+        // ignore synthetic event failures
+      }
+    }
+
+    await wait(randomBetween(140, 220));
+
+    try {
+      trigger.click();
+    } catch (err) {
+      // ignore click failures
+    }
+
+    await wait(randomBetween(150, 240));
+
+    const copyButton = document.querySelector("button[data-test-copy-public-profile-link-btn]");
+    if (copyButton) {
+      for (const type of hoverEvents) {
+        try {
+          copyButton.dispatchEvent(
+            new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+          );
+        } catch (err) {
+          // ignore synthetic event failures
+        }
+      }
+    }
+
+    return true;
   };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
@@ -582,7 +637,35 @@
     }
     return "";
   };
-  const resolvePublicProfileUrl = async (article, name, recruiterProfileUrl) => {
+  const requestPublicProfileViaBackground = async (
+    recruiterProfileUrl,
+    name,
+    requestId
+  ) => {
+    if (!recruiterProfileUrl) return "";
+    try {
+      await wait(randomBetween(140, 260));
+      const response = await sendRuntimeMessage({
+        type: "RESOLVE_RECRUITER_PUBLIC_URL",
+        url: recruiterProfileUrl,
+        name,
+        requestId,
+      });
+      if (response && response.url) {
+        return sanitizeLinkedinUrl(response.url);
+      }
+    } catch (err) {
+      console.warn("[Focals] background public URL lookup failed", err);
+    }
+    return "";
+  };
+  const resolvePublicProfileUrl = async (
+    article,
+    name,
+    recruiterProfileUrl,
+    options = {}
+  ) => {
+    const { requestId } = options;
     const direct = findPublicProfileUrlInTree(article);
     if (direct) {
       return direct;
@@ -625,6 +708,15 @@
           return fromHtml;
         }
       }
+    }
+
+    const viaBackground = await requestPublicProfileViaBackground(
+      recruiterProfileUrl,
+      name,
+      requestId
+    );
+    if (viaBackground) {
+      return viaBackground;
     }
 
     return "";
@@ -723,21 +815,6 @@
     linkedin_url: "—",
     photo_url: "",
   });
-  const buildPipelineConnectionSummary = (status, degree, label) => {
-    const parts = [];
-    if (status === "connected") {
-      parts.push("Connecté");
-    } else if (status === "not_connected") {
-      parts.push("Non connecté");
-    }
-    if (degree) {
-      parts.push(degree);
-    } else if (label) {
-      parts.push(label);
-    }
-    const summary = normalizeText(parts.join(" · "));
-    return summary || "";
-  };
   const inferCompanyFromHeadline = (headline) => {
     if (!headline) return "";
     const match = headline.match(/(?:chez|at)\s+(.+)/i);
@@ -750,7 +827,8 @@
     }
     return "";
   };
-  const buildPipelineEntry = async (article) => {
+  const buildPipelineEntry = async (article, options = {}) => {
+    const { requestId, index = 0, total = 25 } = options;
     const profile = createEmptyPipelineProfile();
 
     const name = normalizeText(
@@ -770,7 +848,18 @@
       article.querySelector("a[data-test-link-to-profile-link]") ||
       article.querySelector("a[data-live-test-link-to-profile-link]");
     const recruiterProfileUrl = recruiterLink ? recruiterLink.href : "";
-    const publicProfileUrl = await resolvePublicProfileUrl(article, name, recruiterProfileUrl);
+    pipelineProgress(requestId, {
+      stage: "public-url",
+      completed: index,
+      total,
+      hint: "lookup",
+    });
+    const publicProfileUrl = await resolvePublicProfileUrl(
+      article,
+      name,
+      recruiterProfileUrl,
+      options
+    );
     if (publicProfileUrl) {
       profile.linkedin_url = publicProfileUrl;
     }
@@ -830,21 +919,18 @@
     if (accessibleLabel) {
       profile.connection_label = accessibleLabel;
     }
-    const summary = buildPipelineConnectionSummary(
-      profile.connection_status,
-      profile.connection_degree,
-      accessibleLabel || degreeVisible
-    );
-    if (summary) {
-      profile.connection_summary = summary;
-    }
-
     return profile;
   };
-  const scrapeRecruiterPipeline = async () => {
+  const scrapeRecruiterPipeline = async (options = {}) => {
+    const { requestId, expectedTotal = 25 } = options;
     const scrollElement = getScrollElement();
     const initialScrollTop = scrollElement.scrollTop;
-    await ensurePipelineProfilesLoaded(25);
+    pipelineProgress(requestId, {
+      stage: "prepare",
+      completed: 0,
+      total: expectedTotal,
+    });
+    await ensurePipelineProfilesLoaded(expectedTotal);
     const articles = Array.from(document.querySelectorAll("article.profile-list-item"));
     if (!articles.length) {
       return { entries: [], csv: "", headers: [], count: 0 };
@@ -855,11 +941,34 @@
       await wait(randomBetween(90, 160));
     }
 
-    const limitedArticles = articles.slice(0, 25);
+    const limitedArticles = articles.slice(0, expectedTotal);
     const entries = [];
-    for (const article of limitedArticles) {
+    const total = limitedArticles.length;
+    pipelineProgress(requestId, {
+      stage: "collect",
+      completed: 0,
+      total,
+    });
+    for (let index = 0; index < total; index += 1) {
+      const article = limitedArticles[index];
+      pipelineProgress(requestId, {
+        stage: "profile",
+        completed: index,
+        total,
+      });
       await wait(randomBetween(110, 190));
-      entries.push(await buildPipelineEntry(article));
+      entries.push(
+        await buildPipelineEntry(article, {
+          requestId,
+          index,
+          total,
+        })
+      );
+      pipelineProgress(requestId, {
+        stage: "profile",
+        completed: index + 1,
+        total,
+      });
     }
 
     const headers = [
@@ -870,11 +979,16 @@
       { key: "connection_status", label: "Connection status" },
       { key: "connection_degree", label: "Connection degree" },
       { key: "connection_label", label: "Connection label" },
-      { key: "connection_summary", label: "Connection summary" },
       { key: "localisation", label: "Location" },
       { key: "linkedin_url", label: "LinkedIn URL" },
       { key: "photo_url", label: "Photo URL" },
     ];
+
+    pipelineProgress(requestId, {
+      stage: "finalize",
+      completed: total,
+      total,
+    });
 
     const csvLines = [headers.map((h) => toCsvValue(h.label)).join(",")];
     for (const entry of entries) {
@@ -1016,7 +1130,9 @@
 
   // === Listener ===
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg?.type === "GET_CANDIDATE_DATA") {
+    if (msg?.type === "FOCALS_PING") {
+      sendResponse({ ok: true });
+    } else if (msg?.type === "GET_CANDIDATE_DATA") {
       try {
         const data = scrapePublicProfile();
         console.log("[Focals] Scraped data:", data);
@@ -1038,6 +1154,70 @@
         } catch (e) {
           console.error("[Focals] pipeline export error", e);
           sendResponse({ error: e.message });
+        }
+      })();
+      return true;
+    } else if (msg?.type === "PIPELINE_EXPORT_START") {
+      const { requestId, expectedTotal } = msg || {};
+      (async () => {
+        try {
+          const result = await scrapeRecruiterPipeline({
+            requestId,
+            expectedTotal: typeof expectedTotal === "number" ? expectedTotal : 25,
+          });
+          if (!result.entries.length) {
+            await sendRuntimeMessage({
+              type: "PIPELINE_EXPORT_ERROR",
+              requestId,
+              error: "Aucun profil de pipeline détecté sur cette page.",
+            });
+            return;
+          }
+          await sendRuntimeMessage({
+            type: "PIPELINE_EXPORT_COMPLETE",
+            requestId,
+            csv: result.csv,
+            count: result.count,
+          });
+        } catch (e) {
+          console.error("[Focals] pipeline export error", e);
+          await sendRuntimeMessage({
+            type: "PIPELINE_EXPORT_ERROR",
+            requestId,
+            error: e?.message || "Erreur inconnue pendant l'export pipeline.",
+          });
+        }
+      })();
+      sendResponse({ ok: true });
+      return;
+    } else if (msg?.type === "GET_PUBLIC_PROFILE_URL") {
+      (async () => {
+        try {
+          let url = findPublicProfileUrl();
+          if (!url) {
+            await wait(randomBetween(160, 260));
+            url = findPublicProfileUrl();
+          }
+
+          let attempt = 0;
+          const maxAttempts = 8;
+          while (!url && attempt < maxAttempts) {
+            attempt += 1;
+            await openPublicProfileFlyout();
+            await wait(randomBetween(180, 320));
+            url = findPublicProfileUrl();
+            if (!url) {
+              url = findPublicProfileUrlInTree(document.body);
+            }
+          }
+
+          if (!url) {
+            url = findPublicProfileUrlInTree(document.body);
+          }
+
+          sendResponse({ url: url ? sanitizeLinkedinUrl(url) : "" });
+        } catch (e) {
+          sendResponse({ error: e?.message || "" });
         }
       })();
       return true;
@@ -1137,7 +1317,7 @@
     const lastName = rest.join(" ").trim();
 
     const connectionInfo = computeConnectionInfo();
-    const publicProfileUrl = extractPublicProfileUrl();
+    const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
     return {
       name: name || "—",
@@ -1361,7 +1541,7 @@
     const lastName = rest.join(" ").trim();
 
     const connectionInfo = computeConnectionInfo();
-    const publicProfileUrl = extractPublicProfileUrl();
+    const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
     return {
       name: name || "—",

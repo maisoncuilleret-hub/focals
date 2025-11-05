@@ -10,7 +10,8 @@
     "scripting",
     "tabs",
     "activeTab",
-    "storage"
+    "storage",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*"
