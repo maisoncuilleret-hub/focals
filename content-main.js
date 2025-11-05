@@ -548,7 +548,41 @@
     }
     return "";
   };
-  const resolvePublicProfileUrl = (article, name, recruiterProfileUrl) => {
+  const recruiterProfileHtmlCache = new Map();
+  const fetchRecruiterProfileHtml = async (url) => {
+    if (!url) return "";
+    if (recruiterProfileHtmlCache.has(url)) {
+      return recruiterProfileHtmlCache.get(url);
+    }
+    try {
+      await wait(randomBetween(160, 280));
+      const response = await fetch(url, { credentials: "include" });
+      if (!response.ok) {
+        recruiterProfileHtmlCache.set(url, "");
+        return "";
+      }
+      const text = await response.text();
+      recruiterProfileHtmlCache.set(url, text || "");
+      return text || "";
+    } catch (err) {
+      console.warn("[Focals] recruiter profile fetch failed", err);
+      recruiterProfileHtmlCache.set(url, "");
+      return "";
+    }
+  };
+  const extractPublicProfileFromHtml = (html) => {
+    if (!html) return "";
+    const match = html.match(/"publicProfileUrl":"(https:\/\/[^"]+)"/i);
+    if (match) {
+      return sanitizeLinkedinUrl(decodeJsonString(match[1]));
+    }
+    const linkMatch = html.match(/https:\/\/www\.linkedin\.com\/in\/[^"'\s<]+/i);
+    if (linkMatch) {
+      return sanitizeLinkedinUrl(linkMatch[0]);
+    }
+    return "";
+  };
+  const resolvePublicProfileUrl = async (article, name, recruiterProfileUrl) => {
     const direct = findPublicProfileUrlInTree(article);
     if (direct) {
       return direct;
@@ -583,6 +617,12 @@
         const match = html.match(pattern);
         if (match) {
           return sanitizeLinkedinUrl(decodeJsonString(match[1]));
+        }
+
+        const fetchedHtml = await fetchRecruiterProfileHtml(recruiterProfileUrl);
+        const fromHtml = extractPublicProfileFromHtml(fetchedHtml);
+        if (fromHtml) {
+          return fromHtml;
         }
       }
     }
@@ -670,6 +710,137 @@
       document.querySelector("[data-test-profile-background-card] .experience-card")
     );
   };
+  const createEmptyPipelineProfile = () => ({
+    name: "—",
+    current_title: "—",
+    current_company: "—",
+    contract: "—",
+    connection_status: "",
+    connection_degree: "",
+    connection_label: "",
+    connection_summary: "—",
+    localisation: "—",
+    linkedin_url: "—",
+    photo_url: "",
+  });
+  const buildPipelineConnectionSummary = (status, degree, label) => {
+    const parts = [];
+    if (status === "connected") {
+      parts.push("Connecté");
+    } else if (status === "not_connected") {
+      parts.push("Non connecté");
+    }
+    if (degree) {
+      parts.push(degree);
+    } else if (label) {
+      parts.push(label);
+    }
+    const summary = normalizeText(parts.join(" · "));
+    return summary || "";
+  };
+  const inferCompanyFromHeadline = (headline) => {
+    if (!headline) return "";
+    const match = headline.match(/(?:chez|at)\s+(.+)/i);
+    if (match) {
+      return normalizeText(match[1]);
+    }
+    const parts = headline.split("·").map((part) => normalizeText(part));
+    if (parts.length >= 2) {
+      return parts[1];
+    }
+    return "";
+  };
+  const buildPipelineEntry = async (article) => {
+    const profile = createEmptyPipelineProfile();
+
+    const name = normalizeText(
+      firstNonEmpty(
+        pickTextFrom(article, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title a"]),
+        pickTextFrom(article, ["[data-test-row-lockup-full-name] a"]),
+        pickTextFrom(article, ["[data-test-row-lockup-full-name]"]),
+        pickTextFrom(article, [".artdeco-entity-lockup__title a"]),
+        pickTextFrom(article, [".artdeco-entity-lockup__title"])
+      )
+    );
+    if (name) {
+      profile.name = name;
+    }
+
+    const recruiterLink =
+      article.querySelector("a[data-test-link-to-profile-link]") ||
+      article.querySelector("a[data-live-test-link-to-profile-link]");
+    const recruiterProfileUrl = recruiterLink ? recruiterLink.href : "";
+    const publicProfileUrl = await resolvePublicProfileUrl(article, name, recruiterProfileUrl);
+    if (publicProfileUrl) {
+      profile.linkedin_url = publicProfileUrl;
+    }
+
+    const photoUrl =
+      pickAttrFrom(article, [".artdeco-entity-lockup__image img"], "src") ||
+      pickAttr([".artdeco-entity-lockup__image img"], "src");
+    if (photoUrl) {
+      profile.photo_url = photoUrl;
+    }
+
+    const headline = normalizeText(pickTextFrom(article, ["[data-test-row-lockup-headline]"]));
+    const location = cleanMetadataValue(
+      firstNonEmpty(
+        pickTextFrom(article, ["[data-test-row-lockup-location]"]),
+        pickTextFrom(article, ["[data-test-row-lockup-location] span"])
+      )
+    );
+    if (location) {
+      profile.localisation = location;
+    }
+
+    const experienceSummary = findHistorySummary(article, /expérience/i);
+    const roleInfo = parseRoleAndCompanyFromSummary(experienceSummary);
+    const companyDetails = parseCompanyAndContract(experienceSummary);
+    const resolvedRole = firstNonEmpty(roleInfo.role, headline);
+    if (resolvedRole) {
+      profile.current_title = resolvedRole;
+    }
+    const resolvedCompany = firstNonEmpty(
+      roleInfo.company,
+      companyDetails.company,
+      inferCompanyFromHeadline(headline)
+    );
+    if (resolvedCompany) {
+      profile.current_company = resolvedCompany;
+    }
+    if (companyDetails.contract) {
+      profile.contract = companyDetails.contract;
+    }
+
+    const accessibleLabel = normalizeText(
+      pickTextFrom(article, ["[data-test-lockup-degree] .a11y-text"])
+    );
+    const degreeVisible = normalizeText(
+      pickTextFrom(article, ["[data-test-lockup-degree] .artdeco-entity-lockup__degree"])
+    ).replace(/^·\s*/, "");
+    const parsedDegree = parseConnectionDegree(`${degreeVisible} ${accessibleLabel}`);
+    if (parsedDegree.degree) {
+      profile.connection_degree = parsedDegree.degree;
+    } else if (degreeVisible) {
+      profile.connection_degree = degreeVisible;
+    }
+    if (parsedDegree.status && parsedDegree.status !== "unknown") {
+      profile.connection_status = parsedDegree.status;
+    }
+    if (accessibleLabel) {
+      profile.connection_label = accessibleLabel;
+    }
+    const summary = buildPipelineConnectionSummary(
+      profile.connection_status,
+      profile.connection_degree,
+      accessibleLabel || degreeVisible
+    );
+    if (summary) {
+      profile.connection_summary = summary;
+    }
+
+    return profile;
+  };
   const scrapeRecruiterPipeline = async () => {
     const scrollElement = getScrollElement();
     const initialScrollTop = scrollElement.scrollTop;
@@ -684,87 +855,24 @@
       await wait(randomBetween(90, 160));
     }
 
-    const entries = articles.map((article) => {
-      const name = normalizeText(
-        firstNonEmpty(
-          pickTextFrom(article, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title a"]),
-          pickTextFrom(article, ["[data-test-row-lockup-full-name] a"]),
-          pickTextFrom(article, ["[data-test-row-lockup-full-name]"]),
-          pickTextFrom(article, [".artdeco-entity-lockup__title a"]),
-          pickTextFrom(article, [".artdeco-entity-lockup__title"])
-        )
-      );
-
-      const recruiterLink =
-        article.querySelector("a[data-test-link-to-profile-link]") ||
-        article.querySelector("a[data-live-test-link-to-profile-link]");
-      const recruiterProfileUrl = recruiterLink ? recruiterLink.href : "";
-      const publicProfileUrl = resolvePublicProfileUrl(article, name, recruiterProfileUrl);
-
-      const headline = normalizeText(pickTextFrom(article, ["[data-test-row-lockup-headline]"]));
-      const location = cleanMetadataValue(
-        firstNonEmpty(
-          pickTextFrom(article, ["[data-test-row-lockup-location]"]),
-          pickTextFrom(article, ["[data-test-row-lockup-location] span"])
-        )
-      );
-
-      const stageLabel = normalizeText(
-        firstNonEmpty(
-          pickTextFrom(article, [".standard-profile-row__profile-pipeline-status span"]),
-          pickTextFrom(article, [".standard-profile-row__profile-pipeline-status"])
-        )
-      );
-      const recordedBy = normalizeText(
-        firstNonEmpty(
-          pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-bold"]),
-          pickTextFrom(article, [".candidate-sourced-by__message"])
-        )
-      );
-      const recordedOn = normalizeText(
-        pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-black--light"])
-      );
-      const views = normalizeText(
-        pickTextFrom(article, [".base-decoration__trigger--views .base-decoration__trigger-text"])
-      );
-
-      const experienceSummary = findHistorySummary(article, /expérience/i);
-      const educationSummary = findHistorySummary(article, /formation|éducation|education/i);
-      const roleInfo = parseRoleAndCompanyFromSummary(experienceSummary);
-      const photoUrl =
-        pickAttrFrom(article, [".artdeco-entity-lockup__image img"], "src") ||
-        pickAttr([".artdeco-entity-lockup__image img"], "src");
-
-      return {
-        name,
-        public_profile_url: publicProfileUrl,
-        headline,
-        current_role: roleInfo.role || "",
-        current_company: roleInfo.company || "",
-        location,
-        stage: stageLabel,
-        recorded_by: recordedBy,
-        recorded_on: recordedOn,
-        views,
-        experience_summary: experienceSummary,
-        education_summary: educationSummary,
-        photo_url: photoUrl || "",
-      };
-    });
+    const limitedArticles = articles.slice(0, 25);
+    const entries = [];
+    for (const article of limitedArticles) {
+      await wait(randomBetween(110, 190));
+      entries.push(await buildPipelineEntry(article));
+    }
 
     const headers = [
       { key: "name", label: "Name" },
-      { key: "public_profile_url", label: "Public profile URL" },
-      { key: "headline", label: "Headline" },
-      { key: "current_role", label: "Current role" },
+      { key: "current_title", label: "Current title" },
       { key: "current_company", label: "Current company" },
-      { key: "location", label: "Location" },
-      { key: "stage", label: "Stage" },
-      { key: "recorded_by", label: "Recorded by" },
-      { key: "recorded_on", label: "Recorded on" },
-      { key: "views", label: "Views" },
-      { key: "experience_summary", label: "Experience summary" },
-      { key: "education_summary", label: "Education summary" },
+      { key: "contract", label: "Contract" },
+      { key: "connection_status", label: "Connection status" },
+      { key: "connection_degree", label: "Connection degree" },
+      { key: "connection_label", label: "Connection label" },
+      { key: "connection_summary", label: "Connection summary" },
+      { key: "localisation", label: "Location" },
+      { key: "linkedin_url", label: "LinkedIn URL" },
       { key: "photo_url", label: "Photo URL" },
     ];
 
@@ -776,7 +884,7 @@
 
     return {
       entries,
-      headers: headers.map((h) => h.label),
+      headers,
       csv: csvLines.join("\r\n"),
       count: entries.length,
     };
