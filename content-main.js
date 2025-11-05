@@ -60,6 +60,11 @@
     }
     return "";
   };
+  const wait = (ms) =>
+    new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  const randomBetween = (min, max) => min + Math.random() * (max - min);
   const firstNonEmpty = (...values) => {
     for (const value of values) {
       if (typeof value === "string") {
@@ -424,6 +429,219 @@
     }
     return { role: normalizeText(firstPart), company: "" };
   };
+  const decodeJsonString = (value) => {
+    if (typeof value !== "string") {
+      return "";
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return JSON.parse(`"${trimmed.replace(/"/g, '\\"')}"`);
+    } catch (err) {
+      return trimmed
+        .replace(/\\u002F/g, "/")
+        .replace(/\\\//g, "/")
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, " ")
+        .replace(/\\t/g, " ");
+    }
+  };
+  const normalizeNameKey = (name) => {
+    if (!name) return "";
+    return name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .replace(/\s+/g, " ");
+  };
+  const slugifyName = (name) => {
+    if (!name) return "";
+    return name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+  };
+  let publicProfileCache = null;
+  const buildPublicProfileIndex = () => {
+    const html = document.documentElement.innerHTML || "";
+    const signature = `${html.length}:${document.querySelectorAll("article.profile-list-item").length}`;
+    if (publicProfileCache && publicProfileCache.signature === signature) {
+      return publicProfileCache.map;
+    }
+
+    const map = new Map();
+    const regex = /"publicProfileUrl":"(https:\\/[^"]+)"[^{}]*?"firstName":"([^"]*)"[^{}]*?"lastName":"([^"]*)"/g;
+    let match;
+    while ((match = regex.exec(html))) {
+      const url = decodeJsonString(match[1]);
+      if (!/linkedin\.com\/in\//i.test(url)) {
+        continue;
+      }
+      const first = decodeJsonString(match[2]);
+      const last = decodeJsonString(match[3]);
+      const key = normalizeNameKey(`${first} ${last}`);
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, []);
+      }
+      map.get(key).push(url.replace(/\\u002F/g, "/").replace(/\\\//g, "/"));
+    }
+
+    publicProfileCache = { signature, map };
+    return map;
+  };
+  const sanitizeLinkedinUrl = (value) => {
+    if (!value) return "";
+    let cleaned = value.trim();
+    cleaned = cleaned.replace(/\\u002F/g, "/").replace(/\\\//g, "/").replace(/\\/g, "");
+    if (cleaned.startsWith("//")) {
+      cleaned = `https:${cleaned}`;
+    }
+    if (/^https?:\/\//i.test(cleaned)) {
+      return cleaned;
+    }
+    if (cleaned.startsWith("www.")) {
+      return `https://${cleaned}`;
+    }
+    return cleaned;
+  };
+  const findPublicProfileUrlInTree = (root) => {
+    if (!root) return "";
+    const queue = [root];
+    while (queue.length) {
+      const node = queue.shift();
+      if (!node || node.nodeType !== Node.ELEMENT_NODE) continue;
+      if (node.getAttributeNames) {
+        for (const attrName of node.getAttributeNames()) {
+          const attrValue = node.getAttribute(attrName);
+          if (
+            attrValue &&
+            /public.*profile|profileurl|profile-link|profilehref|data-url/i.test(attrName) &&
+            /linkedin\.com\/in\//i.test(attrValue)
+          ) {
+            const sanitized = sanitizeLinkedinUrl(attrValue);
+            if (sanitized) return sanitized;
+          }
+        }
+      }
+      if (node.dataset) {
+        for (const value of Object.values(node.dataset)) {
+          if (value && /linkedin\.com\/in\//i.test(value)) {
+            const sanitized = sanitizeLinkedinUrl(value);
+            if (sanitized) return sanitized;
+          }
+        }
+      }
+      if (node.tagName === "A") {
+        const href = node.getAttribute("href");
+        if (href && /linkedin\.com\/in\//i.test(href)) {
+          return sanitizeLinkedinUrl(href);
+        }
+      }
+      queue.push(...Array.from(node.children || []));
+    }
+    return "";
+  };
+  const resolvePublicProfileUrl = (article, name, recruiterProfileUrl) => {
+    const direct = findPublicProfileUrlInTree(article);
+    if (direct) {
+      return direct;
+    }
+
+    const key = normalizeNameKey(name);
+    const index = buildPublicProfileIndex();
+    const urls = key ? index.get(key) : null;
+    if (urls && urls.length) {
+      if (urls.length === 1) {
+        return sanitizeLinkedinUrl(urls[0]);
+      }
+      const slug = slugifyName(name);
+      if (slug) {
+        const matchUrl = urls.find((url) => url.toLowerCase().includes(slug));
+        if (matchUrl) {
+          return sanitizeLinkedinUrl(matchUrl);
+        }
+      }
+      return sanitizeLinkedinUrl(urls[0]);
+    }
+
+    if (recruiterProfileUrl) {
+      const recruiterIdMatch = recruiterProfileUrl.match(/profile\/([^/?]+)/i);
+      if (recruiterIdMatch) {
+        const recruiterId = recruiterIdMatch[1];
+        const html = document.documentElement.innerHTML || "";
+        const pattern = new RegExp(
+          `${recruiterId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^}]*?"publicProfileUrl":"(https:\\/[^"]+)"`,
+          "i"
+        );
+        const match = html.match(pattern);
+        if (match) {
+          return sanitizeLinkedinUrl(decodeJsonString(match[1]));
+        }
+      }
+    }
+
+    return "";
+  };
+  const getScrollElement = () => document.scrollingElement || document.documentElement || document.body;
+  const gentleScrollTo = async (targetY) => {
+    const scrollElement = getScrollElement();
+    const startY = scrollElement.scrollTop;
+    const distance = targetY - startY;
+    if (Math.abs(distance) < 5) {
+      return;
+    }
+    const steps = Math.max(3, Math.min(14, Math.round(Math.abs(distance) / 250)));
+    for (let step = 1; step <= steps; step += 1) {
+      const progress = step / steps;
+      const eased = progress < 0.5 ? 2 * progress * progress : -1 + (4 - 2 * progress) * progress;
+      scrollElement.scrollTop = startY + distance * eased;
+      await wait(randomBetween(45, 95));
+    }
+  };
+  const gentleScrollIntoView = async (element) => {
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const targetY = getScrollElement().scrollTop + rect.bottom - window.innerHeight * 0.2;
+    await gentleScrollTo(Math.max(0, targetY));
+  };
+  const ensurePipelineProfilesLoaded = async (targetCount = 25) => {
+    const scrollElement = getScrollElement();
+    let attempts = 0;
+    let unchanged = 0;
+    let previousCount = 0;
+    while (attempts < 60) {
+      const articles = document.querySelectorAll("article.profile-list-item");
+      if (articles.length >= targetCount) {
+        break;
+      }
+      const lastArticle = articles[articles.length - 1];
+      if (lastArticle) {
+        await gentleScrollIntoView(lastArticle);
+      } else {
+        await gentleScrollTo(scrollElement.scrollTop + window.innerHeight * 0.8);
+      }
+      await wait(randomBetween(120, 240));
+      const newCount = document.querySelectorAll("article.profile-list-item").length;
+      if (newCount === previousCount) {
+        unchanged += 1;
+      } else {
+        unchanged = 0;
+        previousCount = newCount;
+      }
+      if (unchanged >= 4) {
+        break;
+      }
+      attempts += 1;
+    }
+    await wait(randomBetween(160, 260));
+  };
   const toCsvValue = (value) => {
     if (value === null || value === undefined) {
       return "";
@@ -452,10 +670,18 @@
       document.querySelector("[data-test-profile-background-card] .experience-card")
     );
   };
-  const scrapeRecruiterPipeline = () => {
+  const scrapeRecruiterPipeline = async () => {
+    const scrollElement = getScrollElement();
+    const initialScrollTop = scrollElement.scrollTop;
+    await ensurePipelineProfilesLoaded(25);
     const articles = Array.from(document.querySelectorAll("article.profile-list-item"));
     if (!articles.length) {
       return { entries: [], csv: "", headers: [], count: 0 };
+    }
+
+    if (scrollElement.scrollTop !== initialScrollTop) {
+      await gentleScrollTo(initialScrollTop);
+      await wait(randomBetween(90, 160));
     }
 
     const entries = articles.map((article) => {
@@ -473,20 +699,13 @@
         article.querySelector("a[data-test-link-to-profile-link]") ||
         article.querySelector("a[data-live-test-link-to-profile-link]");
       const recruiterProfileUrl = recruiterLink ? recruiterLink.href : "";
+      const publicProfileUrl = resolvePublicProfileUrl(article, name, recruiterProfileUrl);
 
       const headline = normalizeText(pickTextFrom(article, ["[data-test-row-lockup-headline]"]));
       const location = cleanMetadataValue(
         firstNonEmpty(
           pickTextFrom(article, ["[data-test-row-lockup-location]"]),
           pickTextFrom(article, ["[data-test-row-lockup-location] span"])
-        )
-      );
-      const industry = cleanMetadataValue(pickTextFrom(article, ["[data-test-current-employer-industry]"]));
-      const connection = normalizeText(pickTextFrom(article, [".artdeco-entity-lockup__degree"]));
-      const source = normalizeText(
-        firstNonEmpty(
-          pickTextFrom(article, ["[data-test-source-tracking-badge] .artdeco-entity-lockup__label"]),
-          pickTextFrom(article, ["[data-test-source-tracking-badge]"])
         )
       );
 
@@ -496,7 +715,6 @@
           pickTextFrom(article, [".standard-profile-row__profile-pipeline-status"])
         )
       );
-      const lastActivity = normalizeText(pickTextFrom(article, ["p.row-activity"]));
       const recordedBy = normalizeText(
         firstNonEmpty(
           pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-bold"]),
@@ -505,12 +723,6 @@
       );
       const recordedOn = normalizeText(
         pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-black--light"])
-      );
-      const projectCount = normalizeText(
-        pickTextFrom(article, [".base-decoration__trigger--projects .base-decoration__trigger-text"])
-      );
-      const sharedConnections = normalizeText(
-        pickTextFrom(article, [".base-decoration__trigger--connections .base-decoration__trigger-text"])
       );
       const views = normalizeText(
         pickTextFrom(article, [".base-decoration__trigger--views .base-decoration__trigger-text"])
@@ -525,46 +737,34 @@
 
       return {
         name,
+        public_profile_url: publicProfileUrl,
         headline,
         current_role: roleInfo.role || "",
         current_company: roleInfo.company || "",
         location,
-        industry,
-        connection,
-        source,
         stage: stageLabel,
-        last_activity: lastActivity,
         recorded_by: recordedBy,
         recorded_on: recordedOn,
-        project_count: projectCount,
-        shared_connections: sharedConnections,
         views,
         experience_summary: experienceSummary,
         education_summary: educationSummary,
-        recruiter_profile_url: recruiterProfileUrl,
         photo_url: photoUrl || "",
       };
     });
 
     const headers = [
       { key: "name", label: "Name" },
+      { key: "public_profile_url", label: "Public profile URL" },
       { key: "headline", label: "Headline" },
       { key: "current_role", label: "Current role" },
       { key: "current_company", label: "Current company" },
       { key: "location", label: "Location" },
-      { key: "industry", label: "Industry" },
-      { key: "connection", label: "Connection" },
-      { key: "source", label: "Source" },
       { key: "stage", label: "Stage" },
-      { key: "last_activity", label: "Last activity" },
       { key: "recorded_by", label: "Recorded by" },
       { key: "recorded_on", label: "Recorded on" },
-      { key: "project_count", label: "Project count" },
-      { key: "shared_connections", label: "Shared connections" },
       { key: "views", label: "Views" },
       { key: "experience_summary", label: "Experience summary" },
       { key: "education_summary", label: "Education summary" },
-      { key: "recruiter_profile_url", label: "Recruiter profile URL" },
       { key: "photo_url", label: "Photo URL" },
     ];
 
@@ -718,18 +918,21 @@
         sendResponse({ error: e.message });
       }
     } else if (msg?.type === "GET_PIPELINE_DATA") {
-      try {
-        const result = scrapeRecruiterPipeline();
-        if (!result.entries.length) {
-          sendResponse({ error: "Aucun profil de pipeline détecté sur cette page." });
-          return;
+      (async () => {
+        try {
+          const result = await scrapeRecruiterPipeline();
+          if (!result.entries.length) {
+            sendResponse({ error: "Aucun profil de pipeline détecté sur cette page." });
+            return;
+          }
+          console.log("[Focals] Pipeline export:", result.entries.length, "profils");
+          sendResponse({ data: result });
+        } catch (e) {
+          console.error("[Focals] pipeline export error", e);
+          sendResponse({ error: e.message });
         }
-        console.log("[Focals] Pipeline export:", result.entries.length, "profils");
-        sendResponse({ data: result });
-      } catch (e) {
-        console.error("[Focals] pipeline export error", e);
-        sendResponse({ error: e.message });
-      }
+      })();
+      return true;
     }
   });
 
