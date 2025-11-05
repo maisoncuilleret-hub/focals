@@ -393,7 +393,57 @@
     }
     return { company, contract };
   };
+  const findHistorySummary = (root, matcher) => {
+    if (!root) return "";
+    const groups = Array.from(root.querySelectorAll(".history-group"));
+    for (const group of groups) {
+      const heading = normalizeText(
+        firstNonEmpty(
+          pickTextFrom(group, [".history-group__definition"]),
+          pickTextFrom(group, [".history-group__term"])
+        )
+      );
+      if (heading && matcher.test(heading)) {
+        const firstItem = group.querySelector(".history-group__list-items li");
+        if (firstItem) {
+          return normalizeText(firstItem.textContent || "");
+        }
+      }
+    }
+    return "";
+  };
+  const parseRoleAndCompanyFromSummary = (summary) => {
+    if (!summary) return { role: "", company: "" };
+    const firstPart = summary.split("·")[0] || "";
+    const match = firstPart.match(/^(.*?)(?:\s+(?:chez|at)\s+(.*))?$/i);
+    if (match) {
+      return {
+        role: normalizeText(match[1] || ""),
+        company: normalizeText(match[2] || ""),
+      };
+    }
+    return { role: normalizeText(firstPart), company: "" };
+  };
+  const toCsvValue = (value) => {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    const normalized = normalizeText(String(value).replace(/\r?\n|\r/g, " "));
+    if (!normalized) {
+      return "";
+    }
+    const escaped = normalized.replace(/"/g, '""');
+    return /[",\n]/.test(normalized) ? `"${escaped}"` : escaped;
+  };
+  const isPipelineListPage = () =>
+    !!(
+      document.querySelector("[data-test-paginated-list-item]") &&
+      document.querySelector("article.profile-list-item")
+    );
   const isRecruiterProfile = () => {
+    if (isPipelineListPage()) {
+      return false;
+    }
     if (/linkedin\.com\/(talent|recruiter)/i.test(location.href)) {
       return true;
     }
@@ -401,6 +451,135 @@
       document.querySelector("[data-test-row-lockup-full-name]") ||
       document.querySelector("[data-test-profile-background-card] .experience-card")
     );
+  };
+  const scrapeRecruiterPipeline = () => {
+    const articles = Array.from(document.querySelectorAll("article.profile-list-item"));
+    if (!articles.length) {
+      return { entries: [], csv: "", headers: [], count: 0 };
+    }
+
+    const entries = articles.map((article) => {
+      const name = normalizeText(
+        firstNonEmpty(
+          pickTextFrom(article, ["[data-test-row-lockup-full-name] .artdeco-entity-lockup__title a"]),
+          pickTextFrom(article, ["[data-test-row-lockup-full-name] a"]),
+          pickTextFrom(article, ["[data-test-row-lockup-full-name]"]),
+          pickTextFrom(article, [".artdeco-entity-lockup__title a"]),
+          pickTextFrom(article, [".artdeco-entity-lockup__title"])
+        )
+      );
+
+      const recruiterLink =
+        article.querySelector("a[data-test-link-to-profile-link]") ||
+        article.querySelector("a[data-live-test-link-to-profile-link]");
+      const recruiterProfileUrl = recruiterLink ? recruiterLink.href : "";
+
+      const headline = normalizeText(pickTextFrom(article, ["[data-test-row-lockup-headline]"]));
+      const location = cleanMetadataValue(
+        firstNonEmpty(
+          pickTextFrom(article, ["[data-test-row-lockup-location]"]),
+          pickTextFrom(article, ["[data-test-row-lockup-location] span"])
+        )
+      );
+      const industry = cleanMetadataValue(pickTextFrom(article, ["[data-test-current-employer-industry]"]));
+      const connection = normalizeText(pickTextFrom(article, [".artdeco-entity-lockup__degree"]));
+      const source = normalizeText(
+        firstNonEmpty(
+          pickTextFrom(article, ["[data-test-source-tracking-badge] .artdeco-entity-lockup__label"]),
+          pickTextFrom(article, ["[data-test-source-tracking-badge]"])
+        )
+      );
+
+      const stageLabel = normalizeText(
+        firstNonEmpty(
+          pickTextFrom(article, [".standard-profile-row__profile-pipeline-status span"]),
+          pickTextFrom(article, [".standard-profile-row__profile-pipeline-status"])
+        )
+      );
+      const lastActivity = normalizeText(pickTextFrom(article, ["p.row-activity"]));
+      const recordedBy = normalizeText(
+        firstNonEmpty(
+          pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-bold"]),
+          pickTextFrom(article, [".candidate-sourced-by__message"])
+        )
+      );
+      const recordedOn = normalizeText(
+        pickTextFrom(article, [".candidate-sourced-by__message .t-14.t-black--light"])
+      );
+      const projectCount = normalizeText(
+        pickTextFrom(article, [".base-decoration__trigger--projects .base-decoration__trigger-text"])
+      );
+      const sharedConnections = normalizeText(
+        pickTextFrom(article, [".base-decoration__trigger--connections .base-decoration__trigger-text"])
+      );
+      const views = normalizeText(
+        pickTextFrom(article, [".base-decoration__trigger--views .base-decoration__trigger-text"])
+      );
+
+      const experienceSummary = findHistorySummary(article, /expérience/i);
+      const educationSummary = findHistorySummary(article, /formation|éducation|education/i);
+      const roleInfo = parseRoleAndCompanyFromSummary(experienceSummary);
+      const photoUrl =
+        pickAttrFrom(article, [".artdeco-entity-lockup__image img"], "src") ||
+        pickAttr([".artdeco-entity-lockup__image img"], "src");
+
+      return {
+        name,
+        headline,
+        current_role: roleInfo.role || "",
+        current_company: roleInfo.company || "",
+        location,
+        industry,
+        connection,
+        source,
+        stage: stageLabel,
+        last_activity: lastActivity,
+        recorded_by: recordedBy,
+        recorded_on: recordedOn,
+        project_count: projectCount,
+        shared_connections: sharedConnections,
+        views,
+        experience_summary: experienceSummary,
+        education_summary: educationSummary,
+        recruiter_profile_url: recruiterProfileUrl,
+        photo_url: photoUrl || "",
+      };
+    });
+
+    const headers = [
+      { key: "name", label: "Name" },
+      { key: "headline", label: "Headline" },
+      { key: "current_role", label: "Current role" },
+      { key: "current_company", label: "Current company" },
+      { key: "location", label: "Location" },
+      { key: "industry", label: "Industry" },
+      { key: "connection", label: "Connection" },
+      { key: "source", label: "Source" },
+      { key: "stage", label: "Stage" },
+      { key: "last_activity", label: "Last activity" },
+      { key: "recorded_by", label: "Recorded by" },
+      { key: "recorded_on", label: "Recorded on" },
+      { key: "project_count", label: "Project count" },
+      { key: "shared_connections", label: "Shared connections" },
+      { key: "views", label: "Views" },
+      { key: "experience_summary", label: "Experience summary" },
+      { key: "education_summary", label: "Education summary" },
+      { key: "recruiter_profile_url", label: "Recruiter profile URL" },
+      { key: "photo_url", label: "Photo URL" },
+    ];
+
+    const csvLines = [headers.map((h) => toCsvValue(h.label)).join(",")];
+    for (const entry of entries) {
+      const row = headers.map((h) => toCsvValue(entry[h.key]));
+      csvLines.push(row.join(","));
+    }
+
+    return {
+      entries,
+      headers: headers.map((h) => h.label),
+      csv: csvLines.join("\r\n"),
+      count: entries.length,
+    };
   };
   const findRecruiterExperienceCard = () =>
     document.querySelector("[data-test-profile-background-card] .experience-card") ||
@@ -538,6 +717,19 @@
         console.error("[Focals] scrape error", e);
         sendResponse({ error: e.message });
       }
+    } else if (msg?.type === "GET_PIPELINE_DATA") {
+      try {
+        const result = scrapeRecruiterPipeline();
+        if (!result.entries.length) {
+          sendResponse({ error: "Aucun profil de pipeline détecté sur cette page." });
+          return;
+        }
+        console.log("[Focals] Pipeline export:", result.entries.length, "profils");
+        sendResponse({ data: result });
+      } catch (e) {
+        console.error("[Focals] pipeline export error", e);
+        sendResponse({ error: e.message });
+      }
     }
   });
 
@@ -657,6 +849,9 @@
 
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
+    if (isPipelineListPage()) {
+      throw new Error("Cette page affiche une liste pipeline. Utilise l'export CSV.");
+    }
     if (isRecruiterProfile()) {
       return scrapeRecruiterProfile();
     }

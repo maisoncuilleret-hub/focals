@@ -113,6 +113,57 @@ function handleResponse(res, sourceLabel) {
   return true;
 }
 
+function downloadCsv(content, filename) {
+  try {
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return true;
+  } catch (err) {
+    console.error("[Focals] download csv error", err);
+    return false;
+  }
+}
+
+function handlePipelineResponse(res) {
+  if (!res) {
+    setErr("Aucune réponse pour l’export pipeline.");
+    setMode("Mode : export pipeline (échec)");
+    return;
+  }
+
+  if (res.error) {
+    setErr(res.error || "Export pipeline impossible.");
+    setMode("Mode : export pipeline (erreur)");
+    return;
+  }
+
+  const data = res.data;
+  if (!data || !data.csv) {
+    setErr("Impossible de générer le CSV pipeline.");
+    setMode("Mode : export pipeline (échec)");
+    return;
+  }
+
+  const count = data.count ?? (Array.isArray(data.entries) ? data.entries.length : 0);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `pipeline-${timestamp}.csv`;
+  const ok = downloadCsv(data.csv, filename);
+  if (ok) {
+    setErr(`${count} profils exportés ✅`);
+    setMode("Mode : export pipeline (ok)");
+  } else {
+    setErr("Impossible de télécharger le CSV ❌");
+    setMode("Mode : export pipeline (erreur)");
+  }
+}
+
 function requestDataFromTab(tabId, sourceLabel) {
   chrome.tabs.sendMessage(tabId, { type: "GET_CANDIDATE_DATA" }, (res) => {
     if (chrome.runtime.lastError || !res) {
@@ -138,6 +189,27 @@ function requestDataFromTab(tabId, sourceLabel) {
   });
 }
 
+function requestPipelineData(tabId) {
+  chrome.tabs.sendMessage(tabId, { type: "GET_PIPELINE_DATA" }, (res) => {
+    if (chrome.runtime.lastError || !res) {
+      chrome.scripting.executeScript(
+        {
+          target: { tabId },
+          files: ["content-main.js"],
+        },
+        () => {
+          chrome.tabs.sendMessage(tabId, { type: "GET_PIPELINE_DATA" }, (res2) => {
+            handlePipelineResponse(res2);
+          });
+        }
+      );
+      return;
+    }
+
+    handlePipelineResponse(res);
+  });
+}
+
 function fetchData() {
   setErr("");
   setMode("Mode : chargement…");
@@ -154,6 +226,27 @@ function fetchData() {
       return;
     }
     requestDataFromTab(tab.id, "standard");
+  });
+}
+
+function exportPipelineCsv() {
+  setErr("");
+  setMode("Mode : export pipeline…");
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs || !tabs.length) {
+      setErr("Aucun onglet actif.");
+      setMode("Mode : export pipeline (erreur)");
+      return;
+    }
+
+    const tab = tabs[0];
+    if (!/linkedin\.com/.test(tab.url || "")) {
+      setErr("Ouvre ta pipeline LinkedIn Recruiter.");
+      setMode("Mode : export pipeline (erreur)");
+      return;
+    }
+
+    requestPipelineData(tab.id);
   });
 }
 
@@ -186,11 +279,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnRetry = document.getElementById("retry");
   const btnCopy = document.getElementById("copy");
   const btnFromIn = document.getElementById("fromIn");
+  const btnExport = document.getElementById("exportPipeline");
 
   if (btnGo) btnGo.addEventListener("click", fetchData);
   if (btnRetry) btnRetry.addEventListener("click", fetchData);
   if (btnCopy) btnCopy.addEventListener("click", copyJson);
   if (btnFromIn) btnFromIn.addEventListener("click", fetchData); // même action pour l'instant
+  if (btnExport) btnExport.addEventListener("click", exportPipelineCsv);
 
   // on charge direct à l'ouverture
   fetchData();
