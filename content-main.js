@@ -476,7 +476,7 @@
     }
 
     const map = new Map();
-    const regex = /"publicProfileUrl":"(https:\\/[^"]+)"[^{}]*?"firstName":"([^"]*)"[^{}]*?"lastName":"([^"]*)"/g;
+    const regex = /"publicProfileUrl":"(https:\/\/[^"]+)"[^{}]*?"firstName":"([^"]*)"[^{}]*?"lastName":"([^"]*)"/g;
     let match;
     while ((match = regex.exec(html))) {
       const url = decodeJsonString(match[1]);
@@ -577,7 +577,7 @@
         const recruiterId = recruiterIdMatch[1];
         const html = document.documentElement.innerHTML || "";
         const pattern = new RegExp(
-          `${recruiterId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^}]*?"publicProfileUrl":"(https:\\/[^"]+)"`,
+          `${recruiterId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^}]*?"publicProfileUrl":"(https:\/\/[^"]+)"`,
           "i"
         );
         const match = html.match(pattern);
