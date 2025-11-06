@@ -421,6 +421,148 @@
 
     return true;
   };
+  const pipelineQuickViewSelectors = [
+    "[data-test-profile-modal] .profile__topcard-wrapper",
+    ".artdeco-modal__content .profile__topcard-wrapper",
+    ".profile-modal .profile__topcard-wrapper",
+    ".profile__topcard-wrapper",
+  ];
+  const getPipelineQuickViewWrapper = () => {
+    for (const selector of pipelineQuickViewSelectors) {
+      const candidate = document.querySelector(selector);
+      if (!candidate) continue;
+      if (candidate.closest("article.profile-list-item")) {
+        continue;
+      }
+      return candidate;
+    }
+    return null;
+  };
+  const getQuickViewDisplayedName = (wrapper) =>
+    normalizeText(
+      firstNonEmpty(
+        pickTextFrom(wrapper, [
+          "[data-test-row-lockup-full-name] .artdeco-entity-lockup__title",
+        ]),
+        pickTextFrom(wrapper, ["[data-test-row-lockup-full-name]"]),
+        pickTextFrom(wrapper, [".artdeco-entity-lockup__title"])
+      )
+    );
+  const areNamesEquivalent = (left, right) => {
+    const leftKey = normalizeNameKey(left);
+    const rightKey = normalizeNameKey(right);
+    return !!(leftKey && rightKey && leftKey === rightKey);
+  };
+  const openPipelineQuickViewForArticle = async (article, expectedName) => {
+    if (!article) return null;
+    const link =
+      article.querySelector("a[data-test-link-to-profile-link]") ||
+      article.querySelector("a[data-live-test-link-to-profile-link]");
+    if (!link) {
+      return getPipelineQuickViewWrapper();
+    }
+
+    const expectedKey = normalizeNameKey(expectedName);
+    const existingWrapper = getPipelineQuickViewWrapper();
+    if (existingWrapper) {
+      const currentName = getQuickViewDisplayedName(existingWrapper);
+      if (!expectedKey || areNamesEquivalent(currentName, expectedName)) {
+        return existingWrapper;
+      }
+    }
+
+    try {
+      link.scrollIntoView({ behavior: "instant", block: "center" });
+    } catch (err) {
+      // ignore scroll issues
+    }
+
+    await wait(randomBetween(90, 160));
+
+    const blockDefault = (event) => {
+      if (event && typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+    };
+    link.addEventListener("click", blockDefault, { capture: true, once: true });
+
+    const clickSequence = ["mouseover", "mouseenter", "mousedown", "mouseup", "click"];
+    for (const type of clickSequence) {
+      try {
+        link.dispatchEvent(
+          new MouseEvent(type, { bubbles: true, cancelable: true, view: window })
+        );
+      } catch (err) {
+        // ignore synthetic event failures
+      }
+      await wait(randomBetween(30, 60));
+    }
+
+    const start = Date.now();
+    const timeout = 6000;
+    while (Date.now() - start < timeout) {
+      const wrapper = getPipelineQuickViewWrapper();
+      if (wrapper) {
+        const currentName = getQuickViewDisplayedName(wrapper);
+        if (!expectedKey || areNamesEquivalent(currentName, expectedName)) {
+          return wrapper;
+        }
+      }
+      await wait(randomBetween(120, 180));
+    }
+
+    return null;
+  };
+  const resolvePublicProfileViaQuickView = async (article, name) => {
+    const wrapper = await openPipelineQuickViewForArticle(article, name);
+    if (!wrapper) {
+      return "";
+    }
+
+    const attempts = 4;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await openPublicProfileFlyout();
+      await wait(randomBetween(150, 260));
+      let url = findPublicProfileUrl();
+      if (!url) {
+        url = findPublicProfileUrlInTree(wrapper);
+      }
+      if (!url) {
+        const directLink = wrapper.querySelector("a[href*='linkedin.com/in/']");
+        if (directLink) {
+          url = directLink.getAttribute("href");
+        }
+      }
+      if (url) {
+        return sanitizeLinkedinUrl(url);
+      }
+      await wait(randomBetween(150, 240));
+    }
+
+    return "";
+  };
+  const closePipelineQuickView = async () => {
+    const selectors = [
+      "[data-test-profile-modal] button[aria-label*='Fermer']",
+      "[data-test-profile-modal] button[aria-label*='Close']",
+      "button[data-test-modal-close-btn]",
+      "button[data-test-close-profile-modal]",
+      ".artdeco-modal__dismiss",
+    ];
+    for (const selector of selectors) {
+      const button = document.querySelector(selector);
+      if (!button) {
+        continue;
+      }
+      try {
+        button.click();
+      } catch (err) {
+        // ignore click issues
+      }
+      await wait(randomBetween(120, 200));
+      break;
+    }
+  };
   const detectContract = (text) => {
     const normalized = (text || "").toLowerCase();
     if (/\bcdi\b/.test(normalized)) return "CDI";
@@ -653,7 +795,7 @@
     if (match) {
       return sanitizeLinkedinUrl(decodeJsonString(match[1]));
     }
-    const linkMatch = html.match(/https:\/\/www\.linkedin\.com\/in\/[^"'\s<]+/i);
+    const linkMatch = html.match(/https:\/\/www\.linkedin\.com\/in\/[^"'\s<&]+/i);
     if (linkMatch) {
       return sanitizeLinkedinUrl(linkMatch[0]);
     }
@@ -708,6 +850,13 @@
         }
       }
       return sanitizeLinkedinUrl(urls[0]);
+    }
+
+    if (isPipelineListPage() && article) {
+      const viaQuickView = await resolvePublicProfileViaQuickView(article, name);
+      if (viaQuickView) {
+        return viaQuickView;
+      }
     }
 
     if (recruiterProfileUrl) {
@@ -1056,6 +1205,8 @@
         total,
       });
     }
+
+    await closePipelineQuickView();
 
     const headers = [
       { key: "name", label: "Name" },
