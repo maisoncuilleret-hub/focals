@@ -121,13 +121,38 @@ async function handlePipelineComplete(msg) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `pipeline-${timestamp}.csv`;
     const csvContent = typeof msg.csv === "string" ? msg.csv : "";
-    const dataUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(csvContent)}`;
 
-    await chrome.downloads.download({
-      url: dataUrl,
-      filename,
-      saveAs: false,
-    });
+    if (!csvContent) {
+      throw new Error("CSV vide reçu depuis le scraper.");
+    }
+
+    let downloadSucceeded = false;
+    const { tabId } = pipelineState.active;
+
+    if (typeof tabId === "number") {
+      try {
+        const response = await chrome.tabs.sendMessage(tabId, {
+          type: "PIPELINE_DOWNLOAD_CSV",
+          filename,
+          csv: csvContent,
+        });
+        if (!response || response.error) {
+          throw new Error(response?.error || "Réponse invalide du contenu pour le téléchargement.");
+        }
+        downloadSucceeded = true;
+      } catch (tabErr) {
+        console.warn("[Focals] Download via tab failed, fallback to downloads API", tabErr);
+      }
+    }
+
+    if (!downloadSucceeded) {
+      const dataUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(csvContent)}`;
+      await chrome.downloads.download({
+        url: dataUrl,
+        filename,
+        saveAs: false,
+      });
+    }
 
     pipelineState.lastResult = {
       success: true,

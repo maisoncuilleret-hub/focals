@@ -484,6 +484,14 @@
     }
     return { role: normalizeText(firstPart), company: "" };
   };
+  const decodeHtmlEntities = (() => {
+    const textarea = document.createElement("textarea");
+    return (value) => {
+      if (typeof value !== "string") return "";
+      textarea.innerHTML = value;
+      return textarea.value;
+    };
+  })();
   const decodeJsonString = (value) => {
     if (typeof value !== "string") {
       return "";
@@ -493,14 +501,17 @@
       return "";
     }
     try {
-      return JSON.parse(`"${trimmed.replace(/"/g, '\\"')}"`);
+      const parsed = JSON.parse(`"${trimmed.replace(/"/g, '\\"')}"`);
+      return decodeHtmlEntities(parsed);
     } catch (err) {
-      return trimmed
-        .replace(/\\u002F/g, "/")
-        .replace(/\\\//g, "/")
-        .replace(/\\"/g, '"')
-        .replace(/\\n/g, " ")
-        .replace(/\\t/g, " ");
+      return decodeHtmlEntities(
+        trimmed
+          .replace(/\\u002F/g, "/")
+          .replace(/\\\//g, "/")
+          .replace(/\\"/g, '"')
+          .replace(/\\n/g, " ")
+          .replace(/\\t/g, " ")
+      );
     }
   };
   const normalizeNameKey = (name) => {
@@ -534,7 +545,7 @@
     const regex = /"publicProfileUrl":"(https:\/\/[^"]+)"[^{}]*?"firstName":"([^"]*)"[^{}]*?"lastName":"([^"]*)"/g;
     let match;
     while ((match = regex.exec(html))) {
-      const url = decodeJsonString(match[1]);
+      const url = sanitizeLinkedinUrl(decodeJsonString(match[1]));
       if (!/linkedin\.com\/in\//i.test(url)) {
         continue;
       }
@@ -545,7 +556,7 @@
       if (!map.has(key)) {
         map.set(key, []);
       }
-      map.get(key).push(url.replace(/\\u002F/g, "/").replace(/\\\//g, "/"));
+      map.get(key).push(url);
     }
 
     publicProfileCache = { signature, map };
@@ -553,8 +564,19 @@
   };
   const sanitizeLinkedinUrl = (value) => {
     if (!value) return "";
-    let cleaned = value.trim();
-    cleaned = cleaned.replace(/\\u002F/g, "/").replace(/\\\//g, "/").replace(/\\/g, "");
+    let cleaned = decodeHtmlEntities(value.trim());
+    cleaned = cleaned
+      .replace(/\\u002F/g, "/")
+      .replace(/\\\//g, "/")
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, " ")
+      .replace(/\\t/g, " ")
+      .replace(/\\/g, "");
+    const urlMatch = cleaned.match(/https?:\/\/[^\s"'<>]+/i);
+    if (urlMatch) {
+      cleaned = urlMatch[0];
+    }
+    cleaned = cleaned.replace(/&amp;/gi, "&").replace(/\u00a0/g, "");
     if (cleaned.startsWith("//")) {
       cleaned = `https:${cleaned}`;
     }
@@ -807,14 +829,39 @@
     current_title: "—",
     current_company: "—",
     contract: "—",
-    connection_status: "",
-    connection_degree: "",
-    connection_label: "",
-    connection_summary: "—",
     localisation: "—",
     linkedin_url: "—",
     photo_url: "",
+    firstName: "",
+    lastName: "",
+    connection_status: "unknown",
+    connection_degree: "",
+    connection_label: "",
+    connection_summary: "",
+    is_premium: false,
+    can_message_without_connect: false,
   });
+  const composeConnectionSummary = (profile) => {
+    if (!profile) return "";
+    const parts = [];
+    if (profile.connection_status === "connected") {
+      parts.push("Connecté");
+    } else if (profile.connection_status === "not_connected") {
+      parts.push("Non connecté");
+    }
+    if (profile.connection_degree) {
+      parts.push(profile.connection_degree);
+    } else if (
+      profile.connection_label &&
+      (!parts.length || parts[parts.length - 1] !== profile.connection_label)
+    ) {
+      parts.push(profile.connection_label);
+    }
+    if (profile.can_message_without_connect && profile.connection_status !== "connected") {
+      parts.push("Message direct possible");
+    }
+    return normalizeText(parts.join(" · "));
+  };
   const inferCompanyFromHeadline = (headline) => {
     if (!headline) return "";
     const match = headline.match(/(?:chez|at)\s+(.+)/i);
@@ -842,6 +889,11 @@
     );
     if (name) {
       profile.name = name;
+      if (name !== "—") {
+        const [first, ...rest] = name.split(/\s+/);
+        profile.firstName = first || "";
+        profile.lastName = normalizeText(rest.join(" "));
+      }
     }
 
     const recruiterLink =
@@ -870,6 +922,12 @@
     if (photoUrl) {
       profile.photo_url = photoUrl;
     }
+
+    profile.is_premium = !!(
+      article.querySelector("svg[data-test-icon*='linkedin-bug-premium']") ||
+      article.querySelector("li-icon[type*='linkedin-bug-premium']") ||
+      article.querySelector(".pv-member-badge--for-top-card")
+    );
 
     const headline = normalizeText(pickTextFrom(article, ["[data-test-row-lockup-headline]"]));
     const location = cleanMetadataValue(
@@ -919,6 +977,34 @@
     if (accessibleLabel) {
       profile.connection_label = accessibleLabel;
     }
+
+    const actionButtons = Array.from(article.querySelectorAll("button"));
+    const actionTexts = actionButtons
+      .map((btn) => normalizeText(btn ? btn.innerText || btn.textContent : ""))
+      .filter(Boolean);
+    const lowerActionTexts = actionTexts.map((text) => text.toLowerCase());
+    const hasMessageButton = lowerActionTexts.some((text) =>
+      /message|messagerie|inmail|envoyer un message|send message/.test(text)
+    );
+    const hasConnectButton = lowerActionTexts.some((text) =>
+      /se connecter|connect|conectar|connettersi/.test(text)
+    );
+    const hasFollowButton = lowerActionTexts.some((text) => /suivre|follow/.test(text));
+
+    if (profile.connection_status === "unknown") {
+      if (hasConnectButton || hasFollowButton) {
+        profile.connection_status = "not_connected";
+      } else if (hasMessageButton) {
+        profile.connection_status = "connected";
+      }
+    }
+
+    if (hasMessageButton && profile.connection_status !== "connected") {
+      profile.can_message_without_connect = true;
+    }
+
+    profile.connection_summary = composeConnectionSummary(profile);
+
     return profile;
   };
   const scrapeRecruiterPipeline = async (options = {}) => {
@@ -976,12 +1062,17 @@
       { key: "current_title", label: "Current title" },
       { key: "current_company", label: "Current company" },
       { key: "contract", label: "Contract" },
-      { key: "connection_status", label: "Connection status" },
-      { key: "connection_degree", label: "Connection degree" },
-      { key: "connection_label", label: "Connection label" },
       { key: "localisation", label: "Location" },
       { key: "linkedin_url", label: "LinkedIn URL" },
       { key: "photo_url", label: "Photo URL" },
+      { key: "firstName", label: "First name" },
+      { key: "lastName", label: "Last name" },
+      { key: "connection_status", label: "Connection status" },
+      { key: "connection_degree", label: "Connection degree" },
+      { key: "connection_label", label: "Connection label" },
+      { key: "connection_summary", label: "Connection summary" },
+      { key: "is_premium", label: "Premium" },
+      { key: "can_message_without_connect", label: "Can message without connect" },
     ];
 
     pipelineProgress(requestId, {
@@ -1190,6 +1281,34 @@
       })();
       sendResponse({ ok: true });
       return;
+    } else if (msg?.type === "PIPELINE_DOWNLOAD_CSV") {
+      (async () => {
+        try {
+          const filename = msg.filename || "pipeline.csv";
+          const csv = typeof msg.csv === "string" ? msg.csv : "";
+          if (!csv) {
+            throw new Error("CSV vide");
+          }
+
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = filename;
+          anchor.style.display = "none";
+          document.body.appendChild(anchor);
+          anchor.click();
+          setTimeout(() => {
+            anchor.remove();
+            URL.revokeObjectURL(url);
+          }, 1500);
+
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ error: e?.message || "" });
+        }
+      })();
+      return true;
     } else if (msg?.type === "GET_PUBLIC_PROFILE_URL") {
       (async () => {
         try {
