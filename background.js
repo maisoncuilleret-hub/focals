@@ -120,16 +120,14 @@ async function handlePipelineComplete(msg) {
   try {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `pipeline-${timestamp}.csv`;
-    const blob = new Blob([msg.csv || ""], { type: "text/csv;charset=utf-8;" });
-    const downloadUrl = URL.createObjectURL(blob);
+    const csvContent = typeof msg.csv === "string" ? msg.csv : "";
+    const dataUrl = `data:text/csv;charset=utf-8,${encodeURIComponent(csvContent)}`;
 
     await chrome.downloads.download({
-      url: downloadUrl,
+      url: dataUrl,
       filename,
       saveAs: false,
     });
-
-    setTimeout(() => URL.revokeObjectURL(downloadUrl), 15000);
 
     pipelineState.lastResult = {
       success: true,
