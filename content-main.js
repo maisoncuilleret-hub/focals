@@ -618,6 +618,29 @@
     if (/alternance/.test(normalized)) return "Alternance";
     return "";
   };
+  const sanitizeCompanyName = (raw) => {
+    const normalized = normalizeText(raw);
+    if (!normalized) return "";
+
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    const lowered = tokens.map((t) => t.toLowerCase());
+    if (tokens.length % 2 === 0 && tokens.length >= 2) {
+      const mid = tokens.length / 2;
+      const firstHalf = lowered.slice(0, mid).join(" ");
+      const secondHalf = lowered.slice(mid).join(" ");
+      if (firstHalf === secondHalf) {
+        return tokens.slice(0, mid).join(" ");
+      }
+    }
+
+    const deduped = [];
+    for (const token of tokens) {
+      if (!deduped.length || deduped[deduped.length - 1].toLowerCase() !== token.toLowerCase()) {
+        deduped.push(token);
+      }
+    }
+    return deduped.join(" ");
+  };
   const parseCompanyAndContract = (rawText) => {
     const trimmed = (rawText || "").trim();
     if (!trimmed) {
@@ -1170,7 +1193,7 @@
       inferCompanyFromHeadline(headline)
     );
     if (resolvedCompany) {
-      profile.current_company = resolvedCompany;
+      profile.current_company = sanitizeCompanyName(resolvedCompany);
     }
     if (companyDetails.contract) {
       profile.contract = companyDetails.contract;
@@ -1657,10 +1680,12 @@
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
+    const sanitizedCompany = sanitizeCompanyName(current_company);
+
     return {
       name: name || "—",
       current_title: current_title || headline || "—",
-      current_company: current_company || "—",
+      current_company: sanitizedCompany || "—",
       contract: contract || "—",
       localisation: localisation || "—",
       linkedin_url: publicProfileUrl || location.href || "—",
@@ -1882,10 +1907,12 @@
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
+    const sanitizedCompany = sanitizeCompanyName(current_company);
+
     return {
       name: name || "—",
       current_title: current_title || headline || "—",
-      current_company: current_company || "—",
+      current_company: sanitizedCompany || "—",
       contract: contract || "—",
       localisation: localisation || "—",
       linkedin_url: publicProfileUrl || location.href || "—",
