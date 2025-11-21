@@ -16,7 +16,7 @@
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://ppawceknsedxaejpeylu.supabase.co/*",
-    "https://*.lovableproject.com/*"
+    "https://*.lovable.app/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -24,7 +24,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.lovableproject.com/*"],
+      "matches": ["https://*.lovable.app/*"],
       "js": ["session-bridge.js"],
       "run_at": "document_start"
     },
