@@ -372,6 +372,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  // Gestionnaire CHECK_LINKEDIN_CONNECTION_STATUS
+  if (msg?.type === "CHECK_LINKEDIN_CONNECTION_STATUS") {
+    console.log("[Focals] Requête vérification statut:", msg.linkedinUrl);
+
+    (async () => {
+      try {
+        const { linkedinUrl } = msg;
+
+        if (!linkedinUrl) {
+          sendResponse({ success: false, error: "URL manquante" });
+          return;
+        }
+
+        // Ouvrir la page en arrière-plan
+        const tab = await chrome.tabs.create({
+          url: linkedinUrl,
+          active: false,
+        });
+
+        // Attendre le chargement
+        await wait(3000);
+
+        // Vérifier le statut
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: "CHECK_CONNECTION_STATUS_ON_PAGE",
+          linkedinUrl,
+        });
+
+        // Fermer l'onglet
+        await chrome.tabs.remove(tab.id);
+
+        console.log("[Focals] Statut vérifié:", response.status);
+        sendResponse({ success: true, status: response.status });
+      } catch (error) {
+        console.error("[Focals] Erreur:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+
+    return true; // Keep channel open
+  }
+
   if (msg?.type === "PIPELINE_EXPORT_PROGRESS") {
     handlePipelineProgress(msg);
   } else if (msg?.type === "PIPELINE_EXPORT_COMPLETE") {

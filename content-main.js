@@ -181,6 +181,52 @@
 
     return { degree: normalizeText(text), status: "unknown" };
   };
+
+  /**
+   * Vérifie le statut de connexion LinkedIn d'un profil
+   */
+  async function checkLinkedInConnectionStatus(linkedinUrl) {
+    console.log("[Focals] Vérification du statut pour:", linkedinUrl);
+
+    // Sélecteurs pour détecter le statut
+    const selectors = {
+      connected: [
+        "button[aria-label*='Message']",
+        "a[href*='/messaging/thread/']",
+        ".pv-s-profile-actions__message",
+        "button.message-anywhere-button",
+      ],
+      pending: [
+        "button[aria-label*='pending']",
+        "button[aria-label*='En attente']",
+        "button[aria-label*='Invitation sent']",
+        ".pv-s-profile-actions--pending",
+      ],
+      notConnected: [
+        "button[aria-label*='Connect']",
+        "button[aria-label*='Se connecter']",
+        ".pv-s-profile-actions__connect",
+      ],
+    };
+
+    // Vérifier dans l'ordre : connecté > en attente > non connecté
+    for (const selector of selectors.connected) {
+      if (document.querySelector(selector)) {
+        console.log("[Focals] ✅ Connecté");
+        return { status: "connected" };
+      }
+    }
+
+    for (const selector of selectors.pending) {
+      if (document.querySelector(selector)) {
+        console.log("[Focals] ⏳ En attente");
+        return { status: "pending" };
+      }
+    }
+
+    console.log("[Focals] ❌ Non connecté");
+    return { status: "not_connected" };
+  }
   const collectTopCardButtons = () => {
     const selector = [
       ".pv-top-card button",
@@ -1831,5 +1877,23 @@
       can_message_without_connect: connectionInfo.can_message_without_connect,
     };
   }
+
+// Gestionnaire pour vérification du statut
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === "CHECK_CONNECTION_STATUS_ON_PAGE") {
+    console.log("[Focals] Vérification statut demandée");
+
+    (async () => {
+      try {
+        const result = await checkLinkedInConnectionStatus(request.linkedinUrl);
+        sendResponse({ success: true, ...result });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+
+    return true; // Keep channel open
+  }
+});
 })();
 
