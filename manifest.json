@@ -18,6 +18,12 @@
     "https://ppawceknsedxaejpeylu.supabase.co/*",
     "https://*.lovable.app/*"
   ],
+  "externally_connectable": {
+    "matches": [
+      "https://*.lovable.app/*",
+      "https://ppawceknsedxaejpeylu.supabase.co/*"
+    ]
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
