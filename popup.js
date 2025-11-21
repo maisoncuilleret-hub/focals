@@ -359,17 +359,44 @@ function copyJson() {
     .catch(() => setErr("Impossible de copier ❌"));
 }
 
+function saveToSupabase() {
+  if (!lastData) {
+    setErr("Récupère un profil avant de l'envoyer.");
+    setMode("Mode : aucun profil à envoyer");
+    return;
+  }
+
+  setErr("");
+  setMode("Mode : envoi Supabase…");
+
+  chrome.runtime.sendMessage(
+    { type: "SAVE_PROFILE_TO_SUPABASE", profile: lastData },
+    (res) => {
+      if (res?.error) {
+        setErr(res.error || "Envoi Supabase impossible.");
+        setMode("Mode : erreur Supabase");
+        return;
+      }
+
+      setErr("Profil enregistré dans Supabase ✅");
+      setMode("Mode : Supabase OK");
+    }
+  );
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const btnGo = document.getElementById("go");
   const btnRetry = document.getElementById("retry");
   const btnCopy = document.getElementById("copy");
   const btnFromIn = document.getElementById("fromIn");
+  const btnSaveSupabase = document.getElementById("saveSupabase");
   const btnExport = document.getElementById("exportPipeline");
 
   if (btnGo) btnGo.addEventListener("click", fetchData);
   if (btnRetry) btnRetry.addEventListener("click", fetchData);
   if (btnCopy) btnCopy.addEventListener("click", copyJson);
   if (btnFromIn) btnFromIn.addEventListener("click", fetchData); // même action pour l'instant
+  if (btnSaveSupabase) btnSaveSupabase.addEventListener("click", saveToSupabase);
   if (btnExport) btnExport.addEventListener("click", exportPipelineCsv);
 
   pipelineButton = btnExport;
