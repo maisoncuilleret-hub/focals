@@ -1008,12 +1008,34 @@
       document.querySelector("article.profile-list-item")
     );
   const isRecruiterProfile = () => {
+    const href = location.href;
+
+    // 1) URLs that explicitly target a profile (even when opened from a pipeline sidebar)
+    if (/linkedin\.com\/.*\/profile\//i.test(href)) {
+      return true;
+    }
+
+    // 2) Presence of the recruiter profile top card (sidebar/condensed view)
+    if (
+      document.querySelector(".topcard-condensed__bing-container") ||
+      document.querySelector("[data-test-topcard-condensed-lockup]") ||
+      document.querySelector("[data-test-profile-top-card]") ||
+      document.querySelector(".profile__topcard-wrapper")
+    ) {
+      return true;
+    }
+
+    // 3) Classic recruiter profile heuristics
+    if (/linkedin\.com\/(talent|recruiter)/i.test(href)) {
+      return true;
+    }
+
+    // 4) If nothing else matched and the page is clearly a pipeline list, exit early
     if (isPipelineListPage()) {
       return false;
     }
-    if (/linkedin\.com\/(talent|recruiter)/i.test(location.href)) {
-      return true;
-    }
+
+    // 5) Fallback DOM cues
     return !!(
       document.querySelector("[data-test-row-lockup-full-name]") ||
       document.querySelector("[data-test-profile-background-card] .experience-card")
