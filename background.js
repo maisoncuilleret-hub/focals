@@ -23,18 +23,38 @@ const broadcastPipeline = (message) => {
 const createRequestId = () => `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 async function hydrateSupabaseSession(sessionPayload) {
-  try {
-    await chrome.storage.local.set({ [SUPABASE_AUTH_KEY]: JSON.stringify(sessionPayload) });
+  console.log("[Focals] 🔄 hydrateSupabaseSession appelée");
+  console.log("[Focals] 📥 Payload reçu:", {
+    hasAccessToken: !!sessionPayload?.access_token,
+    hasRefreshToken: !!sessionPayload?.refresh_token,
+    hasUser: !!sessionPayload?.user,
+    topLevelKeys: Object.keys(sessionPayload || {}),
+  });
 
-    const access_token = sessionPayload?.currentSession?.access_token;
-    const refresh_token = sessionPayload?.currentSession?.refresh_token;
+  try {
+    await chrome.storage.local.set({
+      [SUPABASE_AUTH_KEY]: JSON.stringify(sessionPayload),
+    });
+    console.log("[Focals] ✅ Session sauvegardée dans chrome.storage");
+
+    const access_token = sessionPayload?.access_token;
+    const refresh_token = sessionPayload?.refresh_token;
+
+    console.log("[Focals] 🔑 Tokens extraits:", {
+      hasAccessToken: !!access_token,
+      hasRefreshToken: !!refresh_token,
+    });
+
     if (access_token && refresh_token) {
       await supabase.auth.setSession({ access_token, refresh_token });
+      console.log("[Focals] ✅ supabase.auth.setSession() appelé avec succès");
+    } else {
+      console.warn("[Focals] ⚠️ Tokens manquants, setSession non appelé");
     }
 
-    console.log("[Focals] Session Supabase synchronisée depuis l'app web");
+    console.log("[Focals] ✅ Session Supabase synchronisée depuis l'app web");
   } catch (err) {
-    console.error("[Focals] Impossible d'enregistrer la session Supabase", err);
+    console.error("[Focals] ❌ Impossible d'enregistrer la session Supabase", err);
     throw err;
   }
 }

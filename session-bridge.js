@@ -1,31 +1,35 @@
 // Injected on the web app domain to sync Supabase session to the extension.
 (() => {
-  const SUPABASE_KEY_PREFIX = "sb-";
-  const AUTH_TOKEN_SUFFIX = "-auth-token";
+  const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 
-  function findSessionKey() {
-    return Object.keys(localStorage).find(
-      (key) => key.startsWith(SUPABASE_KEY_PREFIX) && key.includes(AUTH_TOKEN_SUFFIX)
-    );
-  }
+  console.log("[Focals] 🚀 session-bridge.js exécuté");
 
-  const key = findSessionKey();
-  if (!key) {
-    return;
-  }
+  const sessionRaw = localStorage.getItem(SUPABASE_AUTH_KEY);
+  console.log("[Focals] 🔍 Session raw exists:", !!sessionRaw);
 
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.currentSession?.access_token) return;
+  if (sessionRaw) {
+    try {
+      const session = JSON.parse(sessionRaw);
+      console.log("[Focals] 📦 Session parsed:", {
+        hasAccessToken: !!session.access_token,
+        hasRefreshToken: !!session.refresh_token,
+        hasUser: !!session.user,
+      });
 
-    chrome.runtime.sendMessage({
-      type: "SUPABASE_SESSION",
-      key,
-      session: parsed,
-    });
-  } catch (err) {
-    console.warn("[Focals] Impossible de synchroniser la session Supabase", err);
+      chrome.runtime.sendMessage(
+        { type: "SUPABASE_SESSION", session },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.error("[Focals] ❌ Erreur sendMessage:", chrome.runtime.lastError);
+          } else {
+            console.log("[Focals] ✅ Session envoyée au background:", response);
+          }
+        }
+      );
+    } catch (err) {
+      console.error("[Focals] ❌ Erreur parsing session:", err);
+    }
+  } else {
+    console.warn("[Focals] ⚠️ Aucune session Supabase trouvée");
   }
 })();
