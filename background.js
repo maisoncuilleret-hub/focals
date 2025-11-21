@@ -1,3 +1,5 @@
+import supabase from "./supabase-client.js";
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
@@ -193,6 +195,38 @@ function handlePipelineError(msg) {
   pipelineState.active = null;
 }
 
+async function saveProfileToSupabase(profile) {
+  if (!profile || !profile.linkedin_url) {
+    throw new Error("Profil invalide reçu pour l'envoi à Supabase.");
+  }
+
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError || !userResult?.user) {
+    throw new Error("Utilisateur non authentifié — connecte-toi sur l'app web.");
+  }
+
+  const { data: clientId, error: clientError } = await supabase.rpc("get_user_client_id");
+  if (clientError || !clientId) {
+    throw new Error("Impossible de récupérer le client_id Supabase.");
+  }
+
+  const payload = {
+    name: profile.name || "",
+    linkedin_url: profile.linkedin_url,
+    current_title: profile.current_title || "",
+    current_company: profile.current_company || "",
+    photo_url: profile.photo_url || "",
+    client_id: clientId,
+  };
+
+  const { error } = await supabase.from("profiles").insert(payload);
+  if (error) {
+    throw new Error(error.message || "Erreur inconnue lors de l'insertion Supabase.");
+  }
+
+  return { success: true };
+}
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "pipeline-export") {
     return;
@@ -251,6 +285,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       } catch (e) {
         console.error("[Focals] Error during scrape:", e);
         sendResponse({ error: e?.message || "SCRAPE_PUBLIC_PROFILE failed" });
+      }
+    })();
+    return true;
+  }
+
+  if (msg?.type === "SAVE_PROFILE_TO_SUPABASE" && msg.profile) {
+    (async () => {
+      try {
+        const result = await saveProfileToSupabase(msg.profile);
+        sendResponse({ success: true, result });
+      } catch (err) {
+        console.error("[Focals] Supabase save error", err);
+        sendResponse({ error: err?.message || "Enregistrement Supabase impossible" });
       }
     })();
     return true;
