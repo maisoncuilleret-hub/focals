@@ -3,6 +3,7 @@ import supabase from "./supabase-client.js";
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
+const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 const pipelinePorts = new Set();
 const pipelineState = {
   active: null,
@@ -20,6 +21,23 @@ const broadcastPipeline = (message) => {
 };
 
 const createRequestId = () => `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function hydrateSupabaseSession(sessionPayload) {
+  try {
+    await chrome.storage.local.set({ [SUPABASE_AUTH_KEY]: JSON.stringify(sessionPayload) });
+
+    const access_token = sessionPayload?.currentSession?.access_token;
+    const refresh_token = sessionPayload?.currentSession?.refresh_token;
+    if (access_token && refresh_token) {
+      await supabase.auth.setSession({ access_token, refresh_token });
+    }
+
+    console.log("[Focals] Session Supabase synchronisée depuis l'app web");
+  } catch (err) {
+    console.error("[Focals] Impossible d'enregistrer la session Supabase", err);
+    throw err;
+  }
+}
 
 async function ensureContentScript(tabId) {
   try {
@@ -273,6 +291,18 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "SUPABASE_SESSION" && msg.session) {
+    (async () => {
+      try {
+        await hydrateSupabaseSession(msg.session);
+        sendResponse({ success: true });
+      } catch (err) {
+        sendResponse({ error: err?.message || "Impossible de stocker la session Supabase" });
+      }
+    })();
+    return true;
+  }
+
   if (msg?.type === "SCRAPE_PUBLIC_PROFILE" && msg.url) {
     (async () => {
       try {
