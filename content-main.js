@@ -1656,10 +1656,11 @@
 
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
-    if (isPipelineListPage()) {
+    const recruiterPage = isRecruiterProfile();
+    if (isPipelineListPage() && !recruiterPage) {
       throw new Error("Cette page affiche une liste pipeline. Utilise l'export CSV.");
     }
-    if (isRecruiterProfile()) {
+    if (recruiterPage) {
       return scrapeRecruiterProfile();
     }
     const rawName =
