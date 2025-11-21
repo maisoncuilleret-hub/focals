@@ -14,13 +14,20 @@
     "downloads"
   ],
   "host_permissions": [
-    "https://www.linkedin.com/*"
+    "https://www.linkedin.com/*",
+    "https://ppawceknsedxaejpeylu.supabase.co/*",
+    "https://*.lovableproject.com/*"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": ["https://*.lovableproject.com/*"],
+      "js": ["session-bridge.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://www.linkedin.com/in/*",
