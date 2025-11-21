@@ -369,8 +369,14 @@ function saveToSupabase() {
   setErr("");
   setMode("Mode : envoi Supabase…");
 
+  const profileToSend = {
+    ...lastData,
+    linkedin_connected_at:
+      lastData.connection_status === "connected" ? new Date().toISOString() : null,
+  };
+
   chrome.runtime.sendMessage(
-    { type: "SAVE_PROFILE_TO_SUPABASE", profile: lastData },
+    { type: "SAVE_PROFILE_TO_SUPABASE", profile: profileToSend },
     (res) => {
       if (res?.error) {
         setErr(res.error || "Envoi Supabase impossible.");
