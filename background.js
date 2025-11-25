@@ -425,6 +425,54 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  // Gestionnaire pour CHECK_LINKEDIN_CONNECTION_STATUS depuis l'app web
+  if (message?.type === "CHECK_LINKEDIN_CONNECTION_STATUS") {
+    console.log("[Focals] Requête de vérification statut LinkedIn:", message);
+
+    (async () => {
+      try {
+        const { linkedinUrl } = message || {};
+
+        if (!linkedinUrl) {
+          sendResponse({ success: false, error: "URL LinkedIn manquante" });
+          return;
+        }
+
+        // Ouvrir la page LinkedIn en arrière-plan
+        const tab = await chrome.tabs.create({
+          url: linkedinUrl,
+          active: false,
+        });
+
+        // Attendre que la page se charge
+        await wait(3000);
+
+        // Demander au content script de vérifier le statut
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: "CHECK_CONNECTION_STATUS_ON_PAGE",
+          linkedinUrl,
+        });
+
+        // Fermer l'onglet temporaire
+        await chrome.tabs.remove(tab.id);
+
+        console.log("[Focals] Statut vérifié:", response);
+        sendResponse({
+          success: true,
+          status: response?.status,
+          details: response?.details,
+        });
+      } catch (error) {
+        console.error("[Focals] Erreur vérification statut:", error);
+        sendResponse({ success: false, error: error?.message || "Erreur lors de la vérification" });
+      }
+    })();
+
+    return true; // Keep channel open for async response
+  }
+});
+
 function waitForComplete(tabId) {
   return new Promise((resolve) => {
     function listener(updatedTabId, info) {

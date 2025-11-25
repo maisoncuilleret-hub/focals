@@ -20,7 +20,9 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://*.lovable.app/*",
+      "*://localhost:*/*",
+      "*://*.lovable.app/*",
+      "*://*.lovableproject.com/*",
       "https://ppawceknsedxaejpeylu.supabase.co/*"
     ]
   },

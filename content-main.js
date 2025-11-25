@@ -185,7 +185,7 @@
   /**
    * Vérifie le statut de connexion LinkedIn d'un profil
    */
-  async function checkLinkedInConnectionStatus(linkedinUrl) {
+  function checkLinkedInConnectionStatus(linkedinUrl) {
     console.log("[Focals] Vérification du statut pour:", linkedinUrl);
 
     // Sélecteurs pour détecter le statut
@@ -199,6 +199,7 @@
       pending: [
         "button[aria-label*='pending']",
         "button[aria-label*='En attente']",
+        "button[aria-label*='Pending']",
         "button[aria-label*='Invitation sent']",
         ".pv-s-profile-actions--pending",
       ],
@@ -213,19 +214,25 @@
     for (const selector of selectors.connected) {
       if (document.querySelector(selector)) {
         console.log("[Focals] ✅ Connecté");
-        return { status: "connected" };
+        return { status: "connected", details: "Bouton Message trouvé" };
       }
     }
 
     for (const selector of selectors.pending) {
       if (document.querySelector(selector)) {
         console.log("[Focals] ⏳ En attente");
-        return { status: "pending" };
+        return { status: "pending", details: "Invitation en attente" };
       }
     }
 
-    console.log("[Focals] ❌ Non connecté");
-    return { status: "not_connected" };
+    for (const selector of selectors.notConnected) {
+      if (document.querySelector(selector)) {
+        console.log("[Focals] ❌ Non connecté");
+        return { status: "not_connected", details: "Bouton Se connecter trouvé" };
+      }
+    }
+
+    return { status: "not_connected", details: "Statut inconnu" };
   }
   const collectTopCardButtons = () => {
     const selector = [
