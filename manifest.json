@@ -14,13 +14,28 @@
     "downloads"
   ],
   "host_permissions": [
-    "https://www.linkedin.com/*"
+    "https://www.linkedin.com/*",
+    "https://ppawceknsedxaejpeylu.supabase.co/*",
+    "https://*.lovable.app/*"
   ],
+  "externally_connectable": {
+    "matches": [
+      "*://localhost:*/*",
+      "*://*.lovable.app/*",
+      "*://*.lovableproject.com/*",
+      "https://ppawceknsedxaejpeylu.supabase.co/*"
+    ]
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": ["https://*.lovable.app/*"],
+      "js": ["session-bridge.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://www.linkedin.com/in/*",

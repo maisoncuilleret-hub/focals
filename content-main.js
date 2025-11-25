@@ -181,6 +181,7 @@
 
     return { degree: normalizeText(text), status: "unknown" };
   };
+
   const collectTopCardButtons = () => {
     const selector = [
       ".pv-top-card button",
@@ -572,6 +573,29 @@
     if (/alternance/.test(normalized)) return "Alternance";
     return "";
   };
+  const sanitizeCompanyName = (raw) => {
+    const normalized = normalizeText(raw);
+    if (!normalized) return "";
+
+    const tokens = normalized.split(/\s+/).filter(Boolean);
+    const lowered = tokens.map((t) => t.toLowerCase());
+    if (tokens.length % 2 === 0 && tokens.length >= 2) {
+      const mid = tokens.length / 2;
+      const firstHalf = lowered.slice(0, mid).join(" ");
+      const secondHalf = lowered.slice(mid).join(" ");
+      if (firstHalf === secondHalf) {
+        return tokens.slice(0, mid).join(" ");
+      }
+    }
+
+    const deduped = [];
+    for (const token of tokens) {
+      if (!deduped.length || deduped[deduped.length - 1].toLowerCase() !== token.toLowerCase()) {
+        deduped.push(token);
+      }
+    }
+    return deduped.join(" ");
+  };
   const parseCompanyAndContract = (rawText) => {
     const trimmed = (rawText || "").trim();
     if (!trimmed) {
@@ -962,12 +986,34 @@
       document.querySelector("article.profile-list-item")
     );
   const isRecruiterProfile = () => {
+    const href = location.href;
+
+    // 1) URLs that explicitly target a profile (even when opened from a pipeline sidebar)
+    if (/linkedin\.com\/.*\/profile\//i.test(href)) {
+      return true;
+    }
+
+    // 2) Presence of the recruiter profile top card (sidebar/condensed view)
+    if (
+      document.querySelector(".topcard-condensed__bing-container") ||
+      document.querySelector("[data-test-topcard-condensed-lockup]") ||
+      document.querySelector("[data-test-profile-top-card]") ||
+      document.querySelector(".profile__topcard-wrapper")
+    ) {
+      return true;
+    }
+
+    // 3) Classic recruiter profile heuristics
+    if (/linkedin\.com\/(talent|recruiter)/i.test(href)) {
+      return true;
+    }
+
+    // 4) If nothing else matched and the page is clearly a pipeline list, exit early
     if (isPipelineListPage()) {
       return false;
     }
-    if (/linkedin\.com\/(talent|recruiter)/i.test(location.href)) {
-      return true;
-    }
+
+    // 5) Fallback DOM cues
     return !!(
       document.querySelector("[data-test-row-lockup-full-name]") ||
       document.querySelector("[data-test-profile-background-card] .experience-card")
@@ -1102,7 +1148,7 @@
       inferCompanyFromHeadline(headline)
     );
     if (resolvedCompany) {
-      profile.current_company = resolvedCompany;
+      profile.current_company = sanitizeCompanyName(resolvedCompany);
     }
     if (companyDetails.contract) {
       profile.contract = companyDetails.contract;
@@ -1589,10 +1635,12 @@
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
+    const sanitizedCompany = sanitizeCompanyName(current_company);
+
     return {
       name: name || "—",
       current_title: current_title || headline || "—",
-      current_company: current_company || "—",
+      current_company: sanitizedCompany || "—",
       contract: contract || "—",
       localisation: localisation || "—",
       linkedin_url: publicProfileUrl || location.href || "—",
@@ -1610,10 +1658,11 @@
 
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
-    if (isPipelineListPage()) {
+    const recruiterPage = isRecruiterProfile();
+    if (isPipelineListPage() && !recruiterPage) {
       throw new Error("Cette page affiche une liste pipeline. Utilise l'export CSV.");
     }
-    if (isRecruiterProfile()) {
+    if (recruiterPage) {
       return scrapeRecruiterProfile();
     }
     const rawName =
@@ -1813,10 +1862,12 @@
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
+    const sanitizedCompany = sanitizeCompanyName(current_company);
+
     return {
       name: name || "—",
       current_title: current_title || headline || "—",
-      current_company: current_company || "—",
+      current_company: sanitizedCompany || "—",
       contract: contract || "—",
       localisation: localisation || "—",
       linkedin_url: publicProfileUrl || location.href || "—",
@@ -1831,5 +1882,32 @@
       can_message_without_connect: connectionInfo.can_message_without_connect,
     };
   }
+
+// Gestionnaire pour vérification du statut
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === "CHECK_CONNECTION_STATUS_ON_PAGE") {
+    console.log("[Focals] Vérification statut demandée");
+
+    (async () => {
+      try {
+        const connectionInfo = computeConnectionInfo();
+        console.log("[Focals] Connection info:", connectionInfo);
+
+        sendResponse({
+          success: true,
+          status: connectionInfo.connection_status,
+          connection_status: connectionInfo.connection_status,
+          details: connectionInfo.connection_summary,
+          degree: connectionInfo.connection_degree,
+          is_premium: connectionInfo.is_premium,
+        });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+
+    return true; // Keep channel open
+  }
+});
 })();
 
