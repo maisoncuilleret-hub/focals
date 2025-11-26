@@ -4,45 +4,47 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
-const OFFSCREEN_MESSAGE_TYPE = "FETCH_LINKEDIN_STATUS";
-const OFFSCREEN_DOCUMENT_URL = "offscreen.html";
-let creatingOffscreen;
 
-async function setupOffscreenDocument() {
-  const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
-  if (existing?.length) {
-    return;
-  }
-
-  if (creatingOffscreen) {
-    await creatingOffscreen;
-    return;
-  }
-
-  creatingOffscreen = chrome.offscreen.createDocument({
-    url: OFFSCREEN_DOCUMENT_URL,
-    reasons: ["DOM_PARSER"],
-    justification: "Parse LinkedIn profile to check connection status",
-  });
-  await creatingOffscreen;
-  creatingOffscreen = null;
-}
-
-async function checkLinkedInStatusViaOffscreen(linkedinUrl) {
+async function checkLinkedInStatusInTab(linkedinUrl) {
   if (!linkedinUrl) {
     throw new Error("URL LinkedIn manquante");
   }
 
-  await setupOffscreenDocument();
+  const tab = await chrome.tabs.create({ url: linkedinUrl, active: false });
 
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(
-      { type: OFFSCREEN_MESSAGE_TYPE, linkedinUrl },
-      (response) => {
-        resolve(response || { success: false, error: "No response from offscreen" });
-      }
-    );
-  });
+  try {
+    await waitForComplete(tab.id);
+    await wait(2000);
+    await ensureContentScript(tab.id);
+
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      type: "CHECK_CONNECTION_STATUS_ON_PAGE",
+      linkedinUrl,
+    });
+
+    if (!response) {
+      throw new Error("Réponse vide du content script");
+    }
+
+    if (response.success === false) {
+      throw new Error(response.error || "Echec de la vérification du statut LinkedIn");
+    }
+
+    return {
+      success: true,
+      status: response.status || response.connection_status || "unknown",
+      connection_status: response.status || response.connection_status || "unknown",
+      details: response.details,
+      degree: response.degree,
+      is_premium: response.is_premium,
+    };
+  } finally {
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch (err) {
+      console.warn("[Focals] Impossible de fermer l'onglet de statut", err);
+    }
+  }
 }
 const pipelinePorts = new Set();
 const pipelineState = {
@@ -418,7 +420,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     (async () => {
       try {
-        const response = await checkLinkedInStatusViaOffscreen(msg?.linkedinUrl);
+        const response = await checkLinkedInStatusInTab(msg?.linkedinUrl);
         sendResponse(response);
       } catch (error) {
         console.error("[Focals] Erreur:", error);
@@ -447,7 +449,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
     (async () => {
       try {
-        const response = await checkLinkedInStatusViaOffscreen(message?.linkedinUrl);
+        const response = await checkLinkedInStatusInTab(message?.linkedinUrl);
         sendResponse(response);
       } catch (error) {
         console.error("[Focals] Erreur vérification statut:", error);
