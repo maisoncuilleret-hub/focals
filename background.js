@@ -471,6 +471,48 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
     return true; // Keep channel open for async response
   }
+
+  // Handler pour ENVOYER une demande de connexion LinkedIn
+  if (message?.type === "SEND_LINKEDIN_CONNECTION") {
+    console.log("[Focals] Requête envoi connexion LinkedIn:", message);
+
+    (async () => {
+      try {
+        const { linkedinUrl, connectionMessage } = message || {};
+
+        if (!linkedinUrl) {
+          sendResponse({ success: false, error: "URL LinkedIn manquante" });
+          return;
+        }
+
+        const tab = await chrome.tabs.create({
+          url: linkedinUrl,
+          active: false,
+        });
+
+        await waitForComplete(tab.id);
+        await wait(2500);
+
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          type: "SEND_CONNECTION_ON_PAGE",
+          message: connectionMessage || "",
+        });
+
+        await chrome.tabs.remove(tab.id);
+
+        console.log("[Focals] Résultat envoi connexion:", response);
+        sendResponse({
+          success: response?.success || false,
+          error: response?.error,
+        });
+      } catch (error) {
+        console.error("[Focals] Erreur envoi connexion:", error);
+        sendResponse({ success: false, error: error?.message || "Erreur lors de l'envoi" });
+      }
+    })();
+
+    return true; // Keep channel open for async response
+  }
 });
 
 function waitForComplete(tabId) {
