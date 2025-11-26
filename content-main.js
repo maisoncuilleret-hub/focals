@@ -246,13 +246,20 @@
     }
 
     const buttons = collectTopCardButtons();
-    const buttonTexts = buttons.map((btn) => normalizeText(btn ? btn.innerText || btn.textContent : "")).filter(Boolean);
+    const buttonTexts = buttons
+      .map((btn) => normalizeText(btn ? btn.innerText || btn.textContent : ""))
+      .filter(Boolean);
     const lowerButtonTexts = buttonTexts.map((text) => text.toLowerCase());
+    const hasPendingButton = lowerButtonTexts.some((text) =>
+      /en attente|pending|invitation envoy[eé]e|invite sent|withdraw/i.test(text)
+    );
     const hasConnectButton = lowerButtonTexts.some((text) => /se connecter|connect|conectar|connettersi/.test(text));
     const hasFollowButton = lowerButtonTexts.some((text) => /suivre|follow/.test(text));
     const hasMessageButton = lowerButtonTexts.some((text) => /message|messagerie|inmail|envoyer un message|send message/.test(text));
 
-    if (connectionStatus === "unknown") {
+    if (hasPendingButton) {
+      connectionStatus = "pending";
+    } else if (connectionStatus === "unknown") {
       if (hasConnectButton || hasFollowButton) {
         connectionStatus = "not_connected";
       } else if (hasMessageButton) {
@@ -268,6 +275,8 @@
     const summaryParts = [];
     if (connectionStatus === "connected") {
       summaryParts.push("Connecté");
+    } else if (connectionStatus === "pending") {
+      summaryParts.push("Invitation en attente");
     } else if (connectionStatus === "not_connected") {
       summaryParts.push("Non connecté");
     }
@@ -1902,6 +1911,156 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           is_premium: connectionInfo.is_premium,
         });
       } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+
+    return true; // Keep channel open
+  }
+});
+
+// Handler pour ENVOYER une demande de connexion LinkedIn
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === "SEND_CONNECTION_ON_PAGE") {
+    console.log("[Focals] Demande d'envoi de connexion reçue");
+
+    const findConnectButtonInOverflow = async () => {
+      const overflowSelectors = [
+        "button[aria-label*='Plus d’actions']",
+        "button[aria-label*="Plus d'actions"]",
+        "button[aria-label*='Plus d’ options']",
+        "button[aria-label*='Plus']",
+        "button[aria-label*='More actions']",
+        "button[aria-label*='More']",
+        ".artdeco-dropdown__trigger",
+      ];
+
+      const overflowButtons = Array.from(document.querySelectorAll(overflowSelectors.join(", ")));
+      const overflowTrigger = overflowButtons.find((btn) => {
+        const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+        const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+        return /plus|more/.test(text) || /plus|more/.test(ariaLabel);
+      });
+
+      if (!overflowTrigger) return null;
+
+      try {
+        overflowTrigger.click();
+      } catch (err) {
+        // ignore click issues
+      }
+
+      await wait(600);
+
+      const dropdownCandidates = Array.from(
+        document.querySelectorAll(
+          ".artdeco-dropdown__item[role='button'], .artdeco-dropdown__item button, .artdeco-dropdown__item"
+        )
+      );
+
+      return (
+        dropdownCandidates.find((btn) => {
+          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+          return /se connecter|connect/i.test(text) || /se connecter|connect/i.test(ariaLabel);
+        }) || null
+      );
+    };
+
+    (async () => {
+      try {
+        const trimmedMessage = (request.message || "").trim().slice(0, 300);
+
+        let connectButton = null;
+        const buttons = collectTopCardButtons();
+
+        for (const btn of buttons) {
+          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+          if (
+            /se connecter|connect|conectar/i.test(text) ||
+            /inviter.*connecter|invite.*connect|se connecter/i.test(ariaLabel)
+          ) {
+            connectButton = btn;
+            break;
+          }
+        }
+
+        if (!connectButton) {
+          connectButton = await findConnectButtonInOverflow();
+        }
+
+        if (!connectButton) {
+          const connectionInfo = computeConnectionInfo();
+          if (connectionInfo.connection_status === "connected") {
+            sendResponse({ success: false, error: "ALREADY_CONNECTED" });
+            return;
+          }
+          if (connectionInfo.connection_status === "pending") {
+            sendResponse({ success: false, error: "ALREADY_PENDING" });
+            return;
+          }
+          sendResponse({ success: false, error: "CONNECT_BUTTON_NOT_FOUND" });
+          return;
+        }
+
+        connectButton.click();
+        await wait(1000);
+
+        let addNoteButton = null;
+        const modalButtons = document.querySelectorAll(".artdeco-modal button, [role='dialog'] button");
+
+        for (const btn of modalButtons) {
+          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+          if (/ajouter une note|add a note/i.test(text) || /ajouter une note|add a note/i.test(ariaLabel)) {
+            addNoteButton = btn;
+            break;
+          }
+        }
+
+        if (addNoteButton) {
+          addNoteButton.click();
+          await wait(500);
+        }
+
+        if (trimmedMessage) {
+          const textarea = document.querySelector("textarea[name='message'], textarea#custom-message");
+          if (textarea) {
+            textarea.value = trimmedMessage;
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+            textarea.dispatchEvent(new Event("change", { bubbles: true }));
+            await wait(300);
+          }
+        }
+
+        let sendButton = null;
+        const sendModalButtons = document.querySelectorAll(".artdeco-modal button, [role='dialog'] button");
+
+        for (const btn of sendModalButtons) {
+          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+          if (/^envoyer$|^send$|envoyer l'invitation|send invitation|send now/i.test(text)) {
+            sendButton = btn;
+            break;
+          }
+        }
+
+        if (!sendButton) {
+          sendResponse({ success: false, error: "SEND_BUTTON_NOT_FOUND" });
+          return;
+        }
+
+        sendButton.click();
+        await wait(500);
+
+        console.log("[Focals] ✅ Invitation envoyée avec succès");
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error("[Focals] Erreur envoi connexion:", error);
         sendResponse({ success: false, error: error.message });
       }
     })();
