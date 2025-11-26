@@ -4,6 +4,45 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
+const OFFSCREEN_MESSAGE_TYPE = "FETCH_LINKEDIN_STATUS";
+const OFFSCREEN_DOCUMENT_URL = "offscreen.html";
+let creatingOffscreenDocument;
+
+async function ensureOffscreenDocument() {
+  const existing = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  if (existing?.length) {
+    return;
+  }
+
+  if (!creatingOffscreenDocument) {
+    creatingOffscreenDocument = chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_URL,
+      reasons: ["DOM_PARSER"],
+      justification: "Parse LinkedIn profile page to read connection status",
+    });
+  }
+
+  await creatingOffscreenDocument;
+  creatingOffscreenDocument = null;
+}
+
+async function fetchLinkedinStatus(linkedinUrl) {
+  if (!linkedinUrl) {
+    throw new Error("URL LinkedIn manquante");
+  }
+
+  await ensureOffscreenDocument();
+  const response = await chrome.runtime.sendMessage({
+    type: OFFSCREEN_MESSAGE_TYPE,
+    linkedinUrl,
+  });
+
+  if (!response?.success) {
+    throw new Error(response?.error || "Impossible de récupérer le statut LinkedIn");
+  }
+
+  return response;
+}
 const pipelinePorts = new Set();
 const pipelineState = {
   active: null,
@@ -378,31 +417,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     (async () => {
       try {
-        const { linkedinUrl } = msg;
-
-        if (!linkedinUrl) {
-          sendResponse({ success: false, error: "URL manquante" });
-          return;
-        }
-
-        // Ouvrir la page en arrière-plan
-        const tab = await chrome.tabs.create({
-          url: linkedinUrl,
-          active: false,
-        });
-
-        // Attendre le chargement
-        await wait(3000);
-
-        // Vérifier le statut
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "CHECK_CONNECTION_STATUS_ON_PAGE",
-          linkedinUrl,
-        });
-
-        // Fermer l'onglet
-        await chrome.tabs.remove(tab.id);
-
+        const response = await fetchLinkedinStatus(msg?.linkedinUrl);
         console.log("[Focals] Statut vérifié:", response.status);
         sendResponse({ success: true, status: response.status });
       } catch (error) {
@@ -432,37 +447,9 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
     (async () => {
       try {
-        const { linkedinUrl } = message || {};
-
-        if (!linkedinUrl) {
-          sendResponse({ success: false, error: "URL LinkedIn manquante" });
-          return;
-        }
-
-        // Ouvrir la page LinkedIn en arrière-plan
-        const tab = await chrome.tabs.create({
-          url: linkedinUrl,
-          active: false,
-        });
-
-        // Attendre que la page se charge
-        await wait(3000);
-
-        // Demander au content script de vérifier le statut
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "CHECK_CONNECTION_STATUS_ON_PAGE",
-          linkedinUrl,
-        });
-
-        // Fermer l'onglet temporaire
-        await chrome.tabs.remove(tab.id);
-
+        const response = await fetchLinkedinStatus(message?.linkedinUrl);
         console.log("[Focals] Statut vérifié:", response);
-        sendResponse({
-          success: true,
-          status: response?.status,
-          details: response?.details,
-        });
+        sendResponse({ success: true, status: response?.status, details: response?.details });
       } catch (error) {
         console.error("[Focals] Erreur vérification statut:", error);
         sendResponse({ success: false, error: error?.message || "Erreur lors de la vérification" });
