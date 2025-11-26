@@ -11,8 +11,7 @@
     "tabs",
     "activeTab",
     "storage",
-    "downloads",
-    "offscreen"
+    "downloads"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
