@@ -1926,12 +1926,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     const findConnectButtonInOverflow = async () => {
       const overflowSelectors = [
-        "button[aria-label*='Plus d’actions']",
-        "button[aria-label*='Plus d\'actions']",
-        "button[aria-label*='Plus d’ options']",
-        "button[aria-label*='Plus']",
-        "button[aria-label*='More actions']",
-        "button[aria-label*='More']",
+        'button[aria-label*="Plus d\'actions"]',
+        'button[aria-label*="Plus d’actions"]',
+        'button[aria-label*="Plus"]',
+        'button[aria-label*="More actions"]',
+        'button[aria-label*="More"]',
         ".artdeco-dropdown__trigger",
       ];
 
