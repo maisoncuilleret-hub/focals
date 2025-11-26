@@ -1924,6 +1924,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "SEND_CONNECTION_ON_PAGE") {
     console.log("[Focals] Demande d'envoi de connexion reçue");
 
+    const matchesConnectButton = (btn) => {
+      const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
+      const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+
+      return (
+        /se connecter|connect|conectar|connettersi/.test(text) ||
+        /se connecter|connect|inviter.*connecter|invite.*connect/.test(ariaLabel) ||
+        /rejoindre.*r[ée]seau|join.*network|add.*network/.test(text) ||
+        /rejoindre.*r[ée]seau|join.*network|add.*network/.test(ariaLabel)
+      );
+    };
+
     const findConnectButtonInOverflow = async () => {
       const overflowSelectors = [
         'button[aria-label*="Plus d\'actions"]',
@@ -1957,37 +1969,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         )
       );
 
-      return (
-        dropdownCandidates.find((btn) => {
-          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
-          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
-          return /se connecter|connect/i.test(text) || /se connecter|connect/i.test(ariaLabel);
-        }) || null
-      );
+      return dropdownCandidates.find((btn) => matchesConnectButton(btn)) || null;
+    };
+
+    const findAnyConnectButton = () => {
+      const candidates = Array.from(document.querySelectorAll("button, [role='button']"));
+      return candidates.find((btn) => matchesConnectButton(btn)) || null;
+    };
+
+    const findTopCardConnectButton = () => {
+      const buttons = collectTopCardButtons();
+      return buttons.find((btn) => matchesConnectButton(btn)) || null;
     };
 
     (async () => {
       try {
         const trimmedMessage = (request.message || "").trim().slice(0, 300);
 
-        let connectButton = null;
-        const buttons = collectTopCardButtons();
-
-        for (const btn of buttons) {
-          const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
-          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
-
-          if (
-            /se connecter|connect|conectar/i.test(text) ||
-            /inviter.*connecter|invite.*connect|se connecter/i.test(ariaLabel)
-          ) {
-            connectButton = btn;
-            break;
-          }
-        }
+        let connectButton = findTopCardConnectButton();
 
         if (!connectButton) {
           connectButton = await findConnectButtonInOverflow();
+        }
+
+        if (!connectButton) {
+          connectButton = findAnyConnectButton();
+        }
+
+        if (!connectButton) {
+          await wait(700);
+          connectButton =
+            findTopCardConnectButton() || (await findConnectButtonInOverflow()) || findAnyConnectButton();
         }
 
         if (!connectButton) {
