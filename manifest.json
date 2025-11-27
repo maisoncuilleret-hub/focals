@@ -41,15 +41,7 @@
     },
     {
       "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
-      "js": ["content-main.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://www.linkedin.com/messaging/*",
-        "https://linkedin.com/messaging/*"
-      ],
-      "js": ["content-messaging.js"],
+      "js": ["content-main.js", "content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
