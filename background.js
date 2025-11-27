@@ -2,6 +2,8 @@ import supabase from "./supabase-client.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const NOTIFICATION_ICON_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAwMB/6X1CL8AAAAASUVORK5CYII=";
 
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 const pipelinePorts = new Set();
@@ -105,7 +107,7 @@ async function recordLinkedInReply(profile, conversation) {
 
     chrome.notifications.create({
       type: "basic",
-      iconUrl: "icon128.png",
+      iconUrl: NOTIFICATION_ICON_DATA_URL,
       title: "💬 Réponse LinkedIn",
       message: `${conversation.name} vous a répondu !`,
       priority: 2,
