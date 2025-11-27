@@ -99,99 +99,12 @@
     return null;
   };
 
-  const lastNotifiedConversations = new Map();
-
-  const collectNewMessagingNotifications = () => {
-    const container = findMessagingContainer();
-    if (!container) return [];
-
-    const conversationSelectors = [
-      ".msg-conversation-listitem",
-      ".msg-conversations-container__convo-item-link",
-      ".msg-conversation-card",
-      ".msg-conversation-listitem__link",
-    ];
-    const unreadSelectors = [
-      ".msg-conversation-card__unread-count",
-      ".notification-badge__count",
-      "[data-test-unread-indicator]",
-    ];
-
-    const items = container.querySelectorAll(conversationSelectors.join(","));
-    const notifications = [];
-
-    items.forEach((item) => {
-      const hasUnread = unreadSelectors.some((selector) => item.querySelector(selector));
-      if (!hasUnread) return;
-
-      const name = pickTextFrom(item, [
-        ".msg-conversation-card__participant-names",
-        ".msg-conversation-listitem__participant-names",
-        ".msg-conversation-card__title",
-      ]);
-
-      const profileLink = item.querySelector('a[href*="/in/"]');
-      const profileUrl = profileLink
-        ? new URL(profileLink.getAttribute("href"), window.location.origin).href
-        : "";
-
-      if (!name && !profileUrl) return;
-
-      const key = profileUrl || normalizeText(name);
-      const now = Date.now();
-      const lastDetected = lastNotifiedConversations.get(key) || 0;
-
-      // Déduplication rapide pour éviter des rafales de notifications identiques
-      if (now - lastDetected < 3000) return;
-
-      lastNotifiedConversations.set(key, now);
-      notifications.push({ name, profileUrl, timestamp: new Date().toISOString() });
-    });
-
-    return notifications;
-  };
-
+  // Removed: previous automatic sync on incoming messages (no longer needed)
   const startRealtimeMessagingObserver = () => {
     if (!isMessagingPage()) return;
     if (window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__) return;
-
-    const processNotifications = debounce(() => {
-      const notifications = collectNewMessagingNotifications();
-      if (!notifications.length) return;
-
-      console.log(`[Focals] ${notifications.length} nouveau(x) message(s) détecté(s)`);
-
-      for (const notification of notifications) {
-        sendRuntimeMessage({ type: "NEW_LINKEDIN_MESSAGE", ...notification });
-      }
-    }, 500);
-
-    const container = findMessagingContainer();
-    if (container) {
-      const observer = new MutationObserver(() => processNotifications());
-      observer.observe(container, { childList: true, subtree: true });
-      window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__ = true;
-
-      // Scan initial
-      processNotifications();
-      return;
-    }
-
-    // Fallback: réessayer quelques secondes le temps que la page charge
-    let attempts = 0;
-    const retryInterval = setInterval(() => {
-      attempts += 1;
-      const candidate = findMessagingContainer();
-      if (candidate) {
-        clearInterval(retryInterval);
-        const observer = new MutationObserver(() => processNotifications());
-        observer.observe(candidate, { childList: true, subtree: true });
-        window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__ = true;
-        processNotifications();
-      } else if (attempts > 8) {
-        clearInterval(retryInterval);
-      }
-    }, 600);
+    window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__ = true;
+    console.log("[Focals] Messaging observer disabled (incoming sync removed)");
   };
 
   if (document.readyState === "loading") {
