@@ -6,6 +6,8 @@
 
   // LinkedIn-specific selectors (may need adjustment if the UI changes)
   const EDITOR_SELECTOR = "div.msg-form__contenteditable";
+  // The footer toolbar is not reliable for our button placement,
+  // we will now anchor the button to the editor container instead.
   const TOOLBAR_SELECTOR = ".msg-form__footer";
   const MESSAGE_SELECTOR = "div.msg-s-message-list__event";
   const SELF_CLASS = "msg-s-message-list__event--self";
@@ -15,18 +17,26 @@
     'button[data-control-name="send"]',
   ];
 
-  const SUGGEST_BUTTON_ID = "focals-suggest-reply-button";
+  const SUGGEST_BUTTON_CLASS = "focals-suggest-reply-button";
 
-  const getEditor = () => document.querySelector(EDITOR_SELECTOR);
+  const getEditors = () => Array.from(document.querySelectorAll(EDITOR_SELECTOR));
 
-  const getComposer = () => {
-    const editor = getEditor();
+  const getComposer = (editor) => {
     if (!editor) return null;
     return editor.closest(".msg-form") || editor.closest("form") || editor.parentElement;
   };
 
-  const findSendButton = () => {
-    const composer = getComposer();
+  const getConversationRoot = (composer) => {
+    if (!composer) return null;
+    return (
+      composer.closest(".msg-overlay-conversation-bubble") ||
+      composer.closest(".msg-conversation-container") ||
+      composer.closest(".msg-s-message-list-container") ||
+      composer
+    );
+  };
+
+  const findSendButton = (composer) => {
     if (!composer) return null;
     for (const selector of SEND_BUTTON_SELECTORS) {
       const candidate = composer.querySelector(selector);
@@ -35,8 +45,9 @@
     return null;
   };
 
-  const collectMessages = () => {
-    const nodes = document.querySelectorAll(MESSAGE_SELECTOR);
+  const collectMessages = (conversationRoot) => {
+    const scope = conversationRoot || document;
+    const nodes = scope.querySelectorAll(MESSAGE_SELECTOR);
     return Array.from(nodes).map((node) => ({
       text: (node.innerText || "").trim(),
       fromMe: node.classList.contains(SELF_CLASS),
@@ -44,8 +55,9 @@
     }));
   };
 
-  const getLastReceivedMessage = () => {
-    const nodes = Array.from(document.querySelectorAll(MESSAGE_SELECTOR));
+  const getLastReceivedMessage = (conversationRoot) => {
+    const scope = conversationRoot || document;
+    const nodes = Array.from(scope.querySelectorAll(MESSAGE_SELECTOR));
     for (let i = nodes.length - 1; i >= 0; i -= 1) {
       const node = nodes[i];
       if (!node.classList.contains(SELF_CLASS)) {
@@ -68,14 +80,16 @@
     selection.addRange(range);
   };
 
-  const handleSuggestClick = () => {
-    const editor = getEditor();
+  const handleSuggestClick = (composer) => {
+    if (!composer) return;
+
+    const editor = composer.querySelector(EDITOR_SELECTOR);
     if (!editor) {
       console.warn("[Focals] Message editor not found");
       return;
     }
 
-    const lastMessage = getLastReceivedMessage();
+    const lastMessage = getLastReceivedMessage(getConversationRoot(composer));
     if (!lastMessage) {
       console.warn("[Focals] No received message found to base the suggestion on");
       return;
@@ -101,36 +115,69 @@
     );
   };
 
-  const injectSuggestButton = () => {
-    if (document.getElementById(SUGGEST_BUTTON_ID)) return;
-
-    const composer = getComposer();
+  /**
+   * Inject the "Suggest reply" button for a given composer.
+   * We anchor the button directly in the editor container, which matches
+   * the structure you gave:
+   *
+   * <div class="msg-form__msg-content-container--scrollable scrollable relative">
+   *   <div class="flex-grow-1 relative">
+   *     <div class="msg-form__contenteditable ..."></div>
+   *     <div class="msg-form__placeholder ..."></div>
+   *   </div>
+   * </div>
+   */
+  const injectSuggestButton = (composer) => {
     if (!composer) {
       console.warn("[Focals] Unable to locate LinkedIn composer to inject the button");
       return;
     }
 
-    const toolbar = composer.querySelector(TOOLBAR_SELECTOR) || composer;
+    const editor = composer.querySelector(EDITOR_SELECTOR);
+    if (!editor) {
+      console.warn("[Focals] No editor found under composer, skip button injection");
+      return;
+    }
+
+    // Prefer the direct parent of the editor (flex-grow-1 relative) as container
+    const container = editor.parentElement || composer;
+
+    // Avoid adding multiple buttons to the same composer
+    if (container.querySelector(`.${SUGGEST_BUTTON_CLASS}`)) return;
+
+    // Make sure the container can host an absolutely positioned child
+    const computed = window.getComputedStyle(container);
+    if (computed.position === "static") {
+      container.style.position = "relative";
+    }
+
     const button = document.createElement("button");
-    button.id = SUGGEST_BUTTON_ID;
+    button.className = SUGGEST_BUTTON_CLASS;
     button.type = "button";
     button.textContent = "Suggest reply";
-    button.style.marginLeft = "8px";
-    button.style.padding = "6px 10px";
+
+    // Styles: bottom right inside the editor container
+    button.style.position = "absolute";
+    button.style.right = "8px";
+    button.style.bottom = "8px";
+    button.style.zIndex = "10";
+    button.style.padding = "4px 8px";
     button.style.borderRadius = "6px";
     button.style.border = "1px solid #0a66c2";
     button.style.background = "#e8f3ff";
     button.style.color = "#0a66c2";
     button.style.cursor = "pointer";
-    button.style.fontSize = "14px";
-    button.addEventListener("click", handleSuggestClick);
+    button.style.fontSize = "12px";
+    button.style.lineHeight = "1.2";
 
-    toolbar.appendChild(button);
+    button.addEventListener("click", () => handleSuggestClick(composer));
+
+    container.appendChild(button);
   };
 
-  const handleSendClick = () => {
+  const handleSendClick = (composer) => {
     setTimeout(() => {
-      const messages = collectMessages();
+      const messages = collectMessages(getConversationRoot(composer));
       if (!messages.length) {
         console.warn("[Focals] No messages to sync after send");
         return;
@@ -158,17 +205,27 @@
   };
 
   const setupSendListener = () => {
-    const sendButton = findSendButton();
-    if (!sendButton) return;
-    if (sendButton.__focalsSendListenerAttached) return;
-    sendButton.__focalsSendListenerAttached = true;
-    sendButton.addEventListener("click", handleSendClick);
+    const editors = getEditors();
+    editors.forEach((editor) => {
+      const composer = getComposer(editor);
+      if (!composer) return;
+      const sendButton = findSendButton(composer);
+      if (!sendButton || sendButton.__focalsSendListenerAttached) return;
+      sendButton.__focalsSendListenerAttached = true;
+      sendButton.addEventListener("click", () => handleSendClick(composer));
+    });
   };
 
   const initMessagingFeatures = () => {
-    const editor = getEditor();
-    if (!editor) return;
-    injectSuggestButton();
+    const editors = getEditors();
+    if (!editors.length) return;
+
+    editors.forEach((editor) => {
+      const composer = getComposer(editor);
+      if (!composer) return;
+      injectSuggestButton(composer);
+    });
+
     setupSendListener();
   };
 
@@ -194,9 +251,7 @@
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === "FORCE_SCAN_MESSAGES") {
       // Removed: previous automatic sync on incoming messages (no longer needed)
-      sendResponse({ success: false, disabled: true });
-      return true;
+      sendResponse({ ok: true });
     }
-    return false;
   });
 })();
