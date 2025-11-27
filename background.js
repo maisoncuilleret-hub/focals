@@ -2,13 +2,17 @@ import supabase from "./supabase-client.js";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 const pipelinePorts = new Set();
 const pipelineState = {
   active: null,
   lastResult: null,
 };
+
+// Cache des profils du pipeline pour matching rapide
+let pipelineProfilesCache = [];
+let lastCacheRefresh = 0;
+const CACHE_TTL_MS = 60000; // Rafraîchir le cache toutes les minutes
 
 const broadcastPipeline = (message) => {
   for (const port of pipelinePorts) {
@@ -21,6 +25,96 @@ const broadcastPipeline = (message) => {
 };
 
 const createRequestId = () => `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+async function refreshPipelineProfilesCache() {
+  const now = Date.now();
+  if (now - lastCacheRefresh < CACHE_TTL_MS && pipelineProfilesCache.length > 0) {
+    return pipelineProfilesCache;
+  }
+
+  try {
+    const { data: userResult } = await supabase.auth.getUser();
+    if (!userResult?.user) return [];
+
+    const { data: clientId } = await supabase.rpc("get_user_client_id");
+    if (!clientId) return [];
+
+    const { data: profiles, error } = await supabase
+      .from("profiles")
+      .select("id, name, linkedin_url")
+      .eq("client_id", clientId)
+      .not("linkedin_url", "is", null);
+
+    if (error) throw error;
+
+    pipelineProfilesCache = profiles || [];
+    lastCacheRefresh = now;
+    console.log(`[Focals] Cache profils rafraîchi: ${pipelineProfilesCache.length} profils`);
+
+    return pipelineProfilesCache;
+  } catch (err) {
+    console.error("[Focals] Erreur rafraîchissement cache:", err);
+    return pipelineProfilesCache;
+  }
+}
+
+function normalizeLinkedInUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(/\/in\/([^\/]*)/);
+    return match ? match[1].toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function findMatchingProfile(linkedinUrl, name) {
+  const normalizedUrl = normalizeLinkedInUrl(linkedinUrl);
+  const normalizedName = (name || "").toLowerCase().trim();
+
+  if (normalizedUrl) {
+    const byUrl = pipelineProfilesCache.find(
+      (p) => normalizeLinkedInUrl(p.linkedin_url) === normalizedUrl
+    );
+    if (byUrl) return byUrl;
+  }
+
+  if (normalizedName) {
+    const byName = pipelineProfilesCache.find(
+      (p) => (p.name || "").toLowerCase().trim() === normalizedName
+    );
+    if (byName) return byName;
+  }
+
+  return null;
+}
+
+async function recordLinkedInReply(profile, conversation) {
+  try {
+    const { error } = await supabase.from("activities").insert({
+      profile_id: profile.id,
+      type: "linkedin_reply",
+      comment: `Message reçu de ${conversation.name}: "${conversation.messageSnippet?.substring(0, 100)}..."`,
+    });
+
+    if (error) throw error;
+
+    console.log(`[Focals] ✅ Activité linkedin_reply créée pour ${profile.name}`);
+
+    chrome.notifications.create({
+      type: "basic",
+      title: "💬 Réponse LinkedIn",
+      message: `${conversation.name} vous a répondu !`,
+      priority: 2,
+    });
+
+    return true;
+  } catch (err) {
+    console.error("[Focals] Erreur enregistrement réponse:", err);
+    return false;
+  }
+}
 
 async function hydrateSupabaseSession(sessionPayload) {
   console.log("[Focals] 🔄 hydrateSupabaseSession appelée");
@@ -414,6 +508,39 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // Keep channel open
   }
 
+  if (msg?.type === "LINKEDIN_NEW_MESSAGES_DETECTED") {
+    console.log("[Focals] Nouvelles conversations détectées:", msg.conversations);
+
+    (async () => {
+      try {
+        await refreshPipelineProfilesCache();
+
+        for (const conversation of msg.conversations) {
+          const matchingProfile = findMatchingProfile(
+            conversation.linkedinUrl,
+            conversation.name
+          );
+
+          if (matchingProfile) {
+            console.log(
+              `[Focals] Match trouvé: ${conversation.name} -> ${matchingProfile.name}`
+            );
+            await recordLinkedInReply(matchingProfile, conversation);
+          } else {
+            console.log(`[Focals] Pas de match pour: ${conversation.name}`);
+          }
+        }
+
+        sendResponse({ success: true });
+      } catch (err) {
+        console.error("[Focals] Erreur traitement messages:", err);
+        sendResponse({ error: err.message });
+      }
+    })();
+
+    return true;
+  }
+
   if (msg?.type === "PIPELINE_EXPORT_PROGRESS") {
     handlePipelineProgress(msg);
   } else if (msg?.type === "PIPELINE_EXPORT_COMPLETE") {
@@ -426,6 +553,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  if (message?.type === "FORCE_LINKEDIN_MESSAGE_SCAN") {
+    (async () => {
+      try {
+        const tabs = await chrome.tabs.query({ url: "*://www.linkedin.com/messaging/*" });
+
+        if (tabs.length === 0) {
+          const tab = await chrome.tabs.create({
+            url: "https://www.linkedin.com/messaging/",
+            active: false,
+          });
+
+          await wait(5000);
+
+          const response = await chrome.tabs.sendMessage(tab.id, {
+            type: "FORCE_SCAN_MESSAGES",
+          });
+
+          await wait(2000);
+          await chrome.tabs.remove(tab.id);
+
+          sendResponse({ success: true, ...response });
+        } else {
+          const response = await chrome.tabs.sendMessage(tabs[0].id, {
+            type: "FORCE_SCAN_MESSAGES",
+          });
+          sendResponse({ success: true, ...response });
+        }
+      } catch (err) {
+        sendResponse({ error: err.message });
+      }
+    })();
+
+    return true;
+  }
+
   // Gestionnaire pour CHECK_LINKEDIN_CONNECTION_STATUS depuis l'app web
   if (message?.type === "CHECK_LINKEDIN_CONNECTION_STATUS") {
     console.log("[Focals] Requête de vérification statut LinkedIn:", message);
