@@ -1,28 +1,30 @@
 {
   "manifest_version": 3,
-  "name": "Focals — Profil LinkedIn",
-  "version": "1.0.0",
-  "description": "Scrape profil LinkedIn (page /in/ ou Recruiter/Recruiter Lite) et copie JSON.",
+  "name": "Focals - LinkedIn Pipeline",
+  "version": "1.1.3",
+  "description": "Scrape et suivi des profils LinkedIn depuis l'extension Focals.",
   "action": {
     "default_popup": "popup.html"
   },
   "permissions": [
     "scripting",
     "tabs",
-    "activeTab",
     "storage",
-    "downloads"
+    "downloads",
+    "notifications"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
+    "https://linkedin.com/*",
     "https://ppawceknsedxaejpeylu.supabase.co/*",
-    "https://*.lovable.app/*"
+    "https://*.lovable.app/*",
+    "https://*.lovableproject.com/*"
   ],
   "externally_connectable": {
     "matches": [
-      "*://localhost:*/*",
-      "*://*.lovable.app/*",
-      "*://*.lovableproject.com/*",
+      "http://localhost:*/*",
+      "https://*.lovable.app/*",
+      "https://*.lovableproject.com/*",
       "https://ppawceknsedxaejpeylu.supabase.co/*"
     ]
   },
@@ -37,12 +39,16 @@
       "run_at": "document_start"
     },
     {
-      "matches": [
-        "https://www.linkedin.com/in/*",
-        "https://www.linkedin.com/talent/*",
-        "https://www.linkedin.com/recruiter/*"
-      ],
+      "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
       "js": ["content-main.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/messaging/*",
+        "https://linkedin.com/messaging/*"
+      ],
+      "js": ["content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
