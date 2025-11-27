@@ -16,6 +16,7 @@
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://linkedin.com/*",
+    "https://*.linkedin.com/*",
     "https://api.my-saas.com/*",
     "https://ppawceknsedxaejpeylu.supabase.co/*",
     "https://*.lovable.app/*",
@@ -40,16 +41,12 @@
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
-      "js": ["content-main.js"],
-      "run_at": "document_idle"
-    },
-    {
       "matches": [
-        "https://www.linkedin.com/messaging/*",
-        "https://linkedin.com/messaging/*"
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://*.linkedin.com/*"
       ],
-      "js": ["content-messaging.js"],
+      "js": ["content-main.js", "content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
