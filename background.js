@@ -528,3 +528,22 @@ function waitForComplete(tabId) {
 }
 
 console.log("[Focals] background service worker initialisé");
+
+const shouldAutoInject = (url) => {
+  if (!url) return false;
+  const normalized = url.toLowerCase();
+  return (
+    normalized.startsWith("https://www.linkedin.com/in/") ||
+    normalized.startsWith("https://www.linkedin.com/recruiter/") ||
+    normalized.startsWith("https://www.linkedin.com/talent/")
+  );
+};
+
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status !== "complete") return;
+  if (!shouldAutoInject(tab?.url)) return;
+
+  ensureContentScript(tabId).catch((err) => {
+    console.warn("[Focals] Auto-inject content script failed", err);
+  });
+});

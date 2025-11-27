@@ -1028,6 +1028,211 @@
       document.querySelector("[data-test-profile-background-card] .experience-card")
     );
   };
+
+  // === Bouton flottant export Supabase ===
+  const FLOATING_ID = "__focals-export-fab";
+  const FLOATING_STYLE_ID = "__focals-export-fab-style";
+  let floatingRoot = null;
+  let floatingButton = null;
+  let floatingStatus = null;
+  let lastKnownHref = location.href;
+  let floatingStatusTimeout = null;
+
+  const isPublicLinkedInProfile = () => /linkedin\.com\/in\//i.test(location.href);
+
+  const isEligibleForFloatingExport = () => {
+    if (isPipelineListPage()) return false;
+    return isRecruiterProfile() || isPublicLinkedInProfile();
+  };
+
+  const ensureFloatingStyles = () => {
+    if (document.getElementById(FLOATING_STYLE_ID)) return;
+    const style = document.createElement("style");
+    style.id = FLOATING_STYLE_ID;
+    style.textContent = `
+      #${FLOATING_ID} {
+        position: fixed;
+        top: 50%;
+        right: 18px;
+        transform: translateY(-50%);
+        z-index: 2147483647;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+        font-family: "Inter", system-ui, -apple-system, sans-serif;
+      }
+      #${FLOATING_ID} .focals-fab-button {
+        background: linear-gradient(135deg, #2563eb, #1e40af);
+        color: #fff;
+        border: none;
+        border-radius: 999px;
+        padding: 12px 16px;
+        font-weight: 600;
+        box-shadow: 0 12px 30px rgba(37, 99, 235, 0.28);
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+      }
+      #${FLOATING_ID} .focals-fab-button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 14px 34px rgba(37, 99, 235, 0.36);
+      }
+      #${FLOATING_ID} .focals-fab-button:disabled {
+        opacity: 0.7;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+      #${FLOATING_ID} .focals-fab-status {
+        background: rgba(9, 9, 11, 0.86);
+        color: #f8fafc;
+        padding: 8px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        max-width: 320px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+        text-align: right;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      #${FLOATING_ID} .focals-fab-status[data-tone="success"] {
+        background: rgba(16, 185, 129, 0.94);
+        color: #052e16;
+      }
+      #${FLOATING_ID} .focals-fab-status[data-tone="error"] {
+        background: rgba(248, 113, 113, 0.94);
+        color: #7f1d1d;
+      }
+      #${FLOATING_ID} .focals-fab-status[data-tone="warning"] {
+        background: rgba(250, 204, 21, 0.94);
+        color: #713f12;
+      }
+    `;
+    document.head.appendChild(style);
+  };
+
+  const updateFloatingStatus = (text, tone = "info") => {
+    if (!floatingStatus) return;
+    floatingStatus.textContent = text || "";
+    floatingStatus.dataset.tone = tone;
+
+    if (floatingStatusTimeout) {
+      clearTimeout(floatingStatusTimeout);
+      floatingStatusTimeout = null;
+    }
+
+    if (text) {
+      floatingStatusTimeout = setTimeout(() => {
+        floatingStatus.textContent = "";
+        floatingStatus.dataset.tone = "info";
+        floatingStatusTimeout = null;
+      }, tone === "error" ? 8000 : 4500);
+    }
+  };
+
+  const removeFloatingButton = () => {
+    if (floatingRoot && floatingRoot.parentNode) {
+      floatingRoot.remove();
+    }
+    floatingRoot = null;
+    floatingButton = null;
+    floatingStatus = null;
+  };
+
+  const handleFloatingExport = async () => {
+    if (!floatingButton) return;
+
+    floatingButton.disabled = true;
+    updateFloatingStatus("Collecte du profil…", "info");
+
+    try {
+      const profile = scrapePublicProfile();
+      if (!profile?.linkedin_url || profile.linkedin_url === "—") {
+        profile.linkedin_url = location.href;
+      }
+
+      const payload = {
+        ...profile,
+        linkedin_connected_at:
+          profile.connection_status === "connected" ? new Date().toISOString() : null,
+      };
+
+      const response = await sendRuntimeMessage({
+        type: "SAVE_PROFILE_TO_SUPABASE",
+        profile: payload,
+      });
+
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      updateFloatingStatus("Profil exporté vers Supabase ✅", "success");
+    } catch (err) {
+      const errorMessage = err?.message || "Export Supabase impossible";
+      updateFloatingStatus(errorMessage, "error");
+    } finally {
+      floatingButton.disabled = false;
+    }
+  };
+
+  const createFloatingButton = () => {
+    if (!isEligibleForFloatingExport()) {
+      removeFloatingButton();
+      return;
+    }
+
+    ensureFloatingStyles();
+
+    if (document.getElementById(FLOATING_ID)) {
+      floatingRoot = document.getElementById(FLOATING_ID);
+      floatingButton = floatingRoot.querySelector(".focals-fab-button");
+      floatingStatus = floatingRoot.querySelector(".focals-fab-status");
+      return;
+    }
+
+    floatingRoot = document.createElement("div");
+    floatingRoot.id = FLOATING_ID;
+
+    const button = document.createElement("button");
+    button.className = "focals-fab-button";
+    button.type = "button";
+    button.innerHTML = "<span>⬇︎</span>Exporter vers Supabase";
+    button.addEventListener("click", handleFloatingExport);
+
+    const status = document.createElement("div");
+    status.className = "focals-fab-status";
+    status.dataset.tone = "info";
+    status.textContent = "";
+
+    floatingRoot.appendChild(button);
+    floatingRoot.appendChild(status);
+
+    document.body.appendChild(floatingRoot);
+
+    floatingButton = button;
+    floatingStatus = status;
+  };
+
+  const monitorFloatingButton = () => {
+    createFloatingButton();
+
+    const interval = setInterval(() => {
+      if (location.href !== lastKnownHref) {
+        lastKnownHref = location.href;
+        createFloatingButton();
+      } else if (floatingRoot && !document.body.contains(floatingRoot)) {
+        createFloatingButton();
+      }
+
+      if (!isEligibleForFloatingExport() && floatingRoot) {
+        removeFloatingButton();
+      }
+    }, 1200);
+
+    window.addEventListener("beforeunload", () => clearInterval(interval));
+  };
   const createEmptyPipelineProfile = () => ({
     name: "—",
     current_title: "—",
@@ -1664,6 +1869,8 @@
       can_message_without_connect: connectionInfo.can_message_without_connect,
     };
   };
+
+  monitorFloatingButton();
 
   // === Scraper profil public /in/ ===
   function scrapePublicProfile() {
