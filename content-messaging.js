@@ -6,7 +6,8 @@
 
   // LinkedIn-specific selectors (may need adjustment if the UI changes)
   const EDITOR_SELECTOR = "div.msg-form__contenteditable";
-  const TOOLBAR_SELECTOR = ".msg-form__footer";
+  const CONTENT_CONTAINER_SELECTOR =
+    ".msg-form__msg-content-container.msg-form__message-texteditor";
   const MESSAGE_SELECTOR = "div.msg-s-message-list__event";
   const SELF_CLASS = "msg-s-message-list__event--self";
   const SEND_BUTTON_SELECTORS = [
@@ -23,6 +24,17 @@
     const editor = getEditor();
     if (!editor) return null;
     return editor.closest(".msg-form") || editor.closest("form") || editor.parentElement;
+  };
+
+  const getContentContainer = () => {
+    const composer = getComposer();
+    if (!composer) return null;
+    const container =
+      composer.querySelector(CONTENT_CONTAINER_SELECTOR) || composer.querySelector(".msg-form__msg-content-container");
+    if (!container) {
+      console.warn("[Focals] Message content container not found");
+    }
+    return container;
   };
 
   const findSendButton = () => {
@@ -102,30 +114,55 @@
   };
 
   const injectSuggestButton = () => {
-    if (document.getElementById(SUGGEST_BUTTON_ID)) return;
-
-    const composer = getComposer();
-    if (!composer) {
+    const container = getContentContainer();
+    if (!container) {
       console.warn("[Focals] Unable to locate LinkedIn composer to inject the button");
       return;
     }
 
-    const toolbar = composer.querySelector(TOOLBAR_SELECTOR) || composer;
+    const existing = document.getElementById(SUGGEST_BUTTON_ID);
+    if (existing) {
+      if (existing.parentElement !== container) {
+        if (getComputedStyle(container).position === "static") {
+          container.style.position = "relative";
+        }
+        container.appendChild(existing);
+      }
+      return;
+    }
+
     const button = document.createElement("button");
     button.id = SUGGEST_BUTTON_ID;
     button.type = "button";
     button.textContent = "Suggest reply";
-    button.style.marginLeft = "8px";
-    button.style.padding = "6px 10px";
-    button.style.borderRadius = "6px";
+    button.style.position = "absolute";
+    button.style.bottom = "10px";
+    button.style.left = "10px";
+    button.style.padding = "6px 12px";
+    button.style.borderRadius = "16px";
     button.style.border = "1px solid #0a66c2";
     button.style.background = "#e8f3ff";
     button.style.color = "#0a66c2";
     button.style.cursor = "pointer";
     button.style.fontSize = "14px";
+    button.style.boxShadow = "0 2px 6px rgba(0,0,0,0.08)";
+    button.style.zIndex = "10";
+    button.style.display = "inline-flex";
+    button.style.alignItems = "center";
+    button.style.gap = "6px";
+    button.style.maxWidth = "220px";
+    button.style.whiteSpace = "nowrap";
+    button.style.overflow = "hidden";
+    button.style.textOverflow = "ellipsis";
+    button.style.backgroundClip = "padding-box";
+    button.style.pointerEvents = "auto";
     button.addEventListener("click", handleSuggestClick);
 
-    toolbar.appendChild(button);
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative";
+    }
+
+    container.appendChild(button);
   };
 
   const handleSendClick = () => {
