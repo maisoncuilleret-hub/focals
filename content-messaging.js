@@ -15,18 +15,26 @@
     'button[data-control-name="send"]',
   ];
 
-  const SUGGEST_BUTTON_ID = "focals-suggest-reply-button";
+  const SUGGEST_BUTTON_CLASS = "focals-suggest-reply-button";
 
-  const getEditor = () => document.querySelector(EDITOR_SELECTOR);
+  const getEditors = () => Array.from(document.querySelectorAll(EDITOR_SELECTOR));
 
-  const getComposer = () => {
-    const editor = getEditor();
+  const getComposer = (editor) => {
     if (!editor) return null;
     return editor.closest(".msg-form") || editor.closest("form") || editor.parentElement;
   };
 
-  const findSendButton = () => {
-    const composer = getComposer();
+  const getConversationRoot = (composer) => {
+    if (!composer) return null;
+    return (
+      composer.closest(".msg-overlay-conversation-bubble") ||
+      composer.closest(".msg-conversation-container") ||
+      composer.closest(".msg-s-message-list-container") ||
+      composer
+    );
+  };
+
+  const findSendButton = (composer) => {
     if (!composer) return null;
     for (const selector of SEND_BUTTON_SELECTORS) {
       const candidate = composer.querySelector(selector);
@@ -35,8 +43,9 @@
     return null;
   };
 
-  const collectMessages = () => {
-    const nodes = document.querySelectorAll(MESSAGE_SELECTOR);
+  const collectMessages = (conversationRoot) => {
+    const scope = conversationRoot || document;
+    const nodes = scope.querySelectorAll(MESSAGE_SELECTOR);
     return Array.from(nodes).map((node) => ({
       text: (node.innerText || "").trim(),
       fromMe: node.classList.contains(SELF_CLASS),
@@ -44,8 +53,9 @@
     }));
   };
 
-  const getLastReceivedMessage = () => {
-    const nodes = Array.from(document.querySelectorAll(MESSAGE_SELECTOR));
+  const getLastReceivedMessage = (conversationRoot) => {
+    const scope = conversationRoot || document;
+    const nodes = Array.from(scope.querySelectorAll(MESSAGE_SELECTOR));
     for (let i = nodes.length - 1; i >= 0; i -= 1) {
       const node = nodes[i];
       if (!node.classList.contains(SELF_CLASS)) {
@@ -68,14 +78,16 @@
     selection.addRange(range);
   };
 
-  const handleSuggestClick = () => {
-    const editor = getEditor();
+  const handleSuggestClick = (composer) => {
+    if (!composer) return;
+
+    const editor = composer.querySelector(EDITOR_SELECTOR);
     if (!editor) {
       console.warn("[Focals] Message editor not found");
       return;
     }
 
-    const lastMessage = getLastReceivedMessage();
+    const lastMessage = getLastReceivedMessage(getConversationRoot(composer));
     if (!lastMessage) {
       console.warn("[Focals] No received message found to base the suggestion on");
       return;
@@ -101,18 +113,17 @@
     );
   };
 
-  const injectSuggestButton = () => {
-    if (document.getElementById(SUGGEST_BUTTON_ID)) return;
-
-    const composer = getComposer();
+  const injectSuggestButton = (composer) => {
     if (!composer) {
       console.warn("[Focals] Unable to locate LinkedIn composer to inject the button");
       return;
     }
 
+    if (composer.querySelector(`.${SUGGEST_BUTTON_CLASS}`)) return;
+
     const toolbar = composer.querySelector(TOOLBAR_SELECTOR) || composer;
     const button = document.createElement("button");
-    button.id = SUGGEST_BUTTON_ID;
+    button.className = SUGGEST_BUTTON_CLASS;
     button.type = "button";
     button.textContent = "Suggest reply";
     button.style.marginLeft = "8px";
@@ -123,14 +134,14 @@
     button.style.color = "#0a66c2";
     button.style.cursor = "pointer";
     button.style.fontSize = "14px";
-    button.addEventListener("click", handleSuggestClick);
+    button.addEventListener("click", () => handleSuggestClick(composer));
 
     toolbar.appendChild(button);
   };
 
-  const handleSendClick = () => {
+  const handleSendClick = (composer) => {
     setTimeout(() => {
-      const messages = collectMessages();
+      const messages = collectMessages(getConversationRoot(composer));
       if (!messages.length) {
         console.warn("[Focals] No messages to sync after send");
         return;
@@ -158,17 +169,26 @@
   };
 
   const setupSendListener = () => {
-    const sendButton = findSendButton();
-    if (!sendButton) return;
-    if (sendButton.__focalsSendListenerAttached) return;
-    sendButton.__focalsSendListenerAttached = true;
-    sendButton.addEventListener("click", handleSendClick);
+    const editors = getEditors();
+    editors.forEach((editor) => {
+      const composer = getComposer(editor);
+      const sendButton = findSendButton(composer);
+      if (!sendButton || sendButton.__focalsSendListenerAttached) return;
+      sendButton.__focalsSendListenerAttached = true;
+      sendButton.addEventListener("click", () => handleSendClick(composer));
+    });
   };
 
   const initMessagingFeatures = () => {
-    const editor = getEditor();
-    if (!editor) return;
-    injectSuggestButton();
+    const editors = getEditors();
+    if (!editors.length) return;
+
+    editors.forEach((editor) => {
+      const composer = getComposer(editor);
+      if (!composer) return;
+      injectSuggestButton(composer);
+    });
+
     setupSendListener();
   };
 
