@@ -1,6 +1,9 @@
 import supabase from "./supabase-client.js";
 
 const WEBAPP_EXTENSION_ID = "kekhkaclmlnmijnpekcpppnnoooodaca";
+const SAAS_API_BASE = "https://api.my-saas.com";
+const GENERATE_REPLY_URL = `${SAAS_API_BASE}/linkedin/generate-reply`;
+const SYNC_CONVERSATION_URL = `${SAAS_API_BASE}/linkedin/conversations`;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -506,6 +509,64 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
+  if (msg?.type === "GENERATE_REPLY") {
+    (async () => {
+      try {
+        const response = await fetch(GENERATE_REPLY_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            lastMessage: msg.lastMessage || "",
+            source: "linkedin",
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error ${response.status}`);
+        }
+
+        const data = await response.json();
+        sendResponse({ reply: data?.reply || "" });
+      } catch (err) {
+        console.error("[Focals] Error generating reply:", err);
+        sendResponse({ reply: "" });
+      }
+    })();
+
+    return true; // Keep the message channel open for async response
+  }
+
+  if (msg?.type === "SYNC_CONVERSATION") {
+    (async () => {
+      try {
+        const response = await fetch(SYNC_CONVERSATION_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            url: msg.url || "",
+            messages: Array.isArray(msg.messages) ? msg.messages : [],
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error ${response.status}`);
+        }
+
+        const data = await response.json();
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        console.error("[Focals] Error syncing conversation:", err);
+        sendResponse({ ok: false });
+      }
+    })();
+
+    return true; // Keep the message channel open for async response
+  }
+
   if (msg?.type === "SCRAPE_PUBLIC_PROFILE" && msg.url) {
     (async () => {
       try {
@@ -597,46 +658,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // Keep channel open
   }
 
-  if (msg?.type === "LINKEDIN_NEW_MESSAGES_DETECTED") {
-    console.log("[Focals] Nouvelles conversations détectées:", msg.conversations);
-
-    (async () => {
-      try {
-        await refreshProfilesCache();
-
-        for (const conversation of msg.conversations || []) {
-          await handleNewLinkedInMessage(
-            {
-              name: conversation.name,
-              profileUrl: conversation.linkedinUrl,
-              timestamp: conversation.detectedAt,
-            },
-            { skipCacheRefresh: true }
-          );
-        }
-
-        sendResponse({ success: true });
-      } catch (err) {
-        console.error("[Focals] Erreur traitement messages:", err);
-        sendResponse({ error: err.message });
-      }
-    })();
-
-    return true;
-  }
-
-  if (msg?.type === "NEW_LINKEDIN_MESSAGE") {
-    (async () => {
-      try {
-        await handleNewLinkedInMessage(msg);
-        sendResponse({ success: true });
-      } catch (err) {
-        console.error("[Focals] Erreur gestion nouveau message:", err);
-        sendResponse({ error: err?.message || "Traitement message échoué" });
-      }
-    })();
-
-    return true;
+  if (msg?.type === "LINKEDIN_NEW_MESSAGES_DETECTED" || msg?.type === "NEW_LINKEDIN_MESSAGE") {
+    // Removed: previous automatic sync on incoming messages (no longer needed)
+    console.log("[Focals] Ignoring incoming message sync request");
+    sendResponse?.({ disabled: true });
+    return false;
   }
 
   if (msg?.type === "PIPELINE_EXPORT_PROGRESS") {

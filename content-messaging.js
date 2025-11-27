@@ -4,165 +4,236 @@
 
   console.log("[Focals] content-messaging.js loaded");
 
-  // Configuration
-  const SCAN_INTERVAL_MS = 30000; // Scanner toutes les 30 secondes
-  const seenMessageIds = new Set(); // Éviter les doublons
+  // LinkedIn-specific selectors (may need adjustment if the UI changes)
+  const EDITOR_SELECTOR = "div.msg-form__contenteditable";
+  const CONTENT_CONTAINER_SELECTOR =
+    ".msg-form__msg-content-container.msg-form__message-texteditor";
+  const MESSAGE_SELECTOR = "div.msg-s-message-list__event";
+  const SELF_CLASS = "msg-s-message-list__event--self";
+  const SEND_BUTTON_SELECTORS = [
+    "button.msg-form__send-button",
+    'button[aria-label="Send"]',
+    'button[data-control-name="send"]',
+  ];
 
-  /**
-   * Extraire les conversations avec messages non lus
-   * Sélecteurs LinkedIn à adapter selon la structure actuelle du DOM
-   */
-  function extractUnreadConversations() {
-    const conversations = [];
+  const SUGGEST_BUTTON_ID = "focals-suggest-reply-button";
 
-    // Sélecteurs pour la liste des conversations LinkedIn Messaging
-    const conversationSelectors = [
-      ".msg-conversation-listitem",
-      ".msg-conversations-container__convo-item",
-      '[data-control-name="conversation_item"]',
-      ".msg-conversation-card",
-    ];
+  const getEditor = () => document.querySelector(EDITOR_SELECTOR);
 
-    for (const selector of conversationSelectors) {
-      const items = document.querySelectorAll(selector);
-      if (items.length === 0) continue;
+  const getComposer = () => {
+    const editor = getEditor();
+    if (!editor) return null;
+    return editor.closest(".msg-form") || editor.closest("form") || editor.parentElement;
+  };
 
-      items.forEach((item) => {
-        // Détecter si non lu (badge, point rouge, ou style différent)
-        const isUnread =
-          item.querySelector(".msg-conversation-card__unread-count") ||
-          item.querySelector(".notification-badge") ||
-          item.classList.contains("msg-conversation-card--unread") ||
-          item.querySelector('[data-test-unread-indicator]');
+  const getContentContainer = () => {
+    const composer = getComposer();
+    if (!composer) return null;
+    const container =
+      composer.querySelector(CONTENT_CONTAINER_SELECTOR) || composer.querySelector(".msg-form__msg-content-container");
+    if (!container) {
+      console.warn("[Focals] Message content container not found");
+    }
+    return container;
+  };
 
-        if (!isUnread) return;
+  const findSendButton = () => {
+    const composer = getComposer();
+    if (!composer) return null;
+    for (const selector of SEND_BUTTON_SELECTORS) {
+      const candidate = composer.querySelector(selector);
+      if (candidate) return candidate;
+    }
+    return null;
+  };
 
-        // Extraire les infos de la conversation
-        const nameEl = item.querySelector(
-          ".msg-conversation-listitem__participant-names, " +
-            ".msg-conversation-card__participant-names, " +
-            ".msg-conversation-card__title"
-        );
-        const name = nameEl?.innerText?.trim() || "";
+  const collectMessages = () => {
+    const nodes = document.querySelectorAll(MESSAGE_SELECTOR);
+    return Array.from(nodes).map((node) => ({
+      text: (node.innerText || "").trim(),
+      fromMe: node.classList.contains(SELF_CLASS),
+      timestamp: Date.now(),
+    }));
+  };
 
-        // Extraire l'URL du profil LinkedIn
-        const profileLink = item.querySelector('a[href*="/in/"]');
-        const linkedinUrl = profileLink?.href || "";
+  const getLastReceivedMessage = () => {
+    const nodes = Array.from(document.querySelectorAll(MESSAGE_SELECTOR));
+    for (let i = nodes.length - 1; i >= 0; i -= 1) {
+      const node = nodes[i];
+      if (!node.classList.contains(SELF_CLASS)) {
+        const text = (node.innerText || "").trim();
+        if (text) return text;
+      }
+    }
+    return "";
+  };
 
-        // Extraire l'aperçu du dernier message
-        const snippetEl = item.querySelector(
-          ".msg-conversation-card__message-snippet, " +
-            ".msg-conversation-listitem__message-snippet"
-        );
-        const messageSnippet = snippetEl?.innerText?.trim() || "";
+  const focusEditor = (editor) => {
+    if (!editor) return;
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
 
-        // Extraire la photo de profil
-        const photoEl = item.querySelector(
-          "img.presence-entity__image, img.msg-facepile-grid__img"
-        );
-        const photoUrl = photoEl?.src || "";
+  const handleSuggestClick = () => {
+    const editor = getEditor();
+    if (!editor) {
+      console.warn("[Focals] Message editor not found");
+      return;
+    }
 
-        // Créer un ID unique pour éviter les doublons
-        const conversationId =
-          item.getAttribute("data-conversation-id") ||
-          item.id ||
-          `${name}-${Date.now()}`;
+    const lastMessage = getLastReceivedMessage();
+    if (!lastMessage) {
+      console.warn("[Focals] No received message found to base the suggestion on");
+      return;
+    }
 
-        if (name && !seenMessageIds.has(conversationId)) {
-          conversations.push({
-            conversationId,
-            name,
-            linkedinUrl: linkedinUrl
-              ? new URL(linkedinUrl, window.location.origin).href
-              : "",
-            messageSnippet,
-            photoUrl,
-            detectedAt: new Date().toISOString(),
-          });
-          seenMessageIds.add(conversationId);
+    chrome.runtime.sendMessage(
+      { type: "GENERATE_REPLY", lastMessage },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn("[Focals] Suggest reply request failed", chrome.runtime.lastError);
+          return;
         }
-      });
 
-      if (conversations.length > 0) break;
+        const reply = response?.reply || "";
+        if (!reply) {
+          console.warn("[Focals] No reply returned by the API");
+          return;
+        }
+
+        editor.innerText = reply;
+        focusEditor(editor);
+      }
+    );
+  };
+
+  const injectSuggestButton = () => {
+    const container = getContentContainer();
+    if (!container) {
+      console.warn("[Focals] Unable to locate LinkedIn composer to inject the button");
+      return;
     }
 
-    return conversations;
-  }
-
-  /**
-   * Envoyer les nouvelles conversations au background script
-   */
-  async function reportNewMessages(conversations) {
-    if (conversations.length === 0) return;
-
-    console.log(`[Focals] ${conversations.length} nouvelle(s) conversation(s) détectée(s)`);
-
-    try {
-      await chrome.runtime.sendMessage({
-        type: "LINKEDIN_NEW_MESSAGES_DETECTED",
-        conversations,
-      });
-    } catch (err) {
-      console.error("[Focals] Erreur envoi messages:", err);
+    const existing = document.getElementById(SUGGEST_BUTTON_ID);
+    if (existing) {
+      if (existing.parentElement !== container) {
+        if (getComputedStyle(container).position === "static") {
+          container.style.position = "relative";
+        }
+        container.appendChild(existing);
+      }
+      return;
     }
-  }
 
-  /**
-   * Scanner périodiquement les nouvelles conversations
-   */
-  function startScanning() {
-    // Scan initial
-    const initial = extractUnreadConversations();
-    reportNewMessages(initial);
+    const button = document.createElement("button");
+    button.id = SUGGEST_BUTTON_ID;
+    button.type = "button";
+    button.textContent = "Suggest reply";
+    button.style.position = "absolute";
+    button.style.bottom = "10px";
+    button.style.left = "10px";
+    button.style.padding = "6px 12px";
+    button.style.borderRadius = "16px";
+    button.style.border = "1px solid #0a66c2";
+    button.style.background = "#e8f3ff";
+    button.style.color = "#0a66c2";
+    button.style.cursor = "pointer";
+    button.style.fontSize = "14px";
+    button.style.boxShadow = "0 2px 6px rgba(0,0,0,0.08)";
+    button.style.zIndex = "10";
+    button.style.display = "inline-flex";
+    button.style.alignItems = "center";
+    button.style.gap = "6px";
+    button.style.maxWidth = "220px";
+    button.style.whiteSpace = "nowrap";
+    button.style.overflow = "hidden";
+    button.style.textOverflow = "ellipsis";
+    button.style.backgroundClip = "padding-box";
+    button.style.pointerEvents = "auto";
+    button.addEventListener("click", handleSuggestClick);
 
-    // Scan périodique
-    setInterval(() => {
-      const newConversations = extractUnreadConversations();
-      reportNewMessages(newConversations);
-    }, SCAN_INTERVAL_MS);
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative";
+    }
 
-    // Observer les mutations du DOM pour détecter les nouveaux messages en temps réel
-    const observer = new MutationObserver((mutations) => {
-      // Debounce pour éviter trop d'appels
-      clearTimeout(window.__focals_mutation_timeout);
-      window.__focals_mutation_timeout = setTimeout(() => {
-        const newConversations = extractUnreadConversations();
-        reportNewMessages(newConversations);
-      }, 1000);
+    container.appendChild(button);
+  };
+
+  const handleSendClick = () => {
+    setTimeout(() => {
+      const messages = collectMessages();
+      if (!messages.length) {
+        console.warn("[Focals] No messages to sync after send");
+        return;
+      }
+
+      chrome.runtime.sendMessage(
+        {
+          type: "SYNC_CONVERSATION",
+          url: window.location.href,
+          messages,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.warn("[Focals] Conversation sync failed", chrome.runtime.lastError);
+            return;
+          }
+          if (response?.ok) {
+            console.log("[Focals] Conversation synced successfully");
+          } else {
+            console.warn("[Focals] Conversation sync unsuccessful", response);
+          }
+        }
+      );
+    }, 500);
+  };
+
+  const setupSendListener = () => {
+    const sendButton = findSendButton();
+    if (!sendButton) return;
+    if (sendButton.__focalsSendListenerAttached) return;
+    sendButton.__focalsSendListenerAttached = true;
+    sendButton.addEventListener("click", handleSendClick);
+  };
+
+  const initMessagingFeatures = () => {
+    const editor = getEditor();
+    if (!editor) return;
+    injectSuggestButton();
+    setupSendListener();
+  };
+
+  const startComposerWatcher = () => {
+    initMessagingFeatures();
+
+    const observer = new MutationObserver(() => {
+      initMessagingFeatures();
     });
 
-    const messagingContainer = document.querySelector(
-      ".msg-conversations-container, " + ".msg-thread, " + "#messaging"
-    );
-
-    if (messagingContainer) {
-      observer.observe(messagingContainer, {
-        childList: true,
-        subtree: true,
-      });
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true });
     }
-  }
+  };
 
-  // Attendre que le DOM soit prêt
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startScanning);
+    document.addEventListener("DOMContentLoaded", startComposerWatcher);
   } else {
-    setTimeout(startScanning, 2000); // Délai pour le chargement JS de LinkedIn
+    startComposerWatcher();
   }
 
-  // Répondre aux pings du background
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "FOCALS_PING") {
-      sendResponse({ pong: true, script: "content-messaging" });
+  // Respond to legacy scan requests without triggering automatic sync
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg?.type === "FORCE_SCAN_MESSAGES") {
+      // Removed: previous automatic sync on incoming messages (no longer needed)
+      sendResponse({ success: false, disabled: true });
       return true;
     }
-
-    if (msg.type === "FORCE_SCAN_MESSAGES") {
-      seenMessageIds.clear(); // Reset pour forcer un nouveau scan
-      const conversations = extractUnreadConversations();
-      reportNewMessages(conversations);
-      sendResponse({ success: true, count: conversations.length });
-      return true;
-    }
+    return false;
   });
 })();
