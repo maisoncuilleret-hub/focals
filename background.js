@@ -1,5 +1,7 @@
 import supabase from "./supabase-client.js";
 
+const WEBAPP_EXTENSION_ID = "kekhkaclmlnmijnpekcpppnnoooodaca";
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
@@ -9,8 +11,8 @@ const pipelineState = {
   lastResult: null,
 };
 
-// Cache des profils du pipeline pour matching rapide
-let pipelineProfilesCache = [];
+// Cache des profils pour matching rapide
+let profilesCache = [];
 let lastCacheRefresh = 0;
 const CACHE_TTL_MS = 60000; // Rafraîchir le cache toutes les minutes
 
@@ -26,10 +28,10 @@ const broadcastPipeline = (message) => {
 
 const createRequestId = () => `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-async function refreshPipelineProfilesCache() {
+async function refreshProfilesCache() {
   const now = Date.now();
-  if (now - lastCacheRefresh < CACHE_TTL_MS && pipelineProfilesCache.length > 0) {
-    return pipelineProfilesCache;
+  if (now - lastCacheRefresh < CACHE_TTL_MS && profilesCache.length > 0) {
+    return profilesCache;
   }
 
   try {
@@ -47,14 +49,14 @@ async function refreshPipelineProfilesCache() {
 
     if (error) throw error;
 
-    pipelineProfilesCache = profiles || [];
+    profilesCache = profiles || [];
     lastCacheRefresh = now;
-    console.log(`[Focals] Cache profils rafraîchi: ${pipelineProfilesCache.length} profils`);
+    console.log(`[Focals] Cache profils rafraîchi: ${profilesCache.length} profils`);
 
-    return pipelineProfilesCache;
+    return profilesCache;
   } catch (err) {
     console.error("[Focals] Erreur rafraîchissement cache:", err);
-    return pipelineProfilesCache;
+    return profilesCache;
   }
 }
 
@@ -69,25 +71,112 @@ function normalizeLinkedInUrl(url) {
   }
 }
 
-function findMatchingProfile(linkedinUrl, name) {
-  const normalizedUrl = normalizeLinkedInUrl(linkedinUrl);
-  const normalizedName = (name || "").toLowerCase().trim();
+function normalizeText(text) {
+  if (!text) return "";
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s*-\s*.*$/, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (normalizedUrl) {
-    const byUrl = pipelineProfilesCache.find(
-      (p) => normalizeLinkedInUrl(p.linkedin_url) === normalizedUrl
-    );
-    if (byUrl) return byUrl;
+function extractLinkedinSlug(url) {
+  if (!url) return "";
+  const normalizedUrl = normalizeLinkedInUrl(url);
+  return normalizedUrl || "";
+}
+
+function findMatchingProfile(name, profileUrl) {
+  const inputSlug = extractLinkedinSlug(profileUrl);
+  if (inputSlug) {
+    const matchByUrl = profilesCache.find((p) => {
+      const cachedSlug = extractLinkedinSlug(p.linkedin_url);
+      return cachedSlug && (inputSlug === cachedSlug || profileUrl.includes(cachedSlug));
+    });
+    if (matchByUrl) return matchByUrl;
   }
 
+  const normalizedName = normalizeText(name);
   if (normalizedName) {
-    const byName = pipelineProfilesCache.find(
-      (p) => (p.name || "").toLowerCase().trim() === normalizedName
-    );
-    if (byName) return byName;
+    const exactMatch = profilesCache.find((p) => normalizeText(p.name) === normalizedName);
+    if (exactMatch) return exactMatch;
+
+    const nameParts = normalizedName.split(" ");
+    if (nameParts.length >= 2) {
+      const partialMatch = profilesCache.find((p) => {
+        const profileName = normalizeText(p.name);
+        return nameParts.every((part) => profileName.includes(part));
+      });
+      if (partialMatch) return partialMatch;
+    }
   }
 
   return null;
+}
+
+async function saveActivityToSupabase(activity) {
+  const { error } = await supabase.from("activities").insert(activity);
+  if (error) throw error;
+  return true;
+}
+
+async function checkRecentReply(profileId) {
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("activities")
+    .select("id")
+    .eq("profile_id", profileId)
+    .eq("type", "linkedin_reply")
+    .gte("created_at", oneHourAgo)
+    .limit(1);
+
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
+async function handleNewLinkedInMessage(payload, { skipCacheRefresh = false } = {}) {
+  const { name, profileUrl, timestamp } = payload || {};
+
+  if (!skipCacheRefresh) {
+    await refreshProfilesCache();
+  }
+
+  const match = findMatchingProfile(name, profileUrl);
+
+  if (!match) {
+    console.log("[Focals] ℹ️ Profil non trouvé:", name || profileUrl || "<inconnu>");
+    return { matched: false };
+  }
+
+  const duplicate = await checkRecentReply(match.id);
+  if (duplicate) {
+    console.log("[Focals] ⏭️ Réponse déjà enregistrée récemment");
+    return { matched: true, duplicate: true };
+  }
+
+  await saveActivityToSupabase({
+    profile_id: match.id,
+    type: "linkedin_reply",
+    content: `Réponse reçue de ${name || match.name}`,
+    date: new Date().toISOString().split("T")[0],
+    created_at: timestamp || new Date().toISOString(),
+  });
+
+  try {
+    chrome.runtime.sendMessage(WEBAPP_EXTENSION_ID, {
+      type: "LINKEDIN_REPLY_DETECTED",
+      profile: match,
+    });
+  } catch (err) {
+    console.warn("[Focals] Impossible de notifier l'app web:", err?.message || err);
+  }
+
+  console.log("[Focals] ✅ Réponse LinkedIn enregistrée pour:", match.name);
+  return { matched: true, duplicate: false };
 }
 
 async function recordLinkedInReply(profile, conversation) {
@@ -513,28 +602,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     (async () => {
       try {
-        await refreshPipelineProfilesCache();
+        await refreshProfilesCache();
 
-        for (const conversation of msg.conversations) {
-          const matchingProfile = findMatchingProfile(
-            conversation.linkedinUrl,
-            conversation.name
+        for (const conversation of msg.conversations || []) {
+          await handleNewLinkedInMessage(
+            {
+              name: conversation.name,
+              profileUrl: conversation.linkedinUrl,
+              timestamp: conversation.detectedAt,
+            },
+            { skipCacheRefresh: true }
           );
-
-          if (matchingProfile) {
-            console.log(
-              `[Focals] Match trouvé: ${conversation.name} -> ${matchingProfile.name}`
-            );
-            await recordLinkedInReply(matchingProfile, conversation);
-          } else {
-            console.log(`[Focals] Pas de match pour: ${conversation.name}`);
-          }
         }
 
         sendResponse({ success: true });
       } catch (err) {
         console.error("[Focals] Erreur traitement messages:", err);
         sendResponse({ error: err.message });
+      }
+    })();
+
+    return true;
+  }
+
+  if (msg?.type === "NEW_LINKEDIN_MESSAGE") {
+    (async () => {
+      try {
+        await handleNewLinkedInMessage(msg);
+        sendResponse({ success: true });
+      } catch (err) {
+        console.error("[Focals] Erreur gestion nouveau message:", err);
+        sendResponse({ error: err?.message || "Traitement message échoué" });
       }
     })();
 
