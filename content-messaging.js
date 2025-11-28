@@ -227,8 +227,23 @@
       return data?.reply || null;
     };
 
-    const insertReplyIntoMessageInput = (replyText) => {
+    const insertReplyIntoMessageInput = (
+      replyText,
+      { composer, conversationName = "Unknown conversation" } = {}
+    ) => {
       log(`PIPELINE insert_reply: start`);
+      log(
+        `PIPELINE insert_reply: targeting scoped composer for "${conversationName}"`
+      );
+
+      if (!composer) {
+        warn(
+          `PIPELINE insert_reply: editor not found inside composer, aborting`
+        );
+        alert("❌ Impossible de trouver le champ de réponse LinkedIn.");
+        return false;
+      }
+
       const inputSelectors = [
         ".msg-form__contenteditable",
         "[data-test-message-input]",
@@ -238,12 +253,12 @@
 
       let inputField = null;
       for (const selector of inputSelectors) {
-        inputField = document.querySelector(selector);
+        inputField = composer.querySelector(selector);
         if (inputField) break;
       }
 
       if (!inputField) {
-        error(`PIPELINE insert_reply: failed, reason = editor not found`);
+        warn(`PIPELINE insert_reply: editor not found inside composer, aborting`);
         alert("❌ Impossible de trouver le champ de réponse LinkedIn.");
         return false;
       }
@@ -273,10 +288,17 @@
     const runSuggestReplyPipeline = async ({
       button,
       conversationRoot = document,
+      composer,
       conversationName = "Unknown conversation",
+      editorIndex,
     } = {}) => {
       try {
         log("Suggest reply button clicked");
+        log(
+          `[MSG] PIPELINE_START { conversation: "${conversationName}", editorIndex: ${
+            editorIndex ?? "n/a"
+          }, usingScopedRoot: ${conversationRoot !== document} }`
+        );
 
         log(`PIPELINE extract_messages: start`);
         const messages = extractLinkedInMessages(conversationRoot) || [];
@@ -298,7 +320,10 @@
           return;
         }
 
-        const inserted = insertReplyIntoMessageInput(reply);
+        const inserted = insertReplyIntoMessageInput(reply, {
+          composer,
+          conversationName,
+        });
         log(`PIPELINE insert_reply: success = ${inserted}`);
       } catch (err) {
         error(`PIPELINE_ERROR ${err?.message || err}`);
@@ -329,19 +354,33 @@
           return;
         }
 
-        if (rightActions.querySelector(`.${BUTTON_CLASS}`)) {
-          return;
-        }
-
         const conversationRoot = resolveConversationRoot(composer);
         const conversationName = resolveConversationName(conversationRoot);
 
-        const button = document.createElement("button");
+        const existingButton = rightActions.querySelector(`.${BUTTON_CLASS}`);
+        if (existingButton) {
+          if (existingButton.dataset.focalsBound === "true") {
+            log(
+              `[MSG] BUTTON_BIND_SKIP already bound for this composer (conversation: "${conversationName}")`
+            );
+            return;
+          }
+        }
+
+        const button = existingButton || document.createElement("button");
         button.className = `${BUTTON_CLASS} artdeco-button artdeco-button--1`;
         button.textContent = "Suggest reply";
         button.style.marginLeft = "8px";
         button.style.padding = "6px 10px";
         button.style.cursor = "pointer";
+
+        log("[MSG] BUTTON_BIND", {
+          conversation: conversationName,
+          composerId: composer.id || null,
+          editorIndex: index + 1,
+        });
+
+        button.dataset.focalsBound = "true";
 
         button.addEventListener("click", async () => {
           const originalText = button.textContent;
@@ -351,19 +390,25 @@
           button.disabled = true;
           button.textContent = "⏳ Génération...";
           button.style.opacity = "0.7";
-          log("[MSG][UI] Button set to loading");
+          log(
+            `[MSG][UI] Button set to loading (conversation: "${conversationName}")`
+          );
 
           try {
             await runSuggestReplyPipeline({
               button,
+              composer,
               conversationRoot,
               conversationName,
+              editorIndex: index + 1,
             });
           } finally {
             button.disabled = originalDisabled;
             button.textContent = originalText;
             button.style.opacity = originalOpacity;
-            log("[MSG][UI] Button restored to idle");
+            log(
+              `[MSG][UI] Button restored to idle (conversation: "${conversationName}")`
+            );
           }
         });
 
