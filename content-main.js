@@ -1,11 +1,57 @@
 (() => {
+  const FOCALS_DEBUG = true;
+  const debugLog = (stage, details) => {
+    if (!FOCALS_DEBUG) return;
+    if (typeof details === "string") {
+      console.log(`[Focals][${stage}]`, details);
+      return;
+    }
+
+    if (details && typeof details === "object") {
+      try {
+        console.log(`[Focals][${stage}]`, JSON.parse(JSON.stringify(details)));
+        return;
+      } catch (err) {
+        console.log(`[Focals][${stage}]`, details, "(log stringify failed)");
+        return;
+      }
+    }
+
+    console.log(`[Focals][${stage}]`, details);
+  };
+  const getEnvInfo = () => ({
+    href: window.location.href,
+    origin: window.location.origin,
+    isTop: window === window.top,
+    isSandbox:
+      document.origin === "null" ||
+      window.location.origin === "null" ||
+      !!window.frameElement?.hasAttribute("sandbox"),
+  });
+
+  const env = getEnvInfo();
+  debugLog("ENV", env);
+
+  if (!env.isTop) {
+    debugLog("EXIT", "Not in top window, skipping Focals content script");
+    return;
+  }
+  if (env.isSandbox) {
+    debugLog("EXIT", "Sandboxed document, skipping Focals content script");
+    return;
+  }
+  if (env.origin !== "https://www.linkedin.com") {
+    debugLog("EXIT", "Not on linkedin.com, skipping Focals content script");
+    return;
+  }
+
   if (window.__FOCALS_CONTENT_MAIN_LOADED__) {
-    console.log("[Focals] content-main.js already initialized");
+    debugLog("EXIT", "content-main.js already initialized");
     return;
   }
   window.__FOCALS_CONTENT_MAIN_LOADED__ = true;
 
-  console.log("[Focals] Safe content-main.js loaded");
+  debugLog("INIT", "Safe content-main.js loaded");
 
   // Simple sélecteurs
   const q = (s) => document.querySelector(s);
@@ -104,7 +150,7 @@
     if (!isMessagingPage()) return;
     if (window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__) return;
     window.__FOCALS_MESSAGING_OBSERVER_ACTIVE__ = true;
-    console.log("[Focals] Messaging observer disabled (incoming sync removed)");
+    debugLog("MESSAGING_OBSERVER", "Messaging observer disabled (incoming sync removed)");
   };
 
   if (document.readyState === "loading") {
@@ -849,7 +895,7 @@
       recruiterProfileHtmlCache.set(url, text || "");
       return text || "";
     } catch (err) {
-      console.warn("[Focals] recruiter profile fetch failed", err);
+      debugLog("SCRAPER_ERROR", err?.message || err);
       recruiterProfileHtmlCache.set(url, "");
       return "";
     }
@@ -884,7 +930,7 @@
         return sanitizeLinkedinUrl(response.url);
       }
     } catch (err) {
-      console.warn("[Focals] background public URL lookup failed", err);
+      debugLog("SCRAPER_ERROR", err?.message || err);
     }
     return "";
   };
@@ -1072,10 +1118,35 @@
 
   const isPublicLinkedInProfile = () => /linkedin\.com\/in\//i.test(location.href);
 
-  const isEligibleForFloatingExport = () => {
-    if (isPipelineListPage()) return false;
-    return isRecruiterProfile() || isPublicLinkedInProfile();
+  let lastEligibilitySnapshot = null;
+
+  const getFloatingEligibility = () => {
+    const onPipelineList = isPipelineListPage();
+    if (onPipelineList) {
+      return {
+        eligible: false,
+        reason: "Pipeline list page detected",
+        isRecruiter: false,
+        isPublicProfile: false,
+      };
+    }
+
+    const isRecruiter = isRecruiterProfile();
+    const isPublicProfile = isPublicLinkedInProfile();
+
+    return {
+      eligible: isRecruiter || isPublicProfile,
+      reason: isRecruiter
+        ? "Recruiter profile heuristics matched"
+        : isPublicProfile
+          ? "Public /in/ profile URL"
+          : "No recruiter or public profile markers",
+      isRecruiter,
+      isPublicProfile,
+    };
   };
+
+  const isEligibleForFloatingExport = () => getFloatingEligibility().eligible;
 
   const ensureFloatingStyles = () => {
     if (document.getElementById(FLOATING_STYLE_ID)) return;
@@ -1209,7 +1280,17 @@
   };
 
   const createFloatingButton = () => {
-    if (!isEligibleForFloatingExport()) {
+    const eligibility = getFloatingEligibility();
+    if (!lastEligibilitySnapshot ||
+      eligibility.eligible !== lastEligibilitySnapshot.eligible ||
+      eligibility.reason !== lastEligibilitySnapshot.reason) {
+      debugLog("BUTTON_ELIGIBILITY", eligibility);
+      lastEligibilitySnapshot = eligibility;
+    }
+
+    debugLog("BUTTON_SEARCH", "Evaluating floating button context");
+    if (!eligibility.eligible) {
+      debugLog("BUTTON_SEARCH_FAIL", eligibility.reason || "Not eligible for floating export");
       removeFloatingButton();
       return;
     }
@@ -1220,9 +1301,11 @@
       floatingRoot = document.getElementById(FLOATING_ID);
       floatingButton = floatingRoot.querySelector(".focals-fab-button");
       floatingStatus = floatingRoot.querySelector(".focals-fab-status");
+      debugLog("BUTTON_ALREADY_PRESENT", "Floating export button already present");
       return;
     }
 
+    debugLog("BUTTON_INJECT", "Attempting to inject floating export button");
     floatingRoot = document.createElement("div");
     floatingRoot.id = FLOATING_ID;
 
@@ -1244,6 +1327,7 @@
 
     floatingButton = button;
     floatingStatus = status;
+    debugLog("BUTTON_INJECT_SUCCESS", "Floating export button injected");
   };
 
   const monitorFloatingButton = () => {
@@ -1257,7 +1341,9 @@
         createFloatingButton();
       }
 
-      if (!isEligibleForFloatingExport() && floatingRoot) {
+      const eligibility = getFloatingEligibility();
+      if (!eligibility.eligible && floatingRoot) {
+        debugLog("BUTTON_SEARCH_FAIL", eligibility.reason || "Not eligible for floating export");
         removeFloatingButton();
       }
     }, 1200);
@@ -1459,8 +1545,10 @@
     await ensurePipelineProfilesLoaded(expectedTotal);
     const articles = Array.from(document.querySelectorAll("article.profile-list-item"));
     if (!articles.length) {
+      debugLog("SCRAPER_MESSAGES_FOUND", { count: 0, mode: "pipeline" });
       return { entries: [], csv: "", headers: [], count: 0 };
     }
+    debugLog("SCRAPER_MESSAGES_FOUND", { count: articles.length, mode: "pipeline" });
 
     if (scrollElement.scrollTop !== initialScrollTop) {
       await gentleScrollTo(initialScrollTop);
@@ -1529,6 +1617,7 @@
       csvLines.push(row.join(","));
     }
 
+    debugLog("SCRAPER_RESULT", { mode: "pipeline", entries: entries.length });
     return {
       entries,
       headers,
@@ -1667,25 +1756,32 @@
       sendResponse({ ok: true });
     } else if (msg?.type === "GET_CANDIDATE_DATA") {
       try {
+        debugLog("SCRAPER_START", { href: window.location.href, mode: "public_profile" });
         const data = scrapePublicProfile();
-        console.log("[Focals] Scraped data:", data);
+        debugLog("SCRAPER_RESULT", data);
         sendResponse({ data });
       } catch (e) {
-        console.error("[Focals] scrape error", e);
+        debugLog("SCRAPER_ERROR", e?.message || e);
         sendResponse({ error: e.message });
       }
     } else if (msg?.type === "GET_PIPELINE_DATA") {
       (async () => {
         try {
+          debugLog("SCRAPER_START", { href: window.location.href, mode: "pipeline" });
           const result = await scrapeRecruiterPipeline();
+          debugLog("SCRAPER_RESULT", result);
           if (!result.entries.length) {
+            debugLog("SCRAPER_SKIP", "Aucun profil de pipeline détecté sur cette page.");
             sendResponse({ error: "Aucun profil de pipeline détecté sur cette page." });
             return;
           }
-          console.log("[Focals] Pipeline export:", result.entries.length, "profils");
+          debugLog("SCRAPER_RESULT", {
+            entries: result.entries.length,
+            mode: "pipeline",
+          });
           sendResponse({ data: result });
         } catch (e) {
-          console.error("[Focals] pipeline export error", e);
+          debugLog("SCRAPER_ERROR", e?.message || e);
           sendResponse({ error: e.message });
         }
       })();
@@ -1694,11 +1790,17 @@
       const { requestId, expectedTotal } = msg || {};
       (async () => {
         try {
+          debugLog("SCRAPER_START", {
+            href: window.location.href,
+            mode: "pipeline_export",
+            expectedTotal,
+          });
           const result = await scrapeRecruiterPipeline({
             requestId,
             expectedTotal: typeof expectedTotal === "number" ? expectedTotal : 25,
           });
           if (!result.entries.length) {
+            debugLog("SCRAPER_SKIP", "Aucun profil de pipeline détecté sur cette page (export)");
             await sendRuntimeMessage({
               type: "PIPELINE_EXPORT_ERROR",
               requestId,
@@ -1706,6 +1808,10 @@
             });
             return;
           }
+          debugLog("SCRAPER_RESULT", {
+            entries: result.entries.length,
+            mode: "pipeline_export",
+          });
           await sendRuntimeMessage({
             type: "PIPELINE_EXPORT_COMPLETE",
             requestId,
@@ -1713,7 +1819,7 @@
             count: result.count,
           });
         } catch (e) {
-          console.error("[Focals] pipeline export error", e);
+          debugLog("SCRAPER_ERROR", e?.message || e);
           await sendRuntimeMessage({
             type: "PIPELINE_EXPORT_ERROR",
             requestId,
@@ -2133,12 +2239,12 @@
 // Gestionnaire pour vérification du statut
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "CHECK_CONNECTION_STATUS_ON_PAGE") {
-    console.log("[Focals] Vérification statut demandée");
+    debugLog("CONNECTION_STATUS", "Vérification statut demandée");
 
     (async () => {
       try {
         const connectionInfo = computeConnectionInfo();
-        console.log("[Focals] Connection info:", connectionInfo);
+        debugLog("CONNECTION_STATUS", connectionInfo);
 
         sendResponse({
           success: true,
@@ -2160,7 +2266,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Handler pour ENVOYER une demande de connexion LinkedIn
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === "SEND_CONNECTION_ON_PAGE") {
-    console.log("[Focals] Demande d'envoi de connexion reçue");
+    debugLog("CONNECTION_SEND", "Demande d'envoi de connexion reçue");
 
     const matchesConnectButton = (btn) => {
       const text = normalizeText(btn.innerText || btn.textContent || "").toLowerCase();
@@ -2306,10 +2412,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendButton.click();
         await wait(500);
 
-        console.log("[Focals] ✅ Invitation envoyée avec succès");
+        debugLog("CONNECTION_SEND", "Invitation envoyée avec succès");
         sendResponse({ success: true });
       } catch (error) {
-        console.error("[Focals] Erreur envoi connexion:", error);
+        debugLog("CONNECTION_SEND_ERROR", error?.message || error);
         sendResponse({ success: false, error: error.message });
       }
     })();
