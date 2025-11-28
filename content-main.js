@@ -4,9 +4,20 @@
     if (!FOCALS_DEBUG) return;
     if (typeof details === "string") {
       console.log(`[Focals][${stage}]`, details);
-    } else {
-      console.log(`[Focals][${stage}]`, details);
+      return;
     }
+
+    if (details && typeof details === "object") {
+      try {
+        console.log(`[Focals][${stage}]`, JSON.parse(JSON.stringify(details)));
+        return;
+      } catch (err) {
+        console.log(`[Focals][${stage}]`, details, "(log stringify failed)");
+        return;
+      }
+    }
+
+    console.log(`[Focals][${stage}]`, details);
   };
   const getEnvInfo = () => ({
     href: window.location.href,
@@ -1107,10 +1118,35 @@
 
   const isPublicLinkedInProfile = () => /linkedin\.com\/in\//i.test(location.href);
 
-  const isEligibleForFloatingExport = () => {
-    if (isPipelineListPage()) return false;
-    return isRecruiterProfile() || isPublicLinkedInProfile();
+  let lastEligibilitySnapshot = null;
+
+  const getFloatingEligibility = () => {
+    const onPipelineList = isPipelineListPage();
+    if (onPipelineList) {
+      return {
+        eligible: false,
+        reason: "Pipeline list page detected",
+        isRecruiter: false,
+        isPublicProfile: false,
+      };
+    }
+
+    const isRecruiter = isRecruiterProfile();
+    const isPublicProfile = isPublicLinkedInProfile();
+
+    return {
+      eligible: isRecruiter || isPublicProfile,
+      reason: isRecruiter
+        ? "Recruiter profile heuristics matched"
+        : isPublicProfile
+          ? "Public /in/ profile URL"
+          : "No recruiter or public profile markers",
+      isRecruiter,
+      isPublicProfile,
+    };
   };
+
+  const isEligibleForFloatingExport = () => getFloatingEligibility().eligible;
 
   const ensureFloatingStyles = () => {
     if (document.getElementById(FLOATING_STYLE_ID)) return;
@@ -1244,9 +1280,17 @@
   };
 
   const createFloatingButton = () => {
+    const eligibility = getFloatingEligibility();
+    if (!lastEligibilitySnapshot ||
+      eligibility.eligible !== lastEligibilitySnapshot.eligible ||
+      eligibility.reason !== lastEligibilitySnapshot.reason) {
+      debugLog("BUTTON_ELIGIBILITY", eligibility);
+      lastEligibilitySnapshot = eligibility;
+    }
+
     debugLog("BUTTON_SEARCH", "Evaluating floating button context");
-    if (!isEligibleForFloatingExport()) {
-      debugLog("BUTTON_SEARCH_FAIL", "Not eligible for floating export");
+    if (!eligibility.eligible) {
+      debugLog("BUTTON_SEARCH_FAIL", eligibility.reason || "Not eligible for floating export");
       removeFloatingButton();
       return;
     }
@@ -1297,7 +1341,9 @@
         createFloatingButton();
       }
 
-      if (!isEligibleForFloatingExport() && floatingRoot) {
+      const eligibility = getFloatingEligibility();
+      if (!eligibility.eligible && floatingRoot) {
+        debugLog("BUTTON_SEARCH_FAIL", eligibility.reason || "Not eligible for floating export");
         removeFloatingButton();
       }
     }, 1200);
