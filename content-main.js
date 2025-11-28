@@ -414,46 +414,11 @@
    * Observer pour initialiser le bouton quand on navigue vers la messagerie
    */
   const observeMessagingPage = () => {
-    // Init immédiat si déjà sur la page messagerie
-    if (window.location.href.includes("/messaging/")) {
-      setTimeout(initSuggestReplyButton, 1000);
-    }
-
-    // Observer les changements d'URL (SPA navigation)
-    let lastUrl = location.href;
-    const urlObserver = new MutationObserver(() => {
-      if (location.href !== lastUrl) {
-        lastUrl = location.href;
-        if (location.href.includes("/messaging/")) {
-          console.log("[Focals] Navigation vers messagerie détectée");
-          setTimeout(initSuggestReplyButton, 1000);
-        }
-      }
-    });
-
-    urlObserver.observe(document.body, { childList: true, subtree: true });
-
-    // Observer aussi les changements dans le DOM de la messagerie
-    const messagingObserver = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.addedNodes.length > 0) {
-          // Réinitialiser si le bouton a été recréé
-          const hasNewButton = Array.from(mutation.addedNodes).some(
-            (node) => node.querySelector && node.querySelector("[data-focals-suggest-reply]")
-          );
-          if (hasNewButton) {
-            initSuggestReplyButton();
-          }
-        }
-      }
-    });
-
-    const messagingContainer = document.querySelector(
-      ".msg-overlay-list-bubble, .messaging-container, #messaging"
+    debugLog(
+      "MESSAGING_BUTTON",
+      "Suggest reply button handled by content-messaging.js; skipping legacy observer"
     );
-    if (messagingContainer) {
-      messagingObserver.observe(messagingContainer, { childList: true, subtree: true });
-    }
+    return;
   };
 
   if (document.readyState === "loading") {
