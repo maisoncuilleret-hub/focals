@@ -36,14 +36,75 @@
       console.error(`${LOG_PREFIX} ${message}`, ...args);
     };
 
-    const extractLinkedInMessages = () => {
+    const resolveConversationRoot = (composer) => {
+      const messageSelector =
+        'div.msg-s-event-listitem[data-view-name="message-list-item"]';
+
+      const rootSelectors = [
+        "section.msg-thread",
+        ".msg-overlay-conversation-bubble",
+        "section.msg-conversation-container",
+        "div.msg-thread",
+      ];
+
+      for (const selector of rootSelectors) {
+        const root = composer.closest(selector);
+        if (root) return root;
+      }
+
+      let current = composer;
+      while (current && current !== document.documentElement) {
+        if (current.querySelector && current.querySelector(messageSelector)) {
+          return current;
+        }
+        current = current.parentElement;
+      }
+
+      warn(
+        "[CONTEXT] Unable to resolve a specific conversation root, falling back to document"
+      );
+      return document;
+    };
+
+    const resolveConversationName = (rootElement) => {
+      const nameSelectors = [
+        ".msg-overlay-bubble-header__title",
+        ".msg-thread__name",
+        ".msg-thread__link",
+        ".msg-s-message-group__name",
+        ".msg-entity-lockup__entity-title",
+      ];
+
+      for (const selector of nameSelectors) {
+        const node = rootElement.querySelector(selector);
+        const text = normalizeText(node?.textContent || "");
+        if (text) return text;
+      }
+
+      return "Unknown conversation";
+    };
+
+    const extractLinkedInMessages = (rootElement = document) => {
+      const usingDocument = rootElement === document;
+      log(
+        `[SCRAPE] Using ${usingDocument ? "document" : "scoped root"} for messages`
+      );
+
       const messageNodes = Array.from(
-        document.querySelectorAll(
+        rootElement.querySelectorAll(
           'div.msg-s-event-listitem[data-view-name="message-list-item"]'
         )
       );
 
-      log(`[SCRAPE] Found ${messageNodes.length} message items (msg-s-event-listitem)`);
+      log(
+        `[SCRAPE] Found ${messageNodes.length} message items${
+          usingDocument ? "" : " in scoped conversation root"
+        }`
+      );
+
+      if (!messageNodes.length && !usingDocument) {
+        warn("[SCRAPE] No messages found in scoped root, not falling back to document");
+      }
 
       const allMessages = [];
 
@@ -94,6 +155,7 @@
 
       if (!allMessages.length) {
         warn("[SCRAPE] No messages found after parsing");
+        return [];
       }
 
       const recentMessages = allMessages.slice(-3);
@@ -208,12 +270,19 @@
       return true;
     };
 
-    const runSuggestReplyPipeline = async () => {
+    const runSuggestReplyPipeline = async ({
+      button,
+      conversationRoot = document,
+      conversationName = "Unknown conversation",
+    } = {}) => {
       try {
         log("Suggest reply button clicked");
 
         log(`PIPELINE extract_messages: start`);
-        const messages = extractLinkedInMessages();
+        const messages = extractLinkedInMessages(conversationRoot) || [];
+        log(
+          `[Focals][MSG] PIPELINE context: { conversation: "${conversationName}", messagesInRoot: ${messages?.length || 0} }`
+        );
         log(`PIPELINE extract_messages: done, count = ${messages.length}`);
 
         if (!messages.length) {
@@ -241,7 +310,7 @@
       const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
       console.log(`[Focals][MSG] scanAndInject: editors.length = ${editors.length}`);
 
-      editors.forEach((editor) => {
+      editors.forEach((editor, index) => {
         const composer = editor.closest(".msg-form");
         if (!composer) {
           console.warn("[Focals][MSG] Unable to resolve composer for editor, skipping");
@@ -264,6 +333,9 @@
           return;
         }
 
+        const conversationRoot = resolveConversationRoot(composer);
+        const conversationName = resolveConversationName(conversationRoot);
+
         const button = document.createElement("button");
         button.className = `${BUTTON_CLASS} artdeco-button artdeco-button--1`;
         button.textContent = "Suggest reply";
@@ -271,13 +343,34 @@
         button.style.padding = "6px 10px";
         button.style.cursor = "pointer";
 
-        button.addEventListener("click", () => {
-          runSuggestReplyPipeline();
+        button.addEventListener("click", async () => {
+          const originalText = button.textContent;
+          const originalDisabled = button.disabled;
+          const originalOpacity = button.style.opacity;
+
+          button.disabled = true;
+          button.textContent = "⏳ Génération...";
+          button.style.opacity = "0.7";
+          log("[MSG][UI] Button set to loading");
+
+          try {
+            await runSuggestReplyPipeline({
+              button,
+              conversationRoot,
+              conversationName,
+            });
+          } finally {
+            button.disabled = originalDisabled;
+            button.textContent = originalText;
+            button.style.opacity = originalOpacity;
+            log("[MSG][UI] Button restored to idle");
+          }
         });
 
         rightActions.appendChild(button);
         console.log("[Focals][MSG] Suggest reply button injected", {
-          href: window.location.href,
+          conversation: conversationName,
+          editorIndex: index + 1,
         });
       });
     };
