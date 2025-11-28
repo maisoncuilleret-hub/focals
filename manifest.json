@@ -50,10 +50,11 @@
     },
     {
       "matches": [
-        "https://www.linkedin.com/messaging/*",
-        "https://linkedin.com/messaging/*"
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://*.linkedin.com/*"
       ],
-      "js": ["content-messaging.js"],
+      "js": ["content-main.js", "content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
