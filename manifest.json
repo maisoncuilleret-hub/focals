@@ -36,13 +36,26 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.lovable.app/*"],
+      "matches": [
+        "https://*.lovable.app/*"
+      ],
       "js": ["session-bridge.js"],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
-      "js": ["content-main.js", "content-messaging.js"],
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*"
+      ],
+      "js": ["content-main.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/messaging/*",
+        "https://linkedin.com/messaging/*"
+      ],
+      "js": ["content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
