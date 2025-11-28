@@ -35,14 +35,20 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.lovable.app/*"],
+      "matches": [
+        "https://*.lovable.app/*"
+      ],
       "js": ["session-bridge.js"],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://www.linkedin.com/*", "https://linkedin.com/*"],
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*"
+      ],
       "js": ["content-main.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     },
     {
       "matches": [
@@ -50,7 +56,8 @@
         "https://linkedin.com/messaging/*"
       ],
       "js": ["content-messaging.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }
