@@ -3,43 +3,69 @@
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
-  console.log("[Focals] content-messaging.js loaded (STEP 1: read-only logger)");
+  console.log("[Focals][MSG] content-messaging.js loaded on", window.location.href);
 
   try {
-    const host = window.location.hostname || "";
-    if (!host.includes("linkedin.com")) {
-      console.log("[Focals] Not on LinkedIn, messaging script does nothing");
-      return;
-    }
-
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
+    const BUTTON_CLASS = "focals-suggest-reply-button";
 
-    const logEditors = () => {
-      try {
-        const editors = document.querySelectorAll(EDITOR_SELECTOR);
-        console.log("[Focals] messaging STEP 1 - editors found:", editors.length);
-      } catch (e) {
-        console.warn("[Focals] messaging STEP 1 - error while querying editors", e);
+    const injectButtons = () => {
+      const editors = document.querySelectorAll(EDITOR_SELECTOR);
+
+      if (!editors || editors.length === 0) {
+        console.log("[Focals][MSG] No messaging editors found on this page, exiting");
+        return;
       }
-    };
 
-    const start = () => {
-      console.log("[Focals] messaging STEP 1 - init");
-      logEditors();
+      console.log(`[Focals][MSG] Editors found: ${editors.length}`);
+
+      editors.forEach((editor) => {
+        const container =
+          editor.closest(".msg-form__msg-content-container--scrollable") ||
+          editor.parentElement ||
+          editor;
+
+        if (!container) {
+          console.warn("[Focals][MSG] Unable to resolve container for editor, skipping");
+          return;
+        }
+
+        if (container.querySelector(`.${BUTTON_CLASS}`)) {
+          return;
+        }
+
+        const button = document.createElement("button");
+        button.className = BUTTON_CLASS;
+        button.textContent = "Suggest reply";
+        button.style.marginLeft = "8px";
+        button.style.padding = "6px 10px";
+        button.style.borderRadius = "4px";
+        button.style.border = "1px solid #0a66c2";
+        button.style.background = "#0a66c2";
+        button.style.color = "#fff";
+        button.style.cursor = "pointer";
+
+        button.addEventListener("click", () => {
+          try {
+            console.log("[Focals][MSG] Suggest reply button clicked");
+          } catch (error) {
+            console.error("[Focals][MSG] Error handling suggest reply click", error);
+          }
+        });
+
+        container.appendChild(button);
+        console.log("[Focals][MSG] Suggest reply button injected for one editor", {
+          href: window.location.href,
+        });
+      });
     };
 
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", start);
+      document.addEventListener("DOMContentLoaded", injectButtons);
     } else {
-      start();
+      injectButtons();
     }
-
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (msg?.type === "FORCE_SCAN_MESSAGES") {
-        sendResponse({ ok: true, step: 1 });
-      }
-    });
-  } catch (e) {
-    console.error("[Focals] messaging STEP 1 - fatal error", e);
+  } catch (error) {
+    console.error("[Focals][MSG] Fatal error in content-messaging.js", error);
   }
 })();
