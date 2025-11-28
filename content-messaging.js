@@ -1,8 +1,9 @@
 (() => {
+  // Empêche les doubles injections
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
-  console.log("[Focals] content-messaging.js loaded");
+  console.log("[Focals] content-messaging.js loaded (STEP 1: read-only logger)");
 
   const EDITOR_SELECTOR = "div.msg-form__contenteditable";
   const EDITOR_CONTAINER_SELECTOR = ".msg-form__msg-content-container--scrollable";
@@ -92,22 +93,17 @@
       return;
     }
 
-    chrome.runtime.sendMessage(
-      { type: "GENERATE_REPLY", lastMessage },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn("[Focals] Suggest reply request failed", chrome.runtime.lastError);
-          return;
-        }
+    const EDITOR_SELECTOR = "div.msg-form__contenteditable";
 
-        const reply = response?.reply || "";
-        if (!reply) {
-          console.warn("[Focals] No reply returned by the API");
-          return;
-        }
-
-        editor.innerText = reply;
-        focusEditor(editor);
+    const logEditors = () => {
+      try {
+        const editors = document.querySelectorAll(EDITOR_SELECTOR);
+        console.log(
+          "[Focals] messaging STEP 1 - editors found:",
+          editors.length
+        );
+      } catch (e) {
+        console.warn("[Focals] messaging STEP 1 - error while querying editors", e);
       }
     );
   };
@@ -225,16 +221,8 @@
     const observer = new MutationObserver(() => {
       initMessagingFeatures();
     });
-
-    if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
-    }
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startComposerWatcher);
-  } else {
-    startComposerWatcher();
+  } catch (e) {
+    console.error("[Focals] messaging STEP 1 - fatal error", e);
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
