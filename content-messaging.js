@@ -1,4 +1,5 @@
 (() => {
+  // Empêche les doubles injections
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 

@@ -16,6 +16,7 @@
   "host_permissions": [
     "https://www.linkedin.com/*",
     "https://linkedin.com/*",
+    "https://*.linkedin.com/*",
     "https://api.my-saas.com/*",
     "https://ppawceknsedxaejpeylu.supabase.co/*",
     "https://*.lovable.app/*",
