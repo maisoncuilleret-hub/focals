@@ -153,11 +153,317 @@
     debugLog("MESSAGING_OBSERVER", "Messaging observer disabled (incoming sync removed)");
   };
 
+  /**
+   * Extrait les 3 derniers messages de la conversation LinkedIn ouverte
+   * ⚠️ Sécurité LinkedIn : lit uniquement le DOM affiché, pas d'appels API LinkedIn
+   */
+  const extractLinkedInMessages = () => {
+    const messageContainers = document.querySelectorAll(
+      [
+        ".msg-s-message-list__event",
+        ".msg-s-event-listitem",
+        "[data-test-message-listitem]",
+        ".msg-s-message-group",
+      ].join(", ")
+    );
+
+    if (!messageContainers.length) {
+      console.log("[Focals] Aucun conteneur de message trouvé");
+      return [];
+    }
+
+    const allMessages = [];
+
+    messageContainers.forEach((container) => {
+      // Détecte si le message vient de moi (expéditeur)
+      const isFromMe =
+        container.classList.contains("msg-s-message-list__event--self") ||
+        container.classList.contains("msg-s-message-group--self") ||
+        !!container.querySelector('[data-test-sender="self"]') ||
+        !!container.closest(".msg-s-message-list__event--self");
+
+      // Extrait le texte du message
+      const messageTextEl = container.querySelector(
+        [
+          ".msg-s-event-listitem__body",
+          ".msg-s-message-group__content",
+          "[data-test-message-text]",
+          ".msg-s-event__content",
+        ].join(", ")
+      );
+
+      const text = getText(messageTextEl);
+
+      if (text && text.length > 0) {
+        // Timestamp optionnel
+        const timeEl = container.querySelector("time, .msg-s-message-list__time-heading");
+        const timestamp = timeEl
+          ? new Date(timeEl.getAttribute("datetime") || timeEl.innerText).getTime()
+          : Date.now();
+
+        allMessages.push({
+          text: text.trim(),
+          fromMe: isFromMe,
+          timestamp: timestamp,
+        });
+      }
+    });
+
+    // 🔒 LIMITE : Retourne uniquement les 3 derniers messages
+    // Suffisant pour le contexte, économique en tokens, plus rapide
+    const recentMessages = allMessages.slice(-3);
+
+    console.log(`[Focals] Extracted ${recentMessages.length} recent messages (total: ${allMessages.length})`);
+    return recentMessages;
+  };
+
+  const FOCALS_GENERATE_REPLY_URL =
+    "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/generate-reply";
+
+  /**
+   * Appelle l'API Focals pour générer une réponse
+   * @param {Array} messages - Les 3 derniers messages de la conversation
+   * @returns {Promise<string|null>} - La réponse générée ou null si erreur
+   */
+  const generateReplyFromAPI = async (messages) => {
+    if (!messages || messages.length === 0) {
+      console.warn("[Focals] Aucun message à envoyer pour la génération");
+      return null;
+    }
+
+    try {
+      console.log("[Focals] Appel API generate-reply avec", messages.length, "messages");
+
+      const response = await fetch(FOCALS_GENERATE_REPLY_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: messages,
+          context: {
+            language: "fr",
+            tone: "friendly",
+            role: "candidate",
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error("[Focals] API Error:", response.status, errorData);
+        return null;
+      }
+
+      const data = await response.json();
+
+      if (!data.reply) {
+        console.error("[Focals] Réponse API vide");
+        return null;
+      }
+
+      console.log("[Focals] Réponse générée avec succès");
+      return data.reply;
+    } catch (error) {
+      console.error("[Focals] Erreur réseau:", error.message);
+      return null;
+    }
+  };
+
+  /**
+   * Insère le texte généré dans le champ de message LinkedIn
+   * Compatible avec les champs contenteditable de LinkedIn
+   */
+  const insertReplyIntoMessageInput = (replyText) => {
+    const inputSelectors = [
+      ".msg-form__contenteditable",
+      "[data-test-message-input]",
+      '.msg-form__message-texteditor [contenteditable="true"]',
+      'div[role="textbox"][contenteditable="true"]',
+    ];
+
+    let inputField = null;
+    for (const selector of inputSelectors) {
+      inputField = document.querySelector(selector);
+      if (inputField) break;
+    }
+
+    if (!inputField) {
+      console.error("[Focals] Champ de saisie non trouvé");
+      // Fallback : copier dans le presse-papier
+      navigator.clipboard.writeText(replyText).then(() => {
+        console.log("[Focals] Réponse copiée dans le presse-papier");
+        alert("💡 Réponse copiée dans le presse-papier !\n\nCollez-la avec Ctrl+V");
+      });
+      return false;
+    }
+
+    // Focus sur le champ
+    inputField.focus();
+
+    // Clear le contenu existant
+    inputField.innerHTML = "";
+
+    // Insérer le texte via execCommand pour compatibilité LinkedIn
+    document.execCommand("insertText", false, replyText);
+
+    // Si execCommand ne fonctionne pas, fallback
+    if (!inputField.innerText || inputField.innerText.trim().length === 0) {
+      inputField.innerText = replyText;
+      // Déclencher les events pour que LinkedIn détecte le changement
+      inputField.dispatchEvent(new Event("input", { bubbles: true }));
+      inputField.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    // Placer le curseur à la fin
+    const range = document.createRange();
+    const sel = window.getSelection();
+    range.selectNodeContents(inputField);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    console.log("[Focals] Réponse insérée dans le champ de saisie");
+    return true;
+  };
+
+  /**
+   * Initialise le handler du bouton Suggest Reply
+   */
+  const initSuggestReplyButton = () => {
+    // Sélecteurs possibles pour le bouton (adapter selon votre implémentation)
+    const buttonSelectors = [
+      "[data-focals-suggest-reply]",
+      ".focals-suggest-reply-btn",
+      'button[title*="Suggest"]',
+      "#focals-suggest-reply",
+    ];
+
+    let button = null;
+    for (const selector of buttonSelectors) {
+      button = document.querySelector(selector);
+      if (button) break;
+    }
+
+    if (!button) {
+      console.log("[Focals] Bouton Suggest Reply non trouvé");
+      return;
+    }
+
+    // Éviter les handlers multiples
+    if (button.dataset.focalsBound === "true") return;
+    button.dataset.focalsBound = "true";
+
+    button.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const originalText = button.innerText;
+      const originalDisabled = button.disabled;
+
+      try {
+        // État loading
+        button.disabled = true;
+        button.innerText = "⏳ Génération...";
+        button.style.opacity = "0.7";
+
+        // 1. Extraire les 3 derniers messages
+        const messages = extractLinkedInMessages();
+
+        if (messages.length === 0) {
+          alert(
+            "❌ Aucun message trouvé dans la conversation.\n\nAssurez-vous d'avoir une conversation ouverte."
+          );
+          return;
+        }
+
+        // 2. Appeler l'API
+        const generatedReply = await generateReplyFromAPI(messages);
+
+        if (!generatedReply) {
+          alert("❌ Impossible de générer une réponse.\n\nVérifiez votre connexion internet.");
+          return;
+        }
+
+        // 3. Insérer la réponse
+        const inserted = insertReplyIntoMessageInput(generatedReply);
+
+        if (inserted) {
+          button.innerText = "✅ Réponse insérée";
+          setTimeout(() => {
+            button.innerText = originalText;
+          }, 2000);
+        }
+      } catch (error) {
+        console.error("[Focals] Erreur génération:", error);
+        alert("❌ Une erreur est survenue.\n\n" + error.message);
+      } finally {
+        // Restaurer l'état du bouton
+        button.disabled = originalDisabled;
+        button.style.opacity = "1";
+        setTimeout(() => {
+          button.innerText = originalText;
+        }, 2000);
+      }
+    });
+
+    console.log("[Focals] ✅ Handler Suggest Reply initialisé");
+  };
+
+  /**
+   * Observer pour initialiser le bouton quand on navigue vers la messagerie
+   */
+  const observeMessagingPage = () => {
+    // Init immédiat si déjà sur la page messagerie
+    if (window.location.href.includes("/messaging/")) {
+      setTimeout(initSuggestReplyButton, 1000);
+    }
+
+    // Observer les changements d'URL (SPA navigation)
+    let lastUrl = location.href;
+    const urlObserver = new MutationObserver(() => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        if (location.href.includes("/messaging/")) {
+          console.log("[Focals] Navigation vers messagerie détectée");
+          setTimeout(initSuggestReplyButton, 1000);
+        }
+      }
+    });
+
+    urlObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Observer aussi les changements dans le DOM de la messagerie
+    const messagingObserver = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.addedNodes.length > 0) {
+          // Réinitialiser si le bouton a été recréé
+          const hasNewButton = Array.from(mutation.addedNodes).some(
+            (node) => node.querySelector && node.querySelector("[data-focals-suggest-reply]")
+          );
+          if (hasNewButton) {
+            initSuggestReplyButton();
+          }
+        }
+      }
+    });
+
+    const messagingContainer = document.querySelector(
+      ".msg-overlay-list-bubble, .messaging-container, #messaging"
+    );
+    if (messagingContainer) {
+      messagingObserver.observe(messagingContainer, { childList: true, subtree: true });
+    }
+  };
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", startRealtimeMessagingObserver);
   } else {
     startRealtimeMessagingObserver();
   }
+
+  // Lancer l'observer de page messagerie pour le bouton Suggest Reply
+  observeMessagingPage();
   const firstNonEmpty = (...values) => {
     for (const value of values) {
       if (typeof value === "string") {
