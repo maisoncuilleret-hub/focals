@@ -19,14 +19,9 @@
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
 
-    const injectButtons = () => {
+    const scanAndInject = () => {
       const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
-      console.log("[Focals][MSG] Editors found in top frame:", editors.length);
-
-      if (editors.length === 0) {
-        console.log("[Focals][MSG] No messaging editors found on this page, exiting");
-        return;
-      }
+      console.log(`[Focals][MSG] scanAndInject: editors.length = ${editors.length}`);
 
       editors.forEach((editor) => {
         const composer = editor.closest(".msg-form");
@@ -73,10 +68,33 @@
       });
     };
 
+    const initMessagingWatcher = () => {
+      scanAndInject();
+
+      const startObserver = () => {
+        const observer = new MutationObserver(() => {
+          scanAndInject();
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+      };
+
+      if (document.body) {
+        startObserver();
+      } else {
+        document.addEventListener("DOMContentLoaded", () => {
+          scanAndInject();
+          startObserver();
+        });
+      }
+
+      setInterval(scanAndInject, 1000);
+    };
+
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", injectButtons);
+      document.addEventListener("DOMContentLoaded", initMessagingWatcher);
     } else {
-      injectButtons();
+      initMessagingWatcher();
     }
   } catch (error) {
     console.error("[Focals][MSG] Fatal error in content-messaging.js", error);
