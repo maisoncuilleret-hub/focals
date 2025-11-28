@@ -47,18 +47,8 @@
         "https://www.linkedin.com/*",
         "https://linkedin.com/*"
       ],
-      "js": ["content-main.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    },
-    {
-      "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*"
-      ],
-      "js": ["content-messaging.js"],
-      "run_at": "document_idle",
-      "all_frames": true
+      "js": ["content-main.js", "content-messaging.js"],
+      "run_at": "document_idle"
     }
   ]
 }

@@ -3,46 +3,59 @@
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
-  console.log("[Focals][MSG] content-messaging.js loaded on", window.location.href);
+  console.log(
+    "[Focals][MSG] content-messaging.js loaded on",
+    window.location.href,
+    "isTop:",
+    window === window.top
+  );
+
+  if (window !== window.top) {
+    console.log("[Focals][MSG] Not in top window, exiting messaging script");
+    return;
+  }
 
   try {
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
 
     const injectButtons = () => {
-      const editors = document.querySelectorAll(EDITOR_SELECTOR);
+      const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
+      console.log("[Focals][MSG] Editors found in top frame:", editors.length);
 
-      if (!editors || editors.length === 0) {
+      if (editors.length === 0) {
         console.log("[Focals][MSG] No messaging editors found on this page, exiting");
         return;
       }
 
-      console.log(`[Focals][MSG] Editors found: ${editors.length}`);
-
       editors.forEach((editor) => {
-        const container =
-          editor.closest(".msg-form__msg-content-container--scrollable") ||
-          editor.parentElement ||
-          editor;
-
-        if (!container) {
-          console.warn("[Focals][MSG] Unable to resolve container for editor, skipping");
+        const composer = editor.closest(".msg-form");
+        if (!composer) {
+          console.warn("[Focals][MSG] Unable to resolve composer for editor, skipping");
           return;
         }
 
-        if (container.querySelector(`.${BUTTON_CLASS}`)) {
+        const footer = composer.querySelector("footer.msg-form__footer");
+        if (!footer) {
+          console.warn("[Focals][MSG] Missing footer in composer, skipping");
+          return;
+        }
+
+        const rightActions = footer.querySelector(".msg-form__right-actions");
+        if (!rightActions) {
+          console.warn("[Focals][MSG] Missing right actions container, skipping");
+          return;
+        }
+
+        if (rightActions.querySelector(`.${BUTTON_CLASS}`)) {
           return;
         }
 
         const button = document.createElement("button");
-        button.className = BUTTON_CLASS;
+        button.className = `${BUTTON_CLASS} artdeco-button artdeco-button--1`;
         button.textContent = "Suggest reply";
         button.style.marginLeft = "8px";
         button.style.padding = "6px 10px";
-        button.style.borderRadius = "4px";
-        button.style.border = "1px solid #0a66c2";
-        button.style.background = "#0a66c2";
-        button.style.color = "#fff";
         button.style.cursor = "pointer";
 
         button.addEventListener("click", () => {
@@ -53,8 +66,8 @@
           }
         });
 
-        container.appendChild(button);
-        console.log("[Focals][MSG] Suggest reply button injected for one editor", {
+        rightActions.appendChild(button);
+        console.log("[Focals][MSG] Suggest reply button injected", {
           href: window.location.href,
         });
       });
