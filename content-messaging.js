@@ -1,5 +1,5 @@
 (() => {
-  // Empêche les doubles injections
+  // Prevent double injection
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
@@ -86,26 +86,27 @@
       return;
     }
 
-    const conversationRoot = getConversationRoot(composer);
-    const lastMessage = getLastReceivedMessage(conversationRoot);
+    const lastMessage = getLastReceivedMessage(getConversationRoot(composer));
     if (!lastMessage) {
       console.warn("[Focals] No received message found to base the suggestion on");
       return;
     }
 
-    const EDITOR_SELECTOR = "div.msg-form__contenteditable";
-
-    const logEditors = () => {
-      try {
-        const editors = document.querySelectorAll(EDITOR_SELECTOR);
-        console.log(
-          "[Focals] messaging STEP 1 - editors found:",
-          editors.length
-        );
-      } catch (e) {
-        console.warn("[Focals] messaging STEP 1 - error while querying editors", e);
+    chrome.runtime.sendMessage({ type: "GENERATE_REPLY", lastMessage }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn("[Focals] Suggest reply request failed", chrome.runtime.lastError);
+        return;
       }
-    );
+
+      const reply = response?.reply || "";
+      if (!reply) {
+        console.warn("[Focals] No reply returned by the API");
+        return;
+      }
+
+      editor.innerText = reply;
+      focusEditor(editor);
+    });
   };
 
   const injectSuggestButton = (composer) => {
@@ -120,21 +121,28 @@
       return;
     }
 
-    const container =
-      editor.closest(EDITOR_CONTAINER_SELECTOR) || editor.parentElement || composer;
-
+    const container = editor.closest(EDITOR_CONTAINER_SELECTOR) || editor.parentElement || composer;
     if (!container) {
-      console.warn("[Focals] No valid container found for suggest button");
+      console.warn("[Focals] No container found for suggest button");
       return;
+    }
+
+    if (container.querySelector(`.${SUGGEST_BUTTON_CLASS}`)) return;
+
+    const computed = window.getComputedStyle(container);
+    if (computed.position === "static") {
+      container.style.position = "relative";
     }
 
     const button = document.createElement("button");
     button.className = SUGGEST_BUTTON_CLASS;
     button.type = "button";
     button.textContent = "Suggest reply";
-    button.style.display = "inline-block";
-    button.style.marginTop = "4px";
-    button.style.marginLeft = "4px";
+
+    button.style.position = "absolute";
+    button.style.right = "8px";
+    button.style.bottom = "8px";
+    button.style.zIndex = "10";
     button.style.padding = "4px 8px";
     button.style.borderRadius = "6px";
     button.style.border = "1px solid #0a66c2";
@@ -142,17 +150,17 @@
     button.style.color = "#0a66c2";
     button.style.cursor = "pointer";
     button.style.fontSize = "12px";
+    button.style.lineHeight = "1.2";
 
     button.addEventListener("click", () => handleSuggestClick(composer));
 
     container.appendChild(button);
-    console.log("[Focals] Injected suggest button into composer container");
+    console.log("[Focals] Injected suggest button into composer");
   };
 
   const handleSendClick = (composer) => {
     setTimeout(() => {
-      const conversationRoot = getConversationRoot(composer);
-      const messages = collectMessages(conversationRoot);
+      const messages = collectMessages(getConversationRoot(composer));
       if (!messages.length) {
         console.warn("[Focals] No messages to sync after send");
         return;
@@ -183,10 +191,7 @@
     const editors = getEditors();
     editors.forEach((editor) => {
       const composer = getComposer(editor);
-      if (!composer) {
-        console.warn("[Focals] Composer not found for editor while setting send listener");
-        return;
-      }
+      if (!composer) return;
       const sendButton = findSendButton(composer);
       if (!sendButton) {
         console.warn("[Focals] Send button not found for composer");
@@ -200,13 +205,13 @@
 
   const initMessagingFeatures = () => {
     const editors = getEditors();
-    console.log(`[Focals] initMessagingFeatures found ${editors.length} editors`);
+    console.log("[Focals] initMessagingFeatures - editors found:", editors.length);
     if (!editors.length) return;
 
     editors.forEach((editor) => {
       const composer = getComposer(editor);
       if (!composer) {
-        console.warn("[Focals] Composer not found for editor during initialization");
+        console.warn("[Focals] Composer not found for editor");
         return;
       }
       injectSuggestButton(composer);
