@@ -10,12 +10,12 @@
     window === window.top
   );
 
-  if (window !== window.top) {
-    console.log("[Focals][MSG] Not in top window, exiting messaging script");
-    return;
-  }
-
   try {
+    if (window !== window.top) {
+      console.log("[Focals][MSG] Not in top window, exiting messaging script");
+      return;
+    }
+
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
 
