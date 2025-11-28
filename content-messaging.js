@@ -3,7 +3,7 @@
   if (window.__FOCALS_MESSAGING_LOADED__) return;
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
-  console.log("[Focals] content-messaging.js loaded");
+  console.log("[Focals] content-messaging.js loaded (STEP 1: read-only logger)");
 
   const EDITOR_SELECTOR = "div.msg-form__contenteditable";
   const EDITOR_CONTAINER_SELECTOR = ".msg-form__msg-content-container--scrollable";
@@ -226,16 +226,8 @@
     const observer = new MutationObserver(() => {
       initMessagingFeatures();
     });
-
-    if (document.body) {
-      observer.observe(document.body, { childList: true, subtree: true });
-    }
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startComposerWatcher);
-  } else {
-    startComposerWatcher();
+  } catch (e) {
+    console.error("[Focals] messaging STEP 1 - fatal error", e);
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
