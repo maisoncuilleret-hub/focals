@@ -22,11 +22,41 @@
     .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; font-size: 11px; margin-left: 6px; }
     .muted { font-size: 12px; color: #94a3b8; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .tab-btn { flex: 1; padding: 8px 10px; border-radius: 10px; border: 1px solid #1f2937; background: #111827; color: #e5e7eb; cursor: pointer; font-weight: 600; }
+    .tab-btn.active { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
+    .profile-card { background: #0b1220; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; display: flex; gap: 12px; align-items: center; }
+    .profile-info { flex: 1; }
+    .profile-name { font-weight: 700; font-size: 15px; color: #fff; }
+    .profile-sub { color: #cbd5e1; font-size: 13px; }
+    .profile-meta { color: #94a3b8; font-size: 12px; margin-top: 4px; }
+    .avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 1px solid #1f2937; }
+    .pill-inline { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; font-size: 11px; margin-right: 6px; }
   </style>
 </head>
 <body>
-  <h1>Focals · Paramètres</h1>
+  <h1>Focals</h1>
+  <div class="tabs">
+    <button id="tabProfile" class="tab-btn active">Profil</button>
+    <button id="tabSettings" class="tab-btn">Paramètres</button>
+  </div>
 
+  <div id="profileView" class="section" style="display:block;">
+    <h2 style="margin-top:0">Profil LinkedIn</h2>
+    <div id="profileCard" class="profile-card">
+      <div class="profile-info">
+        <div class="profile-name">Aucun profil détecté</div>
+        <div class="profile-sub muted">Ouvrez un profil LinkedIn (/in/...) puis rechargez.</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px; gap:8px; align-items:center;">
+      <button id="refreshProfile" class="secondary" style="flex:1">Rafraîchir</button>
+      <button id="associateProfile" style="flex:1">Associer</button>
+    </div>
+    <div class="muted" id="profileStatus" style="margin-top:6px;"></div>
+  </div>
+
+  <div id="settingsView" style="display:none;">
   <div class="section">
     <h2>Ton par défaut</h2>
     <label for="toneSelect">Sélectionnez le ton utilisé pour les réponses</label>
@@ -120,7 +150,8 @@
   </div>
 
   <div class="muted" id="status"></div>
+  </div>
 
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>
