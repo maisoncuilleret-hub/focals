@@ -144,6 +144,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    case "SUPABASE_SESSION": {
+      const session = message.session;
+      debugLog("BG_SUPABASE_SESSION", {
+        hasAccessToken: !!session?.access_token,
+        hasUser: !!session?.user,
+      });
+      chrome.storage.local.set({ focals_supabase_session: session }, () => {
+        debugLog("BG_SUPABASE_SESSION_STORED", true);
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
     case "FOCALS_GET_STATE": {
       Promise.all([
         syncStore.get([STORAGE_KEYS.tone, STORAGE_KEYS.templates, STORAGE_KEYS.selectedTemplate]),

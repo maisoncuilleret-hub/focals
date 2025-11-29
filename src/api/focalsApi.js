@@ -1,4 +1,5 @@
 const FOCALS_API_BASE = 'https://ppawceknsedxaejpeylu.supabase.co/functions/v1';
+const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
 
 async function callFocalsAPI(endpoint, payload) {
   const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
@@ -54,6 +55,24 @@ async function generateReply(request) {
   return callFocalsAPI('focals-generate-reply', request);
 }
 
+async function associateProfile(profile, accessToken, userId) {
+  const res = await fetch(`${FOCALS_APP_BASE}/api/associate-profile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ profile, userId }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
 export {
   bootstrapUser,
   getAllData,
@@ -63,4 +82,5 @@ export {
   upsertTemplate,
   deleteTemplate,
   generateReply,
+  associateProfile,
 };

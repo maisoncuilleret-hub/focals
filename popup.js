@@ -1,3 +1,6 @@
+import * as apiModule from "./src/api/focalsApi.js";
+import { getOrCreateUserId, getUserIdCached } from "./src/focalsUserId.js";
+
 const FOCALS_DEBUG = true;
 
 function debugLog(stage, details) {
@@ -48,9 +51,6 @@ function withStorage(area = "sync") {
 
 const syncStore = withStorage("sync");
 
-let apiModule = null;
-let userIdHelpers = null;
-
 let state = {
   userId: null,
   tone: DEFAULT_TONE,
@@ -60,6 +60,10 @@ let state = {
   selectedJob: null,
   apiKey: "",
   loading: false,
+  profile: null,
+  profileStatus: "idle",
+  activeTab: "profile",
+  supabaseSession: null,
 };
 
 let editingTemplateId = null;
@@ -77,10 +81,126 @@ function setLoading(isLoading, message = "") {
   setStatus(isLoading ? message : "");
 }
 
+function switchTab(tab) {
+  state.activeTab = tab;
+  const profileView = document.getElementById("profileView");
+  const settingsView = document.getElementById("settingsView");
+  const tabProfile = document.getElementById("tabProfile");
+  const tabSettings = document.getElementById("tabSettings");
+  if (profileView && settingsView) {
+    profileView.style.display = tab === "profile" ? "block" : "none";
+    settingsView.style.display = tab === "settings" ? "block" : "none";
+  }
+  if (tabProfile && tabSettings) {
+    tabProfile.classList.toggle("active", tab === "profile");
+    tabSettings.classList.toggle("active", tab === "settings");
+  }
+}
+
+function setupTabs() {
+  const tabProfile = document.getElementById("tabProfile");
+  const tabSettings = document.getElementById("tabSettings");
+  if (tabProfile) tabProfile.addEventListener("click", () => switchTab("profile"));
+  if (tabSettings) tabSettings.addEventListener("click", () => switchTab("settings"));
+  switchTab(state.activeTab);
+}
+
 function renderTone() {
   const select = document.getElementById("toneSelect");
   if (!select) return;
   select.value = state.tone || DEFAULT_TONE;
+}
+
+function renderProfileCard(profile) {
+  const card = document.getElementById("profileCard");
+  const status = document.getElementById("profileStatus");
+  if (status) status.textContent = "";
+  if (!card) return;
+  card.innerHTML = "";
+
+  if (state.profileStatus === "loading") {
+    const info = document.createElement("div");
+    info.className = "profile-info";
+    const title = document.createElement("div");
+    title.className = "profile-name";
+    title.textContent = "Analyse du profil en cours...";
+    const subtitle = document.createElement("div");
+    subtitle.className = "profile-sub muted";
+    subtitle.textContent = "Patientez quelques secondes pendant le chargement de LinkedIn.";
+    info.appendChild(title);
+    info.appendChild(subtitle);
+    card.appendChild(info);
+    if (status) status.textContent = "";
+    return;
+  }
+
+  if (!profile || state.profileStatus === "error") {
+    const info = document.createElement("div");
+    info.className = "profile-info";
+    const title = document.createElement("div");
+    title.className = "profile-name";
+    title.textContent = "Aucun profil détecté";
+    const subtitle = document.createElement("div");
+    subtitle.className = "profile-sub muted";
+    subtitle.textContent =
+      "La page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes.";
+    info.appendChild(title);
+    info.appendChild(subtitle);
+    card.appendChild(info);
+    if (status && state.profileStatus === "error") {
+      status.textContent =
+        "Aucun profil détecté (la page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes).";
+    }
+    return;
+  }
+
+  if (profile.photo_url) {
+    const avatar = document.createElement("img");
+    avatar.src = profile.photo_url;
+    avatar.alt = profile.name || "Profil";
+    avatar.className = "avatar";
+    card.appendChild(avatar);
+  }
+
+  const info = document.createElement("div");
+  info.className = "profile-info";
+  const title = document.createElement("div");
+  title.className = "profile-name";
+  title.textContent = profile.name || "Profil LinkedIn";
+  const subtitle = document.createElement("div");
+  subtitle.className = "profile-sub";
+  subtitle.textContent = profile.headline || profile.current_title || "";
+  const meta = document.createElement("div");
+  meta.className = "profile-meta";
+  meta.textContent = `${profile.current_company || ""} · ${profile.localisation || ""}`;
+  const linkRow = document.createElement("div");
+  linkRow.className = "profile-meta";
+  const link = document.createElement("a");
+  link.href = profile.linkedin_url || "#";
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.style.color = "#60a5fa";
+  link.textContent = "Ouvrir sur LinkedIn";
+  linkRow.appendChild(link);
+  info.appendChild(title);
+  info.appendChild(subtitle);
+  info.appendChild(meta);
+  info.appendChild(linkRow);
+  card.appendChild(info);
+
+  const chips = document.createElement("div");
+  chips.className = "profile-meta";
+  const contractChip = document.createElement("span");
+  contractChip.className = "pill-inline";
+  contractChip.textContent = profile.contract || "—";
+  chips.appendChild(contractChip);
+  if (profile.firstName) {
+    const firstChip = document.createElement("span");
+    firstChip.className = "pill-inline";
+    firstChip.textContent = profile.firstName;
+    chips.appendChild(firstChip);
+  }
+  info.appendChild(chips);
 }
 
 function renderTemplates() {
@@ -138,7 +258,7 @@ function renderTemplates() {
     deleteBtn.className = "danger";
     deleteBtn.textContent = "Supprimer";
     deleteBtn.onclick = async () => {
-      if (!state.userId || !apiModule) return;
+      if (!state.userId) return;
       try {
         setLoading(true, "Suppression du modèle...");
         await apiModule.deleteTemplate(state.userId, tpl.id);
@@ -201,7 +321,7 @@ function renderJobs() {
     selectBtn.className = "secondary";
     selectBtn.textContent = job.id === state.selectedJob ? "Par défaut" : "Définir";
     selectBtn.onclick = async () => {
-      if (!state.userId || !apiModule) return;
+      if (!state.userId) return;
       try {
         setLoading(true, "Mise à jour du job par défaut...");
         const settings = await apiModule.upsertSettings(state.userId, { default_job_id: job.id });
@@ -236,7 +356,7 @@ function renderJobs() {
     deleteBtn.className = "danger";
     deleteBtn.textContent = "Supprimer";
     deleteBtn.onclick = async () => {
-      if (!state.userId || !apiModule) return;
+      if (!state.userId) return;
       try {
         setLoading(true, "Suppression du job...");
         await apiModule.deleteJob(state.userId, job.id);
@@ -267,12 +387,12 @@ function renderJobs() {
 }
 
 async function loadState() {
-  if (!apiModule || !userIdHelpers) return;
   try {
     setLoading(true, "Chargement...");
-    const [{ getOrCreateUserId }, apiKeyValues] = await Promise.all([
-      Promise.resolve(userIdHelpers),
-      syncStore.get([STORAGE_KEYS.selectedTemplate, STORAGE_KEYS.selectedJob, STORAGE_KEYS.apiKey]),
+    const apiKeyValues = await syncStore.get([
+      STORAGE_KEYS.selectedTemplate,
+      STORAGE_KEYS.selectedJob,
+      STORAGE_KEYS.apiKey,
     ]);
     const userId = await getOrCreateUserId();
     state.userId = userId;
@@ -297,13 +417,119 @@ async function loadState() {
   }
 }
 
+async function refreshProfileFromTab() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs?.[0];
+    if (!activeTab?.id || !activeTab.url || !/linkedin\.com\/in\//i.test(activeTab.url)) {
+      state.profile = null;
+      state.profileStatus = "error";
+      renderProfileCard(null);
+      return;
+    }
+    chrome.tabs.sendMessage(
+      activeTab.id,
+      { type: "FOCALS_GET_PROFILE" },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          console.warn("[Focals][POPUP] No profile data:", chrome.runtime.lastError.message);
+          state.profile = null;
+          state.profileStatus = "error";
+        } else {
+          state.profile = response?.profile || null;
+          state.profileStatus = response?.status || (state.profile ? "ready" : "error");
+        }
+        renderProfileCard(state.profile);
+      }
+    );
+  } catch (err) {
+    console.error("[Focals][POPUP] Profil indisponible", err);
+    state.profile = null;
+    state.profileStatus = "error";
+    renderProfileCard(null);
+  }
+}
+
+async function loadSupabaseSession() {
+  try {
+    const result = await chrome.storage.local.get("focals_supabase_session");
+    state.supabaseSession = result?.focals_supabase_session || null;
+    debugLog("SUPABASE_SESSION_LOADED", {
+      hasAccessToken: !!state.supabaseSession?.access_token,
+      hasUser: !!state.supabaseSession?.user,
+    });
+  } catch (err) {
+    console.error("[Focals][POPUP] Impossible de charger la session Supabase", err);
+  }
+}
+
+async function forceRescrapeProfile() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs?.[0];
+    if (!activeTab?.id || !activeTab.url || !/linkedin\.com\/in\//i.test(activeTab.url)) {
+      state.profile = null;
+      state.profileStatus = "error";
+      renderProfileCard(null);
+      return;
+    }
+    state.profileStatus = "loading";
+    renderProfileCard(state.profile);
+    chrome.tabs.sendMessage(activeTab.id, { type: "FOCALS_FORCE_RESCRAPE" }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[Focals][POPUP] Force rescrape error:", chrome.runtime.lastError.message);
+        state.profileStatus = "error";
+        renderProfileCard(null);
+        return;
+      }
+      setTimeout(() => refreshProfileFromTab(), 200);
+    });
+  } catch (err) {
+    console.error("[Focals][POPUP] Force rescrape failed", err);
+    state.profileStatus = "error";
+    renderProfileCard(null);
+  }
+}
+
+async function handleAssociateProfile() {
+  const status = document.getElementById("profileStatus");
+  if (!state.profile) {
+    if (status) status.textContent = "Aucun profil LinkedIn détecté.";
+    return;
+  }
+  if (!state.supabaseSession?.access_token) {
+    if (status) status.textContent = "Utilisateur non authentifié — connecte-toi sur l'app web.";
+    return;
+  }
+  const userId = state.userId || (await getOrCreateUserId());
+  try {
+    if (status) status.textContent = "Association en cours...";
+    const payload = { ...state.profile, userId };
+    debugLog("PROFILE_ASSOCIATE", payload);
+    const res = await apiModule.associateProfile(payload, state.supabaseSession.access_token, userId);
+    debugLog("PROFILE_ASSOCIATE_RESPONSE", res || {});
+    if (status) status.textContent = "Profil associé avec succès ✅";
+  } catch (err) {
+    console.error(err);
+    if (status)
+      status.textContent = err?.message || "Association impossible. Connecte-toi sur l'app web.";
+  }
+}
+
+function setupProfileActions() {
+  const refreshBtn = document.getElementById("refreshProfile");
+  const associateBtn = document.getElementById("associateProfile");
+  if (refreshBtn) refreshBtn.addEventListener("click", () => forceRescrapeProfile());
+  if (associateBtn) associateBtn.addEventListener("click", () => handleAssociateProfile());
+}
+
 function setupTone() {
   const select = document.getElementById("toneSelect");
   if (!select) return;
   select.addEventListener("change", async (e) => {
     const tone = e.target.value || DEFAULT_TONE;
     state.tone = tone;
-    if (!state.userId || !apiModule) return;
+    if (!state.userId) return;
     try {
       setLoading(true, "Mise à jour du ton...");
       const settings = await apiModule.upsertSettings(state.userId, { default_tone: tone });
@@ -353,7 +579,7 @@ function setupTemplateForm() {
 
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
-      if (!state.userId || !apiModule) return;
+      if (!state.userId) return;
       const label = labelInput?.value.trim();
       const id = idInput?.value.trim();
       const language = langSelect?.value || "fr";
@@ -434,7 +660,7 @@ function setupJobForm() {
 
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
-      if (!state.userId || !apiModule) return;
+      if (!state.userId) return;
       const title = titleInput?.value.trim();
       const id = idInput?.value.trim();
       const company = companyInput?.value.trim();
@@ -491,18 +717,14 @@ function setupApiKey() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  try {
-    [apiModule, userIdHelpers] = await Promise.all([
-      import(chrome.runtime.getURL("src/api/focalsApi.js")),
-      import(chrome.runtime.getURL("src/focalsUserId.js")),
-    ]);
-  } catch (err) {
-    console.error("Impossible de charger les modules Focals", err);
-  }
   await loadState();
   setupTone();
   setupTemplateForm();
   setupJobForm();
   setupApiKey();
+  setupTabs();
+  setupProfileActions();
+  await refreshProfileFromTab();
+  await loadSupabaseSession();
   debugLog("POPUP_READY", state);
 });
