@@ -180,6 +180,50 @@
     return "unknown";
   }
 
+  let focalsApi = null;
+  let userIdHelper = null;
+  let cachedBootstrap = null;
+
+  async function loadModules() {
+    if (!focalsApi) {
+      try {
+        focalsApi = await import(chrome.runtime.getURL("src/api/focalsApi.js"));
+      } catch (err) {
+        debugLog("API_IMPORT_ERROR", err?.message || String(err));
+        throw err;
+      }
+    }
+    if (!userIdHelper) {
+      try {
+        userIdHelper = await import(chrome.runtime.getURL("src/focalsUserId.js"));
+      } catch (err) {
+        debugLog("USER_ID_IMPORT_ERROR", err?.message || String(err));
+        throw err;
+      }
+    }
+  }
+
+  async function getUserId() {
+    await loadModules();
+    if (userIdHelper?.getUserIdCached) {
+      return userIdHelper.getUserIdCached();
+    }
+    return userIdHelper?.getOrCreateUserId?.();
+  }
+
+  async function loadBootstrapData() {
+    await loadModules();
+    if (cachedBootstrap) return cachedBootstrap;
+    const userId = await getUserId();
+    try {
+      cachedBootstrap = await focalsApi.bootstrapUser(userId);
+    } catch (err) {
+      debugLog("BOOTSTRAP_ERROR", err?.message || String(err));
+      throw err;
+    }
+    return cachedBootstrap;
+  }
+
   function buildGreeting(firstNameInfo, language) {
     if (language === "en") {
       if (firstNameInfo.firstName && firstNameInfo.confidence >= 0.75) {
@@ -205,8 +249,9 @@
   }
 
   async function loadTone() {
+    const bootstrap = await loadBootstrapData();
     const values = await safeGetStorage("sync", [STORAGE_KEYS.tone]);
-    const tone = values[STORAGE_KEYS.tone] || DEFAULT_TONE;
+    const tone = bootstrap?.settings?.default_tone || values[STORAGE_KEYS.tone] || DEFAULT_TONE;
     const map = {
       very_formal: "Use a very formal and polite tone, similar to a corporate email.",
       professional: "Use a professional and polite tone.",
@@ -219,17 +264,16 @@
   }
 
   async function loadTemplatesAndJobs() {
+    const bootstrap = await loadBootstrapData();
     const values = await safeGetStorage("sync", [
-      STORAGE_KEYS.templates,
-      STORAGE_KEYS.jobs,
       STORAGE_KEYS.selectedTemplate,
       STORAGE_KEYS.selectedJob,
     ]);
     return {
-      templates: Array.isArray(values[STORAGE_KEYS.templates]) ? values[STORAGE_KEYS.templates] : [],
-      jobs: Array.isArray(values[STORAGE_KEYS.jobs]) ? values[STORAGE_KEYS.jobs] : [],
+      templates: Array.isArray(bootstrap?.templates) ? bootstrap.templates : [],
+      jobs: Array.isArray(bootstrap?.jobs) ? bootstrap.jobs : [],
       selectedTemplate: values[STORAGE_KEYS.selectedTemplate] || null,
-      selectedJob: values[STORAGE_KEYS.selectedJob] || null,
+      selectedJob: values[STORAGE_KEYS.selectedJob] || bootstrap?.settings?.default_job_id || null,
     };
   }
 
@@ -266,22 +310,6 @@
     const recent = messages.slice(-limit);
     debugLog("MESSAGES", { total: messages.length, recent: recent.length });
     return recent;
-  }
-
-  async function askBackgroundGpt(prompt, { system, temperature = 0.35, maxTokens = 500 } = {}) {
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: "FOCALS_ASK_GPT",
-        prompt,
-        system,
-        temperature,
-        maxTokens,
-      });
-      return response?.content || null;
-    } catch (err) {
-      debugLog("GPT_CALL_ERROR", err?.message || String(err));
-      return null;
-    }
   }
 
   function insertReplyIntoMessageInput(replyText) {
@@ -333,6 +361,21 @@
     }
   }
 
+  function setButtonsLoading(isLoading, label = "") {
+    const replyBtn = document.getElementById("focals-reply-btn");
+    const softBtn = document.getElementById("focals-soft-btn");
+    const strongBtn = document.getElementById("focals-strong-btn");
+    const toggleButton = (btn, baseLabel) => {
+      if (!btn) return;
+      btn.disabled = isLoading;
+      btn.textContent = isLoading && label ? label : baseLabel;
+      btn.style.opacity = isLoading ? "0.7" : "1";
+    };
+    toggleButton(replyBtn, "Suggest reply");
+    toggleButton(softBtn, "Relance douce");
+    toggleButton(strongBtn, "Relance forte");
+  }
+
   function applyTemplate(templateContent, { firstNameInfo, job }) {
     let content = templateContent || "";
     const replacements = {
@@ -367,9 +410,7 @@
     const languageFinal = language === "unknown" ? "fr" : language;
 
     const firstNameInfo = detectCandidateFirstNameFromDom();
-    const greeting = buildGreeting(firstNameInfo, languageFinal);
-
-    const { tone, instruction } = await loadTone();
+    const { tone } = await loadTone();
     const { templates, jobs } = await loadTemplatesAndJobs();
     const selectedTemplate = templates.find((t) => t.id === templateId) || null;
     const selectedJob = jobs.find((j) => j.id === jobId) || null;
@@ -378,51 +419,51 @@
       ? applyTemplate(selectedTemplate.content, { firstNameInfo, job: selectedJob })
       : null;
 
-    const jobContext = selectedJob
-      ? `Job title: ${selectedJob.title}\nCompany: ${selectedJob.company}\nLanguage: ${selectedJob.language}\n` +
-        (selectedJob.summary || selectedJob.rawDescription || "")
-      : "";
+    const messagesPayload = allMessages.map((m) => ({
+      senderType: m.fromMe ? "me" : "candidate",
+      text: m.text,
+      createdAt: new Date(m.timestamp || Date.now()).toISOString(),
+    }));
 
-    const promptParts = [
-      `${greeting}\n`,
-      "Conversation context:\n",
-      candidateMessages
-        .slice(-3)
-        .map((m, idx) => `${idx + 1}. ${m.text}`)
-        .join("\n"),
-      "\n",
-      selectedTemplate ? `Base template to adapt:\n${templateText}\n` : "",
-      jobContext ? `Job context:\n${jobContext}\n` : "",
-      "Write a concise reply for LinkedIn messaging.",
-      instruction,
-      `Language: ${languageFinal}`,
-    ].join("\n");
+    const request = {
+      userId: await getUserId(),
+      mode: "initial",
+      conversation: {
+        messages: messagesPayload,
+        candidateFirstName: firstNameInfo.firstName || null,
+        language: languageFinal,
+      },
+      toneOverride: tone,
+      jobId: selectedJob?.id || undefined,
+      templateId: selectedTemplate?.id || null,
+      templateContentOverride: templateText,
+    };
 
-    const gptReply = await askBackgroundGpt(promptParts, {
-      system: "You craft short LinkedIn replies for recruiters.",
-      temperature: 0.3,
-      maxTokens: 400,
-    });
-
-    const finalReply = gptReply || templateText;
-    if (!finalReply) {
-      alert("Impossible de générer une réponse.");
-      return;
+    try {
+      setButtonsLoading(true, "Génération...");
+      const { replyText } = await focalsApi.generateReply(request);
+      if (!replyText) {
+        alert("Impossible de générer une réponse.");
+        return;
+      }
+      insertReplyIntoMessageInput(replyText);
+    } catch (error) {
+      console.error("[Focals] generate-reply error", error);
+      alert(`Erreur Focals : ${error?.message || "Une erreur est survenue."}`);
+    } finally {
+      setButtonsLoading(false);
     }
-    insertReplyIntoMessageInput(finalReply);
   }
 
   async function generateFollowUp({ strength, templateId, jobId }) {
     const allMessages = extractLinkedInMessages(10);
-    const firstMessageFromMe = allMessages.find((m) => m.fromMe);
     const candidateMessages = allMessages.filter((m) => !m.fromMe);
     const snippet = candidateMessages.map((m) => m.text).slice(-3).join("\n");
     const language = (await detectLanguage(snippet)) || "unknown";
     const languageFinal = language === "unknown" ? "fr" : language;
     const firstNameInfo = detectCandidateFirstNameFromDom();
-    const greeting = buildGreeting(firstNameInfo, languageFinal);
 
-    const { tone, instruction } = await loadTone();
+    const { tone } = await loadTone();
     const { templates, jobs } = await loadTemplatesAndJobs();
     const selectedTemplate = templates.find((t) => t.id === templateId) || null;
     const selectedJob = jobs.find((j) => j.id === jobId) || null;
@@ -431,43 +472,40 @@
       ? applyTemplate(selectedTemplate.content, { firstNameInfo, job: selectedJob })
       : null;
 
-    const jobContext = selectedJob
-      ? `Job title: ${selectedJob.title}\nCompany: ${selectedJob.company}\nLanguage: ${selectedJob.language}\n` +
-        (selectedJob.summary || selectedJob.rawDescription || "")
-      : "";
+    const messagesPayload = allMessages.map((m) => ({
+      senderType: m.fromMe ? "me" : "candidate",
+      text: m.text,
+      createdAt: new Date(m.timestamp || Date.now()).toISOString(),
+    }));
 
-    const followUpType = strength === "strong" ? "Stronger follow up (after 1 week)" : "Soft follow up (few days)";
-    debugLog("FOLLOW_UP_CONTEXT", {
-      type: followUpType,
-      language: languageFinal,
-      tone,
-      jobId,
-      candidateName: firstNameInfo.firstName,
-    });
+    const request = {
+      userId: await getUserId(),
+      mode: strength === "strong" ? "followup_strong" : "followup_soft",
+      conversation: {
+        messages: messagesPayload,
+        candidateFirstName: firstNameInfo.firstName || null,
+        language: languageFinal,
+      },
+      toneOverride: tone,
+      jobId: selectedJob?.id || undefined,
+      templateId: selectedTemplate?.id || null,
+      templateContentOverride: templateText,
+    };
 
-    const prompt = [
-      "You are helping a recruiter write a follow up message to a candidate.",
-      `Language: ${languageFinal}`,
-      `Tone: ${instruction}`,
-      `Follow up type: ${followUpType}`,
-      greeting,
-      firstMessageFromMe ? `Initial outreach: ${firstMessageFromMe.text}` : "",
-      candidateMessages.length ? "Candidate responses:" : "",
-      buildFollowUpSummary(candidateMessages),
-      jobContext ? `Job description context:\n${jobContext}` : "",
-      selectedTemplate ? `Template base:\n${templateText}` : "",
-      "Write a concise follow up. Mention next steps and avoid repeating full previous messages.",
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    const gptReply = await askBackgroundGpt(prompt, { temperature: 0.35, maxTokens: 420 });
-    const finalReply = gptReply || templateText;
-    if (!finalReply) {
-      alert("Impossible de générer la relance.");
-      return;
+    try {
+      setButtonsLoading(true, "Génération...");
+      const { replyText } = await focalsApi.generateReply(request);
+      if (!replyText) {
+        alert("Impossible de générer la relance.");
+        return;
+      }
+      insertReplyIntoMessageInput(replyText);
+    } catch (error) {
+      console.error("[Focals] generate-followup error", error);
+      alert(`Erreur Focals : ${error?.message || "Une erreur est survenue."}`);
+    } finally {
+      setButtonsLoading(false);
     }
-    insertReplyIntoMessageInput(finalReply);
   }
 
   function buildControlPanel(state) {
@@ -524,6 +562,7 @@
     });
 
     const replyBtn = document.createElement("button");
+    replyBtn.id = "focals-reply-btn";
     replyBtn.textContent = "Suggest reply";
     replyBtn.style.width = "100%";
     replyBtn.style.padding = "10px";
@@ -541,6 +580,7 @@
     followRow.style.marginTop = "6px";
 
     const softBtn = document.createElement("button");
+    softBtn.id = "focals-soft-btn";
     softBtn.textContent = "Relance douce";
     softBtn.style.flex = "1";
     softBtn.style.background = "#3b82f6";
@@ -550,6 +590,7 @@
     softBtn.style.cursor = "pointer";
 
     const strongBtn = document.createElement("button");
+    strongBtn.id = "focals-strong-btn";
     strongBtn.textContent = "Relance forte";
     strongBtn.style.flex = "1";
     strongBtn.style.background = "#ef4444";

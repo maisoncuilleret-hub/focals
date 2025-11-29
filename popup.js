@@ -14,9 +14,6 @@ function debugLog(stage, details) {
 }
 
 const STORAGE_KEYS = {
-  tone: "focals_userTone",
-  templates: "focals_templates",
-  jobs: "focals_jobs",
   selectedTemplate: "focals_selectedTemplate",
   selectedJob: "focals_selectedJob",
   apiKey: "focals_openai_apiKey",
@@ -51,13 +48,18 @@ function withStorage(area = "sync") {
 
 const syncStore = withStorage("sync");
 
+let apiModule = null;
+let userIdHelpers = null;
+
 let state = {
+  userId: null,
   tone: DEFAULT_TONE,
   templates: [],
   jobs: [],
   selectedTemplate: null,
   selectedJob: null,
   apiKey: "",
+  loading: false,
 };
 
 let editingTemplateId = null;
@@ -68,6 +70,11 @@ function setStatus(message) {
   if (el) {
     el.textContent = message || "";
   }
+}
+
+function setLoading(isLoading, message = "") {
+  state.loading = isLoading;
+  setStatus(isLoading ? message : "");
 }
 
 function renderTone() {
@@ -131,15 +138,23 @@ function renderTemplates() {
     deleteBtn.className = "danger";
     deleteBtn.textContent = "Supprimer";
     deleteBtn.onclick = async () => {
-      const filtered = templates.filter((t) => t.id !== tpl.id);
-      state.templates = filtered;
-      if (state.selectedTemplate === tpl.id) {
-        state.selectedTemplate = null;
-        await syncStore.set({ [STORAGE_KEYS.selectedTemplate]: null });
+      if (!state.userId || !apiModule) return;
+      try {
+        setLoading(true, "Suppression du modèle...");
+        await apiModule.deleteTemplate(state.userId, tpl.id);
+        state.templates = templates.filter((t) => t.id !== tpl.id);
+        if (state.selectedTemplate === tpl.id) {
+          state.selectedTemplate = null;
+          await syncStore.set({ [STORAGE_KEYS.selectedTemplate]: null });
+        }
+        renderTemplates();
+        setStatus("Modèle supprimé");
+      } catch (err) {
+        console.error(err);
+        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+      } finally {
+        setLoading(false);
       }
-      await syncStore.set({ [STORAGE_KEYS.templates]: filtered });
-      renderTemplates();
-      setStatus("Modèle supprimé");
     };
 
     actions.appendChild(selectBtn);
@@ -171,7 +186,7 @@ function renderJobs() {
     const strong = document.createElement("strong");
     strong.textContent = `${job.title || "Job"} @ ${job.company || "—"}`;
     const meta = document.createElement("small");
-    meta.textContent = job.summary ? job.summary.slice(0, 80) : job.rawDescription?.slice(0, 80) || "";
+    meta.textContent = job.summary ? job.summary.slice(0, 80) : job.raw_description?.slice(0, 80) || "";
     const pill = document.createElement("span");
     pill.className = "pill";
     pill.textContent = job.language || "—";
@@ -186,10 +201,21 @@ function renderJobs() {
     selectBtn.className = "secondary";
     selectBtn.textContent = job.id === state.selectedJob ? "Par défaut" : "Définir";
     selectBtn.onclick = async () => {
-      await syncStore.set({ [STORAGE_KEYS.selectedJob]: job.id });
-      state.selectedJob = job.id;
-      renderJobs();
-      setStatus("Job par défaut mis à jour");
+      if (!state.userId || !apiModule) return;
+      try {
+        setLoading(true, "Mise à jour du job par défaut...");
+        const settings = await apiModule.upsertSettings(state.userId, { default_job_id: job.id });
+        state.selectedJob = settings.default_job_id;
+        state.settings = settings;
+        await syncStore.set({ [STORAGE_KEYS.selectedJob]: job.id });
+        renderJobs();
+        setStatus("Job par défaut mis à jour");
+      } catch (err) {
+        console.error(err);
+        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+      } finally {
+        setLoading(false);
+      }
     };
 
     const editBtn = document.createElement("button");
@@ -202,7 +228,7 @@ function renderJobs() {
       if (idInput) idInput.value = job.id || "";
       if (companyInput) companyInput.value = job.company || "";
       if (langSelect) langSelect.value = job.language || "fr";
-      if (descInput) descInput.value = job.rawDescription || "";
+      if (descInput) descInput.value = job.raw_description || "";
       if (summaryInput) summaryInput.value = job.summary || "";
     };
 
@@ -210,15 +236,25 @@ function renderJobs() {
     deleteBtn.className = "danger";
     deleteBtn.textContent = "Supprimer";
     deleteBtn.onclick = async () => {
-      const filtered = jobs.filter((j) => j.id !== job.id);
-      state.jobs = filtered;
-      if (state.selectedJob === job.id) {
-        state.selectedJob = null;
-        await syncStore.set({ [STORAGE_KEYS.selectedJob]: null });
+      if (!state.userId || !apiModule) return;
+      try {
+        setLoading(true, "Suppression du job...");
+        await apiModule.deleteJob(state.userId, job.id);
+        const filtered = jobs.filter((j) => j.id !== job.id);
+        state.jobs = filtered;
+        if (state.selectedJob === job.id) {
+          state.selectedJob = null;
+          await syncStore.set({ [STORAGE_KEYS.selectedJob]: null });
+          state.settings = { ...state.settings, default_job_id: null };
+        }
+        renderJobs();
+        setStatus("Job supprimé");
+      } catch (err) {
+        console.error(err);
+        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+      } finally {
+        setLoading(false);
       }
-      await syncStore.set({ [STORAGE_KEYS.jobs]: filtered });
-      renderJobs();
-      setStatus("Job supprimé");
     };
 
     actions.appendChild(selectBtn);
@@ -231,20 +267,34 @@ function renderJobs() {
 }
 
 async function loadState() {
-  const values = await syncStore.get(Object.values(STORAGE_KEYS));
-  state = {
-    tone: values[STORAGE_KEYS.tone] || DEFAULT_TONE,
-    templates: Array.isArray(values[STORAGE_KEYS.templates]) ? values[STORAGE_KEYS.templates] : [],
-    jobs: Array.isArray(values[STORAGE_KEYS.jobs]) ? values[STORAGE_KEYS.jobs] : [],
-    selectedTemplate: values[STORAGE_KEYS.selectedTemplate] || null,
-    selectedJob: values[STORAGE_KEYS.selectedJob] || null,
-    apiKey: values[STORAGE_KEYS.apiKey] || "",
-  };
-  renderTone();
-  renderTemplates();
-  renderJobs();
-  const apiInput = document.getElementById("apiKey");
-  if (apiInput) apiInput.value = state.apiKey || "";
+  if (!apiModule || !userIdHelpers) return;
+  try {
+    setLoading(true, "Chargement...");
+    const [{ getOrCreateUserId }, apiKeyValues] = await Promise.all([
+      Promise.resolve(userIdHelpers),
+      syncStore.get([STORAGE_KEYS.selectedTemplate, STORAGE_KEYS.selectedJob, STORAGE_KEYS.apiKey]),
+    ]);
+    const userId = await getOrCreateUserId();
+    state.userId = userId;
+    const data = await apiModule.bootstrapUser(userId);
+    state.tone = data.settings?.default_tone || DEFAULT_TONE;
+    state.templates = data.templates || [];
+    state.jobs = data.jobs || [];
+    state.settings = data.settings;
+    state.selectedJob = data.settings?.default_job_id || apiKeyValues[STORAGE_KEYS.selectedJob] || null;
+    state.selectedTemplate = apiKeyValues[STORAGE_KEYS.selectedTemplate] || null;
+    state.apiKey = apiKeyValues[STORAGE_KEYS.apiKey] || "";
+    renderTone();
+    renderTemplates();
+    renderJobs();
+    const apiInput = document.getElementById("apiKey");
+    if (apiInput) apiInput.value = state.apiKey || "";
+  } catch (err) {
+    console.error(err);
+    alert(`Erreur Focals : ${err?.message || "Impossible de charger les données."}`);
+  } finally {
+    setLoading(false);
+  }
 }
 
 function setupTone() {
@@ -253,8 +303,19 @@ function setupTone() {
   select.addEventListener("change", async (e) => {
     const tone = e.target.value || DEFAULT_TONE;
     state.tone = tone;
-    await syncStore.set({ [STORAGE_KEYS.tone]: tone });
-    setStatus("Ton mis à jour");
+    if (!state.userId || !apiModule) return;
+    try {
+      setLoading(true, "Mise à jour du ton...");
+      const settings = await apiModule.upsertSettings(state.userId, { default_tone: tone });
+      state.settings = settings;
+      await syncStore.set({ [STORAGE_KEYS.tone]: tone });
+      setStatus("Ton mis à jour");
+    } catch (err) {
+      console.error(err);
+      alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+    } finally {
+      setLoading(false);
+    }
   });
 }
 
@@ -292,32 +353,45 @@ function setupTemplateForm() {
 
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
+      if (!state.userId || !apiModule) return;
       const label = labelInput?.value.trim();
       const id = idInput?.value.trim();
       const language = langSelect?.value || "fr";
       const content = contentInput?.value.trim();
-      if (!label || !id || !content) {
+      if (!label || !content) {
         setStatus("Veuillez remplir tous les champs du modèle");
         return;
       }
-      const template = { id, label, language, content };
-      const templates = Array.isArray(state.templates) ? [...state.templates] : [];
-      const existingIdx = templates.findIndex((t) => t.id === (editingTemplateId || id));
-      if (existingIdx >= 0) {
-        templates[existingIdx] = template;
-      } else {
-        templates.push(template);
+      try {
+        setLoading(true, "Enregistrement du modèle...");
+        const template = await apiModule.upsertTemplate(state.userId, {
+          id: editingTemplateId || id || undefined,
+          label,
+          language,
+          content,
+        });
+        const templates = Array.isArray(state.templates) ? [...state.templates] : [];
+        const existingIdx = templates.findIndex((t) => t.id === template.id);
+        if (existingIdx >= 0) {
+          templates[existingIdx] = template;
+        } else {
+          templates.push(template);
+        }
+        state.templates = templates;
+        state.selectedTemplate = template.id;
+        await syncStore.set({
+          [STORAGE_KEYS.selectedTemplate]: template.id,
+        });
+        renderTemplates();
+        if (form) form.style.display = "none";
+        resetForm();
+        setStatus("Modèle enregistré");
+      } catch (err) {
+        console.error(err);
+        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+      } finally {
+        setLoading(false);
       }
-      state.templates = templates;
-      state.selectedTemplate = id;
-      await syncStore.set({
-        [STORAGE_KEYS.templates]: templates,
-        [STORAGE_KEYS.selectedTemplate]: id,
-      });
-      renderTemplates();
-      if (form) form.style.display = "none";
-      resetForm();
-      setStatus("Modèle enregistré");
     });
   }
 }
@@ -360,34 +434,46 @@ function setupJobForm() {
 
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
+      if (!state.userId || !apiModule) return;
       const title = titleInput?.value.trim();
       const id = idInput?.value.trim();
       const company = companyInput?.value.trim();
       const language = langSelect?.value || "fr";
       const rawDescription = descInput?.value.trim();
       const summary = summaryInput?.value.trim() || null;
-      if (!title || !id || !company || !rawDescription) {
+      if (!title || !company || !rawDescription) {
         setStatus("Veuillez remplir tous les champs obligatoires du job");
         return;
       }
-      const job = { id, title, company, language, rawDescription, summary };
-      const jobs = Array.isArray(state.jobs) ? [...state.jobs] : [];
-      const existingIdx = jobs.findIndex((j) => j.id === (editingJobId || id));
-      if (existingIdx >= 0) {
-        jobs[existingIdx] = job;
-      } else {
-        jobs.push(job);
+      try {
+        setLoading(true, "Enregistrement du job...");
+        const job = await apiModule.upsertJob(state.userId, {
+          id: editingJobId || id || undefined,
+          title,
+          company,
+          language,
+          raw_description: rawDescription,
+          summary,
+          is_default: state.selectedJob === (editingJobId || id),
+        });
+        const jobs = Array.isArray(state.jobs) ? [...state.jobs] : [];
+        const existingIdx = jobs.findIndex((j) => j.id === job.id);
+        if (existingIdx >= 0) {
+          jobs[existingIdx] = job;
+        } else {
+          jobs.push(job);
+        }
+        state.jobs = jobs;
+        renderJobs();
+        if (form) form.style.display = "none";
+        resetForm();
+        setStatus("Job enregistré");
+      } catch (err) {
+        console.error(err);
+        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
+      } finally {
+        setLoading(false);
       }
-      state.jobs = jobs;
-      state.selectedJob = id;
-      await syncStore.set({
-        [STORAGE_KEYS.jobs]: jobs,
-        [STORAGE_KEYS.selectedJob]: id,
-      });
-      renderJobs();
-      if (form) form.style.display = "none";
-      resetForm();
-      setStatus("Job enregistré");
     });
   }
 }
@@ -405,6 +491,14 @@ function setupApiKey() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  try {
+    [apiModule, userIdHelpers] = await Promise.all([
+      import(chrome.runtime.getURL("src/api/focalsApi.js")),
+      import(chrome.runtime.getURL("src/focalsUserId.js")),
+    ]);
+  } catch (err) {
+    console.error("Impossible de charger les modules Focals", err);
+  }
   await loadState();
   setupTone();
   setupTemplateForm();
