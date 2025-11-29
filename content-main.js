@@ -57,6 +57,89 @@
     selectedJob: "focals_selectedJob",
   };
 
+  const FOCALS_API_BASE = "https://ppawceknsedxaejpeylu.supabase.co/functions/v1";
+  let lastScrapedProfile = null;
+
+  async function callFocalsAPI(endpoint, payload) {
+    const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      let errorMessage = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data?.error) errorMessage = data.error;
+      } catch (err) {
+        // ignore JSON parse error
+      }
+      debugLog("API_ERROR", { endpoint, errorMessage });
+      throw new Error(errorMessage);
+    }
+
+    return res.json();
+  }
+
+  async function bootstrapUser(userId) {
+    return callFocalsAPI("focals-bootstrap-user", { userId });
+  }
+
+  async function getAllData(userId) {
+    return callFocalsAPI("focals-get-data", { userId });
+  }
+
+  async function upsertSettings(userId, partial) {
+    return callFocalsAPI("focals-upsert-settings", { userId, ...partial });
+  }
+
+  async function upsertJob(userId, jobInput) {
+    return callFocalsAPI("focals-upsert-job", { userId, job: jobInput });
+  }
+
+  async function deleteJob(userId, jobId) {
+    return callFocalsAPI("focals-delete-job", { userId, jobId });
+  }
+
+  async function upsertTemplate(userId, templateInput) {
+    return callFocalsAPI("focals-upsert-template", { userId, template: templateInput });
+  }
+
+  async function deleteTemplate(userId, templateId) {
+    return callFocalsAPI("focals-delete-template", { userId, templateId });
+  }
+
+  async function generateReplyApi(request) {
+    return callFocalsAPI("focals-generate-reply", request);
+  }
+
+  const USER_ID_STORAGE_KEY = "focals_user_id";
+  let cachedUserId = null;
+
+  async function getOrCreateUserId() {
+    if (cachedUserId) return cachedUserId;
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.get([USER_ID_STORAGE_KEY], (result) => {
+          const existing = result?.[USER_ID_STORAGE_KEY];
+          if (existing && typeof existing === "string") {
+            cachedUserId = existing;
+            resolve(existing);
+            return;
+          }
+          const newId = crypto.randomUUID();
+          chrome.storage.local.set({ [USER_ID_STORAGE_KEY]: newId }, () => {
+            cachedUserId = newId;
+            resolve(newId);
+          });
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
   const DEFAULT_TONE = "professional";
   const LANGUAGE_MARKERS = {
     fr: ["je", "vous", "merci", "bien", "bonjour", "j'", "n'", "est", "suis"],
@@ -219,6 +302,15 @@
     return "unknown";
   }
 
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type === "FOCALS_GET_PROFILE") {
+      debugLog("MSG_GET_PROFILE", { hasProfile: !!lastScrapedProfile });
+      sendResponse({ profile: lastScrapedProfile });
+      return true;
+    }
+    return false;
+  });
+
   function parseCompanyAndContract(rawText = "") {
     const normalized = normalizeText(rawText);
     if (!normalized) return { company: "", contract: "" };
@@ -364,47 +456,22 @@
       photo_url: photo_url || "",
     };
 
+    lastScrapedProfile = profile;
     debugLog("PROFILE_SCRAPED", profile);
     return profile;
   }
 
-  let focalsApi = null;
-  let userIdHelper = null;
   let cachedBootstrap = null;
 
-  async function loadModules() {
-    if (!focalsApi) {
-      try {
-        focalsApi = await import(chrome.runtime.getURL("src/api/focalsApi.js"));
-      } catch (err) {
-        debugLog("API_IMPORT_ERROR", err?.message || String(err));
-        throw err;
-      }
-    }
-    if (!userIdHelper) {
-      try {
-        userIdHelper = await import(chrome.runtime.getURL("src/focalsUserId.js"));
-      } catch (err) {
-        debugLog("USER_ID_IMPORT_ERROR", err?.message || String(err));
-        throw err;
-      }
-    }
-  }
-
   async function getUserId() {
-    await loadModules();
-    if (userIdHelper?.getUserIdCached) {
-      return userIdHelper.getUserIdCached();
-    }
-    return userIdHelper?.getOrCreateUserId?.();
+    return getOrCreateUserId();
   }
 
   async function loadBootstrapData() {
-    await loadModules();
     if (cachedBootstrap) return cachedBootstrap;
     const userId = await getUserId();
     try {
-      cachedBootstrap = await focalsApi.bootstrapUser(userId);
+      cachedBootstrap = await bootstrapUser(userId);
     } catch (err) {
       debugLog("BOOTSTRAP_ERROR", err?.message || String(err));
       throw err;
@@ -549,174 +616,6 @@
     }
   }
 
-  const PROFILE_PANEL_ID = "focals-profile-panel";
-
-  function renderProfilePanel(profile) {
-    let container = document.getElementById(PROFILE_PANEL_ID);
-    if (!container) {
-      container = document.createElement("div");
-      container.id = PROFILE_PANEL_ID;
-      container.style.position = "fixed";
-      container.style.top = "16px";
-      container.style.right = "16px";
-      container.style.zIndex = "2147483647";
-      container.style.width = "320px";
-      container.style.background = "rgba(15,23,42,0.96)";
-      container.style.color = "#e2e8f0";
-      container.style.padding = "14px";
-      container.style.borderRadius = "14px";
-      container.style.boxShadow = "0 20px 40px rgba(0,0,0,0.35)";
-      container.style.fontFamily = "Inter, system-ui, sans-serif";
-      container.style.border = "1px solid #1e293b";
-      document.body.appendChild(container);
-    }
-
-    container.innerHTML = "";
-
-    const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.gap = "10px";
-    header.style.marginBottom = "10px";
-
-    if (profile.photo_url) {
-      const avatar = document.createElement("img");
-      avatar.src = profile.photo_url;
-      avatar.alt = profile.name || "Photo";
-      avatar.style.width = "48px";
-      avatar.style.height = "48px";
-      avatar.style.borderRadius = "50%";
-      avatar.style.objectFit = "cover";
-      avatar.style.border = "1px solid #334155";
-      header.appendChild(avatar);
-    }
-
-    const headerInfo = document.createElement("div");
-    const title = document.createElement("div");
-    title.textContent = profile.name || "Profil LinkedIn";
-    title.style.fontWeight = "700";
-    title.style.fontSize = "15px";
-    headerInfo.appendChild(title);
-
-    const subtitle = document.createElement("div");
-    subtitle.textContent = profile.headline || profile.current_title || "";
-    subtitle.style.fontSize = "13px";
-    subtitle.style.color = "#cbd5e1";
-    headerInfo.appendChild(subtitle);
-
-    header.appendChild(headerInfo);
-    container.appendChild(header);
-
-    const makeRow = (label, value) => {
-      const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.justifyContent = "space-between";
-      row.style.gap = "8px";
-      row.style.fontSize = "12px";
-      row.style.marginBottom = "6px";
-
-      const key = document.createElement("div");
-      key.textContent = label;
-      key.style.color = "#94a3b8";
-
-      const val = document.createElement("div");
-      val.textContent = value || "—";
-      val.style.fontWeight = "600";
-      val.style.color = "#e2e8f0";
-      val.style.textAlign = "right";
-
-      row.appendChild(key);
-      row.appendChild(val);
-      return row;
-    };
-
-    container.appendChild(makeRow("Poste", profile.current_title));
-    container.appendChild(makeRow("Société", profile.current_company));
-    container.appendChild(makeRow("Lieu", profile.localisation));
-    container.appendChild(makeRow("Contrat", profile.contract));
-
-    const link = document.createElement("a");
-    link.href = profile.linkedin_url || "#";
-    link.textContent = "Voir le profil";
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.style.color = "#60a5fa";
-    link.style.fontSize = "12px";
-    link.style.display = "inline-block";
-    link.style.marginTop = "4px";
-    container.appendChild(link);
-
-    const status = document.createElement("div");
-    status.id = `${PROFILE_PANEL_ID}-status`;
-    status.style.fontSize = "12px";
-    status.style.color = "#cbd5e1";
-    status.style.marginTop = "8px";
-    container.appendChild(status);
-
-    const actions = document.createElement("div");
-    actions.style.display = "flex";
-    actions.style.gap = "8px";
-    actions.style.marginTop = "10px";
-
-    const refreshBtn = document.createElement("button");
-    refreshBtn.textContent = "Rafraîchir";
-    refreshBtn.style.flex = "1";
-    refreshBtn.style.padding = "10px";
-    refreshBtn.style.border = "1px solid #334155";
-    refreshBtn.style.background = "#0f172a";
-    refreshBtn.style.color = "#e2e8f0";
-    refreshBtn.style.borderRadius = "10px";
-    refreshBtn.style.cursor = "pointer";
-    refreshBtn.onclick = () => {
-      const fresh = scrapeProfileFromDom();
-      debugLog("PROFILE_SCRAPED", fresh);
-      renderProfilePanel(fresh);
-      const statusNode = document.getElementById(`${PROFILE_PANEL_ID}-status`);
-      if (statusNode) statusNode.textContent = "Profil mis à jour depuis la page.";
-    };
-
-    const associateBtn = document.createElement("button");
-    associateBtn.textContent = "Associer";
-    associateBtn.style.flex = "1";
-    associateBtn.style.padding = "10px";
-    associateBtn.style.border = "none";
-    associateBtn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
-    associateBtn.style.color = "#0f172a";
-    associateBtn.style.fontWeight = "700";
-    associateBtn.style.borderRadius = "10px";
-    associateBtn.style.cursor = "pointer";
-    associateBtn.onclick = () => handleAssociate(profile);
-
-    actions.appendChild(refreshBtn);
-    actions.appendChild(associateBtn);
-    container.appendChild(actions);
-  }
-
-  async function handleAssociate(profile) {
-    if (!profile) return;
-    const statusNode = document.getElementById(`${PROFILE_PANEL_ID}-status`);
-    if (statusNode) statusNode.textContent = "Association en cours…";
-
-    try {
-      const userId = await getUserId().catch(() => null);
-      const payload = { ...profile, userId };
-      debugLog("PROFILE_ASSOCIATE", payload);
-      const response = await chrome.runtime.sendMessage({
-        type: "SAVE_PROFILE_TO_SUPABASE",
-        profile: payload,
-      });
-
-      if (response?.error) {
-        throw new Error(response.error);
-      }
-
-      if (statusNode) statusNode.textContent = "Profil associé sur Supabase ✅";
-    } catch (err) {
-      if (statusNode) statusNode.textContent = err?.message || "Association impossible";
-      debugLog("PROFILE_ASSOCIATE_ERROR", err?.message || String(err));
-    }
-  }
-
   function setButtonsLoading(isLoading, label = "") {
     const replyBtn = document.getElementById("focals-reply-btn");
     const softBtn = document.getElementById("focals-soft-btn");
@@ -797,7 +696,7 @@
 
     try {
       setButtonsLoading(true, "Génération...");
-      const { replyText } = await focalsApi.generateReply(request);
+      const { replyText } = await generateReplyApi(request);
       if (!replyText) {
         alert("Impossible de générer une réponse.");
         return;
@@ -850,7 +749,7 @@
 
     try {
       setButtonsLoading(true, "Génération...");
-      const { replyText } = await focalsApi.generateReply(request);
+      const { replyText } = await generateReplyApi(request);
       if (!replyText) {
         alert("Impossible de générer la relance.");
         return;
@@ -1017,8 +916,7 @@
 
   async function initProfileFlow() {
     debugLog("MODE", "profile");
-    const profile = scrapeProfileFromDom();
-    renderProfilePanel(profile);
+    lastScrapedProfile = scrapeProfileFromDom();
   }
 
   async function init() {
