@@ -1420,8 +1420,9 @@
     style.textContent = `
       #${FLOATING_ID} {
         position: fixed;
-        bottom: 18px;
+        top: 50%;
         right: 18px;
+        transform: translateY(-50%);
         z-index: 2147483647;
         display: flex;
         flex-direction: column;
