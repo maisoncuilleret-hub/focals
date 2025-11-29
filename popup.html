@@ -2,110 +2,124 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <title>Focals · Profil LinkedIn</title>
+  <title>Focals · Réglages</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto; margin:0; padding:16px; color:#fff; background:#111;}
-    .row{display:flex; gap:12px; align-items:center;}
-    .avatar{width:64px; height:64px; border-radius:12px; background:#333; object-fit:cover}
-    h1{font-size:18px; margin:0 0 4px 0}
-    .sub{opacity:.8; margin:0 0 8px 0}
-    .badge{display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; background:#2a2a2a}
-    .badge--ok{background:#0a7f3f}
-    .badge--warn{background:#b33}
-    .field{margin-top:12px}
-    .label{opacity:.8; font-size:12px}
-    .value{white-space:pre-wrap}
-    .actions{display:flex; gap:12px; margin-top:16px}
-    button{border:0; background:#2463eb; color:#fff; padding:10px 14px; border-radius:10px; cursor:pointer}
-    button.secondary{background:#2a2a2a}
-    button:disabled{opacity:.5; cursor:not-allowed}
-    .error{margin-top:12px; color:#ff7474}
-    .mode{opacity:.6; font-size:12px; margin-top:8px}
-    .progress{margin-top:16px; height:8px; background:#2a2a2a; border-radius:999px; overflow:hidden; display:none}
-    .progress--active{display:block}
-    .progress__bar{height:100%; width:0%; background:#2463eb; transition:width .25s ease}
-    .progress__label{margin-top:6px; font-size:12px; opacity:.7; display:none}
-    .progress__label--active{display:block}
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 16px; color: #e5e7eb; background: #0f172a; min-width: 360px; }
+    h1 { font-size: 18px; margin: 0 0 12px 0; }
+    h2 { font-size: 16px; margin: 20px 0 8px 0; }
+    label { display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 4px; }
+    select, input, textarea { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #1f2937; background: #111827; color: #f8fafc; box-sizing: border-box; }
+    textarea { resize: vertical; min-height: 80px; }
+    button { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 12px; cursor: pointer; font-weight: 600; }
+    button.secondary { background: #1f2937; color: #e5e7eb; }
+    button.danger { background: #b91c1c; }
+    .section { background: #0b1220; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .list-item { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 8px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .list-item strong { display: block; color: #fff; }
+    .list-item small { color: #cbd5e1; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #1f2937; color: #cbd5e1; font-size: 11px; margin-left: 6px; }
+    .muted { font-size: 12px; color: #94a3b8; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   </style>
 </head>
 <body>
-  <div class="row">
-    <img id="ph" class="avatar" />
-    <div>
-      <h1 id="nm">—</h1>
-      <p class="sub" id="hd">—</p>
-      <span id="st" class="badge">Inconnu</span>
+  <h1>Focals · Paramètres</h1>
+
+  <div class="section">
+    <h2>Ton par défaut</h2>
+    <label for="toneSelect">Sélectionnez le ton utilisé pour les réponses</label>
+    <select id="toneSelect">
+      <option value="very_formal">Très formel</option>
+      <option value="professional">Professionnel</option>
+      <option value="warm">Chaleureux</option>
+      <option value="direct">Direct</option>
+    </select>
+  </div>
+
+  <div class="section">
+    <div class="row" style="justify-content: space-between; align-items: center;">
+      <h2 style="margin:0">Modèles</h2>
+      <button id="addTemplate" class="secondary">Nouveau modèle</button>
+    </div>
+    <div id="templatesList" class="list"></div>
+    <div id="templateForm" style="margin-top: 12px; display: none;">
+      <label for="templateLabel">Nom du modèle</label>
+      <input id="templateLabel" type="text" placeholder="Ex: Relance chaleureuse" />
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label for="templateLanguage">Langue</label>
+          <select id="templateLanguage">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <div>
+          <label for="templateId">Identifiant</label>
+          <input id="templateId" type="text" placeholder="relance_warm" />
+        </div>
+      </div>
+      <label for="templateContent" style="margin-top:8px;">Contenu (placeholders: {firstName}, {company}, {role})</label>
+      <textarea id="templateContent"></textarea>
+      <div class="row" style="justify-content:flex-end; margin-top:8px;">
+        <button id="cancelTemplate" class="secondary">Annuler</button>
+        <button id="saveTemplate">Enregistrer</button>
+      </div>
     </div>
   </div>
 
-  <div class="field"><div class="label">Société</div><div id="co" class="value">—</div></div>
-  <div class="field"><div class="label">Contrat</div><div id="ct" class="value">—</div></div>
-  <div class="field"><div class="label">Connexion</div><div id="cx" class="value">—</div></div>
-  <div class="field"><div class="label">Premium</div><div id="pr" class="value">—</div></div>
-  <div class="field"><div class="label">Localisation</div><div id="lc" class="value">—</div></div>
-  <div class="field"><div class="label">LinkedIn URL</div><div id="lnk" class="value">—</div></div>
-
-  <div class="actions">
-    <button id="go">Récupérer les infos</button>
-    <button id="copy" class="secondary">Copier JSON</button>
-    <button id="fromIn" class="secondary">Récup via URL /in/</button>
-    <button id="saveSupabase" class="secondary">Envoyer vers Supabase</button>
-    <button id="retry" class="secondary">Re-tester</button>
-    <button id="exportPipeline" class="secondary">Exporter pipeline CSV</button>
+  <div class="section">
+    <div class="row" style="justify-content: space-between; align-items: center;">
+      <h2 style="margin:0">Offres / Jobs</h2>
+      <button id="addJob" class="secondary">Ajouter un job</button>
+    </div>
+    <div id="jobsList" class="list"></div>
+    <div id="jobForm" style="margin-top: 12px; display: none;">
+      <div class="grid">
+        <div>
+          <label for="jobTitle">Titre</label>
+          <input id="jobTitle" type="text" placeholder="Product Manager" />
+        </div>
+        <div>
+          <label for="jobCompany">Entreprise</label>
+          <input id="jobCompany" type="text" placeholder="Focals" />
+        </div>
+      </div>
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label for="jobLanguage">Langue</label>
+          <select id="jobLanguage">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <div>
+          <label for="jobId">Identifiant</label>
+          <input id="jobId" type="text" placeholder="pm_focals" />
+        </div>
+      </div>
+      <label for="jobDescription" style="margin-top:8px;">Description (brève)</label>
+      <textarea id="jobDescription"></textarea>
+      <label for="jobSummary" style="margin-top:8px;">Résumé (optionnel)</label>
+      <textarea id="jobSummary"></textarea>
+      <div class="row" style="justify-content:flex-end; margin-top:8px;">
+        <button id="cancelJob" class="secondary">Annuler</button>
+        <button id="saveJob">Enregistrer</button>
+      </div>
+    </div>
   </div>
 
-  <h2>Réglages de réponse</h2>
-  <div class="field">
-    <div class="label">Ton</div>
-    <select id="toneSelect">
-      <option value="friendly">Amical</option>
-      <option value="formal">Formel</option>
-      <option value="concise">Concis</option>
-      <option value="enthusiastic">Enthousiaste</option>
-    </select>
+  <div class="section">
+    <h2>Clé OpenAI</h2>
+    <p class="muted">Stockée uniquement en local via chrome.storage.sync</p>
+    <input id="apiKey" type="password" placeholder="sk-..." />
+    <div class="row" style="justify-content:flex-end; margin-top:8px;">
+      <button id="saveApiKey">Enregistrer la clé</button>
+    </div>
   </div>
 
-  <div class="field">
-    <div class="label">Langue par défaut</div>
-    <select id="languageSelect">
-      <option value="en">English</option>
-      <option value="fr">Français</option>
-    </select>
-  </div>
-
-  <div class="field">
-    <div class="label">Style de relance</div>
-    <select id="followUpSelect">
-      <option value="next_steps">Proposer une prochaine étape</option>
-      <option value="soft">Relance douce</option>
-      <option value="direct">Relance directe</option>
-    </select>
-  </div>
-
-  <div class="field">
-    <div class="label">Modèles disponibles</div>
-    <select id="activeTemplate"></select>
-    <div id="templates"></div>
-    <textarea id="templateContent" placeholder="Contenu du modèle" rows="3"></textarea>
-    <input id="templateTitle" type="text" placeholder="Titre du modèle" />
-    <button id="saveTemplate" class="secondary">Ajouter / Mettre à jour le modèle</button>
-  </div>
-
-  <div class="field">
-    <div class="label">Fiches de poste</div>
-    <select id="activeJob"></select>
-    <div id="jobs"></div>
-    <input id="jobTitle" type="text" placeholder="Titre du poste" />
-    <textarea id="jobDescription" placeholder="Description du poste" rows="3"></textarea>
-    <input id="jobKeywords" type="text" placeholder="Mots-clés (séparés par des virgules)" />
-    <button id="saveJob" class="secondary">Ajouter / Mettre à jour le poste</button>
-  </div>
-
-  <div id="pipelineProgress" class="progress"><div id="pipelineProgressBar" class="progress__bar"></div></div>
-  <div id="pipelineProgressLabel" class="progress__label"></div>
-
-  <div id="err" class="error"></div>
-  <div id="mode" class="mode"></div>
+  <div class="muted" id="status"></div>
 
   <script src="popup.js"></script>
 </body>
