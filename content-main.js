@@ -67,6 +67,45 @@
     return (text || "").replace(/\s+/g, " ").trim();
   }
 
+  const q = (selector) => document.querySelector(selector);
+  const getText = (el) => (el ? el.innerText.trim() : "");
+  const getAttr = (el, attr) => (el ? el.getAttribute(attr) : "");
+  const pickText = (...selectors) => {
+    for (const selector of selectors) {
+      const value = getText(q(selector));
+      if (value) return value;
+    }
+    return "";
+  };
+  const pickAttr = (selectors, attr) => {
+    const list = Array.isArray(selectors) ? selectors : [selectors];
+    for (const selector of list) {
+      const el = q(selector);
+      if (el) {
+        const value = el.getAttribute(attr);
+        if (value) return value.trim();
+      }
+    }
+    return "";
+  };
+  const pickTextFrom = (root, selectors) => {
+    if (!root) return "";
+    const list = Array.isArray(selectors) ? selectors : [selectors];
+    for (const selector of list) {
+      const el = root.querySelector(selector);
+      if (el) {
+        const text = getText(el);
+        if (text) return text;
+      }
+    }
+    return "";
+  };
+  const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
+  const firstNonEmpty = (...values) => values.find((v) => normalizeText(v)) || "";
+
+  const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
+  const isProfilePage = () => /linkedin\.com\/in\//i.test(window.location.href);
+
   function cleanNameText(text) {
     if (!text) return "";
     const collapsed = text.replace(/\s+/g, " ");
@@ -178,6 +217,155 @@
     debugLog("LANG_DETECTION", { snippet, heuristic, result: gptResult });
     if (gptResult === "fr" || gptResult === "en") return gptResult;
     return "unknown";
+  }
+
+  function parseCompanyAndContract(rawText = "") {
+    const normalized = normalizeText(rawText);
+    if (!normalized) return { company: "", contract: "" };
+    const contractMatch = normalized.match(/(freelance|cdi|cdd|internship|stage|contract|apprentissage|alternance)/i);
+    const contract = contractMatch ? contractMatch[1] : "";
+    const withoutContract = normalized.replace(contractMatch ? contractMatch[0] : "", "").trim();
+    return { company: withoutContract || normalized, contract: contract || "" };
+  }
+
+  function inferCurrentRole(headline = "", fallback = "") {
+    const parts = normalizeText(headline).split("·");
+    if (parts.length) {
+      return parts[0] || fallback;
+    }
+    return fallback || headline;
+  }
+
+  function scrapeProfileFromDom() {
+    const rawName =
+      pickText(
+        ".pv-text-details__left-panel h1",
+        "div[data-view-name='profile-card'] h1",
+        "main section h1.inline.t-24.v-align-middle.break-words",
+        "h1.inline.t-24.v-align-middle.break-words",
+        "a[href*='/overlay/about-this-profile/'] h1",
+        ".text-heading-xlarge",
+        "h1"
+      ) ||
+      pickAttr(
+        [
+          "a[href*='/overlay/about-this-profile/']",
+          "a[href*='overlay/about-this-profile']",
+          "a[href*='/overlay/contact-info/']",
+        ],
+        "aria-label"
+      ) ||
+      "";
+
+    const name = normalizeText(rawName) || "—";
+    const [firstName, ...restName] = name.split(/\s+/);
+    const lastName = normalizeText(restName.join(" "));
+
+    const headline =
+      pickText(
+        ".pv-text-details__left-panel .text-body-medium.break-words",
+        ".text-body-medium.break-words",
+        "div[data-view-name='profile-card'] .text-body-medium",
+        ".display-flex.full-width .hoverable-link-text span[aria-hidden='true']",
+        ".display-flex.full-width .hoverable-link-text"
+      ) || "";
+
+    const localisation =
+      getText(q(".pv-text-details__left-panel .text-body-small.inline.t-black--light.break-words")) ||
+      getText(q(".text-body-small.inline.t-black--light.break-words")) ||
+      getText(q("div[data-view-name='profile-card'] .text-body-small")) ||
+      "";
+
+    const photo_url =
+      getAttr(q(".pv-top-card-profile-picture__image"), "src") ||
+      getAttr(q("img.pv-top-card-profile-picture__image--show"), "src") ||
+      getAttr(q('meta[property="og:image"]'), "content") ||
+      "";
+
+    const topCardCompanyRaw =
+      pickText(
+        ".pv-text-details__left-panel .inline.t-16.t-black.t-normal span[aria-hidden='true']",
+        ".pv-text-details__left-panel .inline.t-16.t-black.t-normal",
+        ".display-flex.full-width .t-14.t-normal span[aria-hidden='true']",
+        ".display-flex.full-width .t-14.t-normal",
+        "div[data-view-name='profile-card'] .t-14.t-normal span[aria-hidden='true']",
+        "div[data-view-name='profile-card'] .t-14.t-normal"
+      ) ||
+      pickAttr(
+        [
+          "div[data-view-name='profile-card'] a[href*='/company/']",
+          "div[data-view-name='profile-card'] a[href*='/school/']",
+          ".pv-text-details__left-panel a[href*='/company/']",
+        ],
+        "aria-label"
+      );
+
+    const topCardCompany = parseCompanyAndContract(topCardCompanyRaw);
+    let current_company = topCardCompany.company;
+    let contract = topCardCompany.contract;
+    let current_title = headline || "";
+
+    const experienceSection = (() => {
+      const anchor = q("#experience");
+      if (anchor) {
+        const section = anchor.closest("section");
+        if (section) return section;
+      }
+      const cards = Array.from(document.querySelectorAll("section.artdeco-card"));
+      for (const card of cards) {
+        const heading = pickTextFrom(card, ["h2 span[aria-hidden='true']", "h2"]);
+        if (heading && /expérience/i.test(heading)) {
+          return card;
+        }
+      }
+      return null;
+    })();
+
+    if (experienceSection) {
+      const listItems = Array.from(experienceSection.querySelectorAll("ul li"));
+      let firstEntity = null;
+      for (const item of listItems) {
+        const entity = item.querySelector("[data-view-name='profile-component-entity']");
+        if (entity) {
+          firstEntity = entity;
+          break;
+        }
+      }
+      if (!firstEntity) {
+        firstEntity = experienceSection.querySelector("[data-view-name='profile-component-entity']");
+      }
+
+      if (firstEntity) {
+        const roleText = pickTextFrom(firstEntity, [".t-bold span[aria-hidden='true']", ".t-bold"]);
+        const companyText = pickTextFrom(firstEntity, [".t-14.t-normal span[aria-hidden='true']", ".t-14.t-normal"]);
+        if (roleText) current_title = normalizeText(roleText);
+        if (companyText) {
+          const parsed = parseCompanyAndContract(companyText);
+          current_company = parsed.company || current_company;
+          contract = parsed.contract || contract;
+        }
+      }
+    }
+
+    if (!current_title) {
+      current_title = inferCurrentRole(headline, "");
+    }
+
+    const profile = {
+      name: name || "—",
+      firstName: normalizeText(firstName),
+      lastName: lastName || "",
+      headline: normalizeText(headline),
+      current_title: normalizeText(current_title) || "—",
+      current_company: normalizeText(current_company) || "—",
+      contract: normalizeText(contract) || "—",
+      localisation: normalizeText(localisation) || "—",
+      linkedin_url: location.href,
+      photo_url: photo_url || "",
+    };
+
+    debugLog("PROFILE_SCRAPED", profile);
+    return profile;
   }
 
   let focalsApi = null;
@@ -358,6 +546,174 @@
     } catch (err) {
       debugLog("INPUT_ERROR", err?.message || String(err));
       return false;
+    }
+  }
+
+  const PROFILE_PANEL_ID = "focals-profile-panel";
+
+  function renderProfilePanel(profile) {
+    let container = document.getElementById(PROFILE_PANEL_ID);
+    if (!container) {
+      container = document.createElement("div");
+      container.id = PROFILE_PANEL_ID;
+      container.style.position = "fixed";
+      container.style.top = "16px";
+      container.style.right = "16px";
+      container.style.zIndex = "2147483647";
+      container.style.width = "320px";
+      container.style.background = "rgba(15,23,42,0.96)";
+      container.style.color = "#e2e8f0";
+      container.style.padding = "14px";
+      container.style.borderRadius = "14px";
+      container.style.boxShadow = "0 20px 40px rgba(0,0,0,0.35)";
+      container.style.fontFamily = "Inter, system-ui, sans-serif";
+      container.style.border = "1px solid #1e293b";
+      document.body.appendChild(container);
+    }
+
+    container.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.gap = "10px";
+    header.style.marginBottom = "10px";
+
+    if (profile.photo_url) {
+      const avatar = document.createElement("img");
+      avatar.src = profile.photo_url;
+      avatar.alt = profile.name || "Photo";
+      avatar.style.width = "48px";
+      avatar.style.height = "48px";
+      avatar.style.borderRadius = "50%";
+      avatar.style.objectFit = "cover";
+      avatar.style.border = "1px solid #334155";
+      header.appendChild(avatar);
+    }
+
+    const headerInfo = document.createElement("div");
+    const title = document.createElement("div");
+    title.textContent = profile.name || "Profil LinkedIn";
+    title.style.fontWeight = "700";
+    title.style.fontSize = "15px";
+    headerInfo.appendChild(title);
+
+    const subtitle = document.createElement("div");
+    subtitle.textContent = profile.headline || profile.current_title || "";
+    subtitle.style.fontSize = "13px";
+    subtitle.style.color = "#cbd5e1";
+    headerInfo.appendChild(subtitle);
+
+    header.appendChild(headerInfo);
+    container.appendChild(header);
+
+    const makeRow = (label, value) => {
+      const row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.gap = "8px";
+      row.style.fontSize = "12px";
+      row.style.marginBottom = "6px";
+
+      const key = document.createElement("div");
+      key.textContent = label;
+      key.style.color = "#94a3b8";
+
+      const val = document.createElement("div");
+      val.textContent = value || "—";
+      val.style.fontWeight = "600";
+      val.style.color = "#e2e8f0";
+      val.style.textAlign = "right";
+
+      row.appendChild(key);
+      row.appendChild(val);
+      return row;
+    };
+
+    container.appendChild(makeRow("Poste", profile.current_title));
+    container.appendChild(makeRow("Société", profile.current_company));
+    container.appendChild(makeRow("Lieu", profile.localisation));
+    container.appendChild(makeRow("Contrat", profile.contract));
+
+    const link = document.createElement("a");
+    link.href = profile.linkedin_url || "#";
+    link.textContent = "Voir le profil";
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.style.color = "#60a5fa";
+    link.style.fontSize = "12px";
+    link.style.display = "inline-block";
+    link.style.marginTop = "4px";
+    container.appendChild(link);
+
+    const status = document.createElement("div");
+    status.id = `${PROFILE_PANEL_ID}-status`;
+    status.style.fontSize = "12px";
+    status.style.color = "#cbd5e1";
+    status.style.marginTop = "8px";
+    container.appendChild(status);
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "10px";
+
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "Rafraîchir";
+    refreshBtn.style.flex = "1";
+    refreshBtn.style.padding = "10px";
+    refreshBtn.style.border = "1px solid #334155";
+    refreshBtn.style.background = "#0f172a";
+    refreshBtn.style.color = "#e2e8f0";
+    refreshBtn.style.borderRadius = "10px";
+    refreshBtn.style.cursor = "pointer";
+    refreshBtn.onclick = () => {
+      const fresh = scrapeProfileFromDom();
+      debugLog("PROFILE_SCRAPED", fresh);
+      renderProfilePanel(fresh);
+      const statusNode = document.getElementById(`${PROFILE_PANEL_ID}-status`);
+      if (statusNode) statusNode.textContent = "Profil mis à jour depuis la page.";
+    };
+
+    const associateBtn = document.createElement("button");
+    associateBtn.textContent = "Associer";
+    associateBtn.style.flex = "1";
+    associateBtn.style.padding = "10px";
+    associateBtn.style.border = "none";
+    associateBtn.style.background = "linear-gradient(135deg, #22c55e, #16a34a)";
+    associateBtn.style.color = "#0f172a";
+    associateBtn.style.fontWeight = "700";
+    associateBtn.style.borderRadius = "10px";
+    associateBtn.style.cursor = "pointer";
+    associateBtn.onclick = () => handleAssociate(profile);
+
+    actions.appendChild(refreshBtn);
+    actions.appendChild(associateBtn);
+    container.appendChild(actions);
+  }
+
+  async function handleAssociate(profile) {
+    if (!profile) return;
+    const statusNode = document.getElementById(`${PROFILE_PANEL_ID}-status`);
+    if (statusNode) statusNode.textContent = "Association en cours…";
+
+    try {
+      const userId = await getUserId().catch(() => null);
+      const payload = { ...profile, userId };
+      debugLog("PROFILE_ASSOCIATE", payload);
+      const response = await chrome.runtime.sendMessage({
+        type: "SAVE_PROFILE_TO_SUPABASE",
+        profile: payload,
+      });
+
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      if (statusNode) statusNode.textContent = "Profil associé sur Supabase ✅";
+    } catch (err) {
+      if (statusNode) statusNode.textContent = err?.message || "Association impossible";
+      debugLog("PROFILE_ASSOCIATE_ERROR", err?.message || String(err));
     }
   }
 
@@ -646,7 +1002,8 @@
     document.body.appendChild(container);
   }
 
-  async function init() {
+  async function initConversationFlow() {
+    debugLog("MODE", "conversation");
     const { templates, jobs, selectedTemplate, selectedJob } = await loadTemplatesAndJobs();
     const toneData = await loadTone();
     buildControlPanel({
@@ -656,6 +1013,26 @@
       selectedJob,
       tone: toneData.tone,
     });
+  }
+
+  async function initProfileFlow() {
+    debugLog("MODE", "profile");
+    const profile = scrapeProfileFromDom();
+    renderProfilePanel(profile);
+  }
+
+  async function init() {
+    if (isMessagingPage()) {
+      await initConversationFlow();
+      return;
+    }
+
+    if (isProfilePage()) {
+      await initProfileFlow();
+      return;
+    }
+
+    debugLog("MODE", "unsupported-context");
   }
 
   if (document.readyState === "loading") {
