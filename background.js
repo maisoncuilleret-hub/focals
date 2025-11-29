@@ -8,6 +8,15 @@ const SYNC_CONVERSATION_URL = `${SAAS_API_BASE}/linkedin/conversations`;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
+
+const manifest = chrome.runtime.getManifest();
+const iconKeys = manifest.icons ? Object.keys(manifest.icons) : [];
+console.log(
+  `[Focals] Manifest version ${manifest.version} loaded${iconKeys.length ? ` with icons: ${iconKeys.join(", ")}` : " (no icons declared)"}`
+);
+if (iconKeys.length) {
+  console.warn("[Focals] Please remove manifest icons to avoid Chrome load errors about icon16.png.");
+}
 const pipelinePorts = new Set();
 const pipelineState = {
   active: null,
