@@ -1,3 +1,5 @@
+import supabase from "./supabase-client.js";
+
 const FOCALS_DEBUG = true;
 
 function debugLog(stage, details) {
@@ -57,6 +59,38 @@ function withStorage(area = "sync") {
       });
     },
   };
+}
+
+async function saveProfileToSupabase(profile) {
+  if (!profile || !profile.linkedin_url) {
+    throw new Error("Profil invalide reçu pour l'envoi à Supabase.");
+  }
+
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError || !userResult?.user) {
+    throw new Error("Utilisateur non authentifié — connecte-toi sur l'app web.");
+  }
+
+  const { data: clientId, error: clientError } = await supabase.rpc("get_user_client_id");
+  if (clientError || !clientId) {
+    throw new Error("Impossible de récupérer le client_id Supabase.");
+  }
+
+  const payload = {
+    name: profile.name || "",
+    linkedin_url: profile.linkedin_url,
+    current_title: profile.current_title || "",
+    current_company: profile.current_company || "",
+    photo_url: profile.photo_url || "",
+    client_id: clientId,
+  };
+
+  const { error } = await supabase.from("profiles").insert(payload);
+  if (error) {
+    throw new Error(error.message || "Erreur inconnue lors de l'insertion Supabase.");
+  }
+
+  return { success: true };
 }
 
 async function askGPT(prompt, { system, temperature = 0.2, maxTokens = 500 } = {}) {
@@ -215,6 +249,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       syncStore.set({ [STORAGE_KEYS.apiKey]: message.apiKey || "" }).then(() =>
         sendResponse({ ok: true })
       );
+      return true;
+    }
+    case "SAVE_PROFILE_TO_SUPABASE": {
+      (async () => {
+        try {
+          const result = await saveProfileToSupabase(message.profile);
+          sendResponse({ success: true, result });
+        } catch (err) {
+          debugLog("SUPABASE_SAVE_ERROR", err?.message || String(err));
+          sendResponse({ error: err?.message || "Enregistrement Supabase impossible" });
+        }
+      })();
       return true;
     }
     default:
