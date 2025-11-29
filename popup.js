@@ -7,6 +7,44 @@ let pipelineProgressContainer = null;
 let pipelineProgressBar = null;
 let pipelineProgressLabel = null;
 let pipelineHideTimeout = null;
+const STORAGE_KEYS = {
+  settings: "FOCALS_SETTINGS",
+  templates: "FOCALS_TEMPLATES",
+  activeTemplate: "FOCALS_ACTIVE_TEMPLATE",
+  jobs: "FOCALS_JOBS",
+  activeJob: "FOCALS_ACTIVE_JOB",
+};
+
+const DEFAULT_SETTINGS = {
+  tone: "friendly",
+  languageFallback: "en",
+  followUpPreference: "next_steps",
+};
+
+const DEFAULT_TEMPLATES = [
+  {
+    id: "friendly_followup",
+    title: "Friendly follow-up",
+    content:
+      "Remercie pour le message, réponds brièvement et propose la prochaine étape (appel ou échange). Reste concis et accessible.",
+  },
+  {
+    id: "concise_ack",
+    title: "Concise acknowledgement",
+    content:
+      "Accuse réception, reprends un élément clé du message précédent et propose une action claire en deux phrases maximum.",
+  },
+];
+
+const DEFAULT_JOBS = [
+  {
+    id: "default_job",
+    title: "Full-Stack Engineer",
+    description:
+      "We are hiring a pragmatic full-stack engineer who can ship end-to-end features with React/TypeScript and Node. Emphasis on ownership, clean communication, and shipping reliable customer-facing features.",
+    keywords: ["React", "TypeScript", "Node", "shipping", "customer focus"],
+  },
+];
 
 function setText(id, value) {
   const el = document.getElementById(id);
@@ -31,6 +69,208 @@ function setErr(msg) {
 function setMode(msg) {
   const el = document.getElementById("mode");
   if (el) el.textContent = msg || "";
+}
+
+function getFromStorage(area, defaults = {}) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage[area].get(defaults, (result) => resolve(result || defaults));
+    } catch (err) {
+      console.warn("[Focals][POPUP] Storage get error", err);
+      resolve(defaults);
+    }
+  });
+}
+
+function setInStorage(area, values = {}) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage[area].set(values, () => resolve(true));
+    } catch (err) {
+      console.warn("[Focals][POPUP] Storage set error", err);
+      resolve(false);
+    }
+  });
+}
+
+async function loadPreferences() {
+  const [syncData, localData] = await Promise.all([
+    getFromStorage("sync", {
+      [STORAGE_KEYS.settings]: DEFAULT_SETTINGS,
+      [STORAGE_KEYS.templates]: DEFAULT_TEMPLATES,
+      [STORAGE_KEYS.activeTemplate]: DEFAULT_TEMPLATES[0].id,
+    }),
+    getFromStorage("local", {
+      [STORAGE_KEYS.jobs]: DEFAULT_JOBS,
+      [STORAGE_KEYS.activeJob]: DEFAULT_JOBS[0].id,
+    }),
+  ]);
+
+  const settings = { ...DEFAULT_SETTINGS, ...(syncData?.[STORAGE_KEYS.settings] || {}) };
+  const templates = Array.isArray(syncData?.[STORAGE_KEYS.templates])
+    ? syncData[STORAGE_KEYS.templates]
+    : DEFAULT_TEMPLATES;
+  const activeTemplateId = syncData?.[STORAGE_KEYS.activeTemplate] || templates?.[0]?.id;
+  const jobs = Array.isArray(localData?.[STORAGE_KEYS.jobs]) ? localData[STORAGE_KEYS.jobs] : DEFAULT_JOBS;
+  const activeJobId = localData?.[STORAGE_KEYS.activeJob] || jobs?.[0]?.id;
+
+  return { settings, templates, activeTemplateId, jobs, activeJobId };
+}
+
+function renderTemplateOptions(templates, activeTemplateId) {
+  const select = document.getElementById("activeTemplate");
+  const list = document.getElementById("templates");
+  if (!select || !list) return;
+
+  select.innerHTML = "";
+  list.innerHTML = "";
+
+  templates.forEach((tpl) => {
+    const option = document.createElement("option");
+    option.value = tpl.id;
+    option.textContent = tpl.title;
+    if (tpl.id === activeTemplateId) option.selected = true;
+    select.appendChild(option);
+
+    const item = document.createElement("div");
+    item.textContent = `${tpl.title}: ${tpl.content.slice(0, 120)}${tpl.content.length > 120 ? "…" : ""}`;
+    list.appendChild(item);
+  });
+}
+
+function renderJobOptions(jobs, activeJobId) {
+  const select = document.getElementById("activeJob");
+  const list = document.getElementById("jobs");
+  if (!select || !list) return;
+
+  select.innerHTML = "";
+  list.innerHTML = "";
+
+  jobs.forEach((job) => {
+    const option = document.createElement("option");
+    option.value = job.id;
+    option.textContent = job.title;
+    if (job.id === activeJobId) option.selected = true;
+    select.appendChild(option);
+
+    const item = document.createElement("div");
+    const keywords = Array.isArray(job.keywords) ? job.keywords.join(", ") : "";
+    item.textContent = `${job.title} · ${keywords}`;
+    list.appendChild(item);
+  });
+}
+
+async function hydrateSettingsUI() {
+  const { settings, templates, activeTemplateId, jobs, activeJobId } = await loadPreferences();
+
+  const toneSelect = document.getElementById("toneSelect");
+  const languageSelect = document.getElementById("languageSelect");
+  const followUpSelect = document.getElementById("followUpSelect");
+  if (toneSelect) toneSelect.value = settings.tone || "friendly";
+  if (languageSelect) languageSelect.value = settings.languageFallback || "en";
+  if (followUpSelect) followUpSelect.value = settings.followUpPreference || "next_steps";
+
+  renderTemplateOptions(templates, activeTemplateId);
+  renderJobOptions(jobs, activeJobId);
+}
+
+async function saveSettingsFromUI() {
+  const toneSelect = document.getElementById("toneSelect");
+  const languageSelect = document.getElementById("languageSelect");
+  const followUpSelect = document.getElementById("followUpSelect");
+
+  const settings = {
+    tone: toneSelect?.value || DEFAULT_SETTINGS.tone,
+    languageFallback: languageSelect?.value || DEFAULT_SETTINGS.languageFallback,
+    followUpPreference: followUpSelect?.value || DEFAULT_SETTINGS.followUpPreference,
+  };
+
+  await setInStorage("sync", { [STORAGE_KEYS.settings]: settings });
+  setMode("Mode : réglages mis à jour");
+}
+
+async function saveTemplateFromUI() {
+  const titleEl = document.getElementById("templateTitle");
+  const contentEl = document.getElementById("templateContent");
+  const activeSelect = document.getElementById("activeTemplate");
+  const title = titleEl?.value.trim();
+  const content = contentEl?.value.trim();
+  if (!title || !content) {
+    setErr("Titre et contenu du modèle requis");
+    return;
+  }
+
+  const { templates } = await loadPreferences();
+  const existingIndex = templates.findIndex((tpl) => tpl.id === activeSelect?.value || tpl.title === title);
+  const id = existingIndex >= 0 ? templates[existingIndex].id : `tpl_${Date.now()}`;
+  const updatedTemplates = [...templates];
+  const newTemplate = { id, title, content };
+
+  if (existingIndex >= 0) {
+    updatedTemplates[existingIndex] = newTemplate;
+  } else {
+    updatedTemplates.push(newTemplate);
+  }
+
+  await setInStorage("sync", {
+    [STORAGE_KEYS.templates]: updatedTemplates,
+    [STORAGE_KEYS.activeTemplate]: newTemplate.id,
+  });
+
+  setErr("");
+  setMode("Mode : modèle enregistré");
+  await hydrateSettingsUI();
+}
+
+async function saveJobFromUI() {
+  const titleEl = document.getElementById("jobTitle");
+  const descriptionEl = document.getElementById("jobDescription");
+  const keywordsEl = document.getElementById("jobKeywords");
+  const activeSelect = document.getElementById("activeJob");
+  const title = titleEl?.value.trim();
+  const description = descriptionEl?.value.trim();
+  const keywords = (keywordsEl?.value || "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+
+  if (!title || !description) {
+    setErr("Titre et description du poste requis");
+    return;
+  }
+
+  const { jobs } = await loadPreferences();
+  const existingIndex = jobs.findIndex((job) => job.id === activeSelect?.value || job.title === title);
+  const id = existingIndex >= 0 ? jobs[existingIndex].id : `job_${Date.now()}`;
+  const updatedJobs = [...jobs];
+  const newJob = { id, title, description, keywords };
+
+  if (existingIndex >= 0) {
+    updatedJobs[existingIndex] = newJob;
+  } else {
+    updatedJobs.push(newJob);
+  }
+
+  await setInStorage("local", {
+    [STORAGE_KEYS.jobs]: updatedJobs,
+    [STORAGE_KEYS.activeJob]: newJob.id,
+  });
+
+  setErr("");
+  setMode("Mode : fiche de poste enregistrée");
+  await hydrateSettingsUI();
+}
+
+async function setActiveTemplate(id) {
+  if (!id) return;
+  await setInStorage("sync", { [STORAGE_KEYS.activeTemplate]: id });
+  setMode("Mode : modèle actif mis à jour");
+}
+
+async function setActiveJob(id) {
+  if (!id) return;
+  await setInStorage("local", { [STORAGE_KEYS.activeJob]: id });
+  setMode("Mode : fiche de poste active mise à jour");
 }
 
 function ensurePipelineElements() {
@@ -397,6 +637,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnFromIn = document.getElementById("fromIn");
   const btnSaveSupabase = document.getElementById("saveSupabase");
   const btnExport = document.getElementById("exportPipeline");
+  const btnSaveTemplate = document.getElementById("saveTemplate");
+  const btnSaveJob = document.getElementById("saveJob");
+  const toneSelect = document.getElementById("toneSelect");
+  const languageSelect = document.getElementById("languageSelect");
+  const followUpSelect = document.getElementById("followUpSelect");
+  const activeTemplateSelect = document.getElementById("activeTemplate");
+  const activeJobSelect = document.getElementById("activeJob");
 
   if (btnGo) btnGo.addEventListener("click", fetchData);
   if (btnRetry) btnRetry.addEventListener("click", fetchData);
@@ -404,11 +651,20 @@ document.addEventListener("DOMContentLoaded", () => {
   if (btnFromIn) btnFromIn.addEventListener("click", fetchData); // même action pour l'instant
   if (btnSaveSupabase) btnSaveSupabase.addEventListener("click", saveToSupabase);
   if (btnExport) btnExport.addEventListener("click", exportPipelineCsv);
+  if (btnSaveTemplate) btnSaveTemplate.addEventListener("click", saveTemplateFromUI);
+  if (btnSaveJob) btnSaveJob.addEventListener("click", saveJobFromUI);
+  if (toneSelect) toneSelect.addEventListener("change", saveSettingsFromUI);
+  if (languageSelect) languageSelect.addEventListener("change", saveSettingsFromUI);
+  if (followUpSelect) followUpSelect.addEventListener("change", saveSettingsFromUI);
+  if (activeTemplateSelect)
+    activeTemplateSelect.addEventListener("change", (e) => setActiveTemplate(e.target.value));
+  if (activeJobSelect) activeJobSelect.addEventListener("change", (e) => setActiveJob(e.target.value));
 
   pipelineButton = btnExport;
   ensurePipelineElements();
   ensurePipelinePort();
 
   // on charge direct à l'ouverture
+  hydrateSettingsUI();
   fetchData();
 });

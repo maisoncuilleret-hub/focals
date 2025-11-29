@@ -1,25 +1,20 @@
 (() => {
   const FOCALS_DEBUG = true;
-  const debugLog = (stage, details) => {
+
+  function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
-    if (typeof details === "string") {
-      console.log(`[Focals][${stage}]`, details);
-      return;
-    }
-
-    if (details && typeof details === "object") {
-      try {
-        console.log(`[Focals][${stage}]`, JSON.parse(JSON.stringify(details)));
-        return;
-      } catch (err) {
-        console.log(`[Focals][${stage}]`, details, "(log stringify failed)");
-        return;
+    try {
+      if (typeof details === "string") {
+        console.log(`[Focals][${stage}]`, details);
+      } else {
+        console.log(`[Focals][${stage}]`, JSON.stringify(details, null, 2));
       }
+    } catch (e) {
+      console.log(`[Focals][${stage}]`, details);
     }
+  }
 
-    console.log(`[Focals][${stage}]`, details);
-  };
-  const getEnvInfo = () => ({
+  const env = {
     href: window.location.href,
     origin: window.location.origin,
     isTop: window === window.top,
@@ -27,9 +22,8 @@
       document.origin === "null" ||
       window.location.origin === "null" ||
       !!window.frameElement?.hasAttribute("sandbox"),
-  });
+  };
 
-  const env = getEnvInfo();
   debugLog("ENV", env);
 
   if (!env.isTop) {
