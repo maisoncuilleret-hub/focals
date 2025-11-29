@@ -1,39 +1,220 @@
 (() => {
+  const FOCALS_DEBUG = true;
+
+  function debugLog(stage, details) {
+    if (!FOCALS_DEBUG) return;
+    try {
+      if (typeof details === "string") {
+        console.log(`[Focals][MSG][${stage}]`, details);
+      } else {
+        console.log(`[Focals][MSG][${stage}]`, JSON.stringify(details, null, 2));
+      }
+    } catch (e) {
+      console.log(`[Focals][MSG][${stage}]`, details);
+    }
+  }
+
+  const env = {
+    href: window.location.href,
+    origin: window.location.origin,
+    isTop: window === window.top,
+    isSandbox:
+      document.origin === "null" ||
+      window.location.origin === "null" ||
+      !!window.frameElement?.hasAttribute("sandbox"),
+  };
+
+  if (!env.isTop) {
+    debugLog("EXIT", "Not in top window, exiting messaging script");
+    return;
+  }
+  if (env.isSandbox) {
+    debugLog("EXIT", "Sandboxed document, skipping messaging script");
+    return;
+  }
+
   // Prevent double injection
-  if (window.__FOCALS_MESSAGING_LOADED__) return;
+  if (window.__FOCALS_MESSAGING_LOADED__) {
+    debugLog("EXIT", "content-messaging.js already initialized");
+    return;
+  }
   window.__FOCALS_MESSAGING_LOADED__ = true;
 
-  console.log(
-    "[Focals][MSG] content-messaging.js loaded on",
-    window.location.href,
-    "isTop:",
-    window === window.top
-  );
+  debugLog("INIT", env);
 
   try {
-    if (window !== window.top) {
-      console.log("[Focals][MSG] Not in top window, exiting messaging script");
-      return;
-    }
 
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
-    const LOG_PREFIX = "[Focals][MSG]";
     const FOCALS_GENERATE_REPLY_URL =
       "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/generate-reply";
+    const STORAGE_KEYS = {
+      settings: "FOCALS_SETTINGS",
+      templates: "FOCALS_TEMPLATES",
+      activeTemplate: "FOCALS_ACTIVE_TEMPLATE",
+      jobs: "FOCALS_JOBS",
+      activeJob: "FOCALS_ACTIVE_JOB",
+    };
+
+    const DEFAULT_SETTINGS = {
+      tone: "friendly",
+      languageFallback: "en",
+      followUpPreference: "next_steps",
+    };
+
+    const DEFAULT_TEMPLATES = [
+      {
+        id: "friendly_followup",
+        title: "Friendly follow-up",
+        content:
+          "Remercie pour le message, réponds brièvement et propose la prochaine étape (appel ou échange). Reste concis et accessible.",
+      },
+      {
+        id: "concise_ack",
+        title: "Concise acknowledgement",
+        content:
+          "Accuse réception, reprends un élément clé du message précédent et propose une action claire en deux phrases maximum.",
+      },
+    ];
+
+    const DEFAULT_JOBS = [
+      {
+        id: "default_job",
+        title: "Full-Stack Engineer",
+        description:
+          "We are hiring a pragmatic full-stack engineer who can ship end-to-end features with React/TypeScript and Node. Emphasis on ownership, clean communication, and shipping reliable customer-facing features.",
+        keywords: ["React", "TypeScript", "Node", "shipping", "customer focus"],
+      },
+    ];
 
     const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
 
     const log = (message, ...args) => {
-      console.log(`${LOG_PREFIX} ${message}`, ...args);
+      debugLog("LOG", { message, args });
     };
 
     const warn = (message, ...args) => {
-      console.warn(`${LOG_PREFIX} ${message}`, ...args);
+      debugLog("WARN", { message, args });
     };
 
     const error = (message, ...args) => {
-      console.error(`${LOG_PREFIX} ${message}`, ...args);
+      debugLog("ERROR", { message, args });
+    };
+
+    const getFromStorage = (area, defaults = {}) =>
+      new Promise((resolve) => {
+        try {
+          chrome.storage[area].get(defaults, (result) => {
+            resolve(result || defaults);
+          });
+        } catch (err) {
+          warn("STORAGE_GET_ERROR", err?.message || err);
+          resolve(defaults);
+        }
+      });
+
+    const setInStorage = (area, values = {}) =>
+      new Promise((resolve) => {
+        try {
+          chrome.storage[area].set(values, () => resolve(true));
+        } catch (err) {
+          warn("STORAGE_SET_ERROR", err?.message || err);
+          resolve(false);
+        }
+      });
+
+    const detectLanguageFromMessages = (messages = [], fallback = "en") => {
+      const joined = normalizeText(messages.map((m) => m.text || "").join(" ")).toLowerCase();
+      if (!joined) return fallback;
+
+      const frenchSignals = [/\bbonjour|merci|disponible|avec plaisir|prochaine\b/, /\bpropos|sujet|échange|rendez-vous\b/];
+      const englishSignals = [/\bhello|thanks|thank you|available|meeting|schedule\b/, /\bappreciate|talk|chat|call\b/];
+
+      const scoreSignals = (signals) => signals.reduce((score, regex) => (regex.test(joined) ? score + 1 : score), 0);
+
+      const frScore = scoreSignals(frenchSignals);
+      const enScore = scoreSignals(englishSignals);
+
+      if (frScore === 0 && enScore === 0) return fallback;
+      return frScore >= enScore ? "fr" : "en";
+    };
+
+    const detectCandidateName = (conversationName = "", messages = []) => {
+      const cleaned = normalizeText(conversationName).replace(/\s*\([^)]*\)/g, "");
+      const delimiters = ["|", "·", "•", "-", "—", " avec ", " with "];
+      for (const delimiter of delimiters) {
+        if (cleaned.includes(delimiter)) {
+          const part = cleaned.split(delimiter)[0].trim();
+          if (part) return part;
+        }
+      }
+
+      if (cleaned) return cleaned;
+
+      const firstIncoming = messages.find((m) => !m.fromMe && m.text);
+      if (!firstIncoming) return "";
+      const match = firstIncoming.text.match(/bonjour\s+([A-ZÉÈÎÏÂÊÔÛÇ][\w-]+)/i);
+      if (match && match[1]) {
+        return match[1];
+      }
+
+      return "";
+    };
+
+    const buildFollowUpContext = (messages = [], job = null, preference = "next_steps") => {
+      const lastUserMessage = messages.filter((m) => !m.fromMe).slice(-1)[0];
+      const highlight = lastUserMessage ? lastUserMessage.text.slice(0, 240) : "";
+
+      return {
+        preference,
+        highlight,
+        jobTitle: job?.title || "",
+        jobDescription: job?.description || "",
+        jobKeywords: job?.keywords || [],
+      };
+    };
+
+    const loadUserPreferences = async () => {
+      const [syncData, localData] = await Promise.all([
+        getFromStorage("sync", {
+          [STORAGE_KEYS.settings]: DEFAULT_SETTINGS,
+          [STORAGE_KEYS.templates]: DEFAULT_TEMPLATES,
+          [STORAGE_KEYS.activeTemplate]: DEFAULT_TEMPLATES[0].id,
+        }),
+        getFromStorage("local", {
+          [STORAGE_KEYS.jobs]: DEFAULT_JOBS,
+          [STORAGE_KEYS.activeJob]: DEFAULT_JOBS[0].id,
+        }),
+      ]);
+
+      const settings = { ...DEFAULT_SETTINGS, ...(syncData?.[STORAGE_KEYS.settings] || {}) };
+
+      const templates = Array.isArray(syncData?.[STORAGE_KEYS.templates])
+        ? syncData[STORAGE_KEYS.templates]
+        : DEFAULT_TEMPLATES;
+
+      const activeTemplateId = syncData?.[STORAGE_KEYS.activeTemplate] || templates?.[0]?.id;
+      const activeTemplate = templates.find((tpl) => tpl.id === activeTemplateId) || templates[0];
+
+      if (!syncData?.[STORAGE_KEYS.templates]) {
+        await setInStorage("sync", {
+          [STORAGE_KEYS.templates]: templates,
+          [STORAGE_KEYS.activeTemplate]: activeTemplate?.id,
+        });
+      }
+
+      const jobs = Array.isArray(localData?.[STORAGE_KEYS.jobs]) ? localData[STORAGE_KEYS.jobs] : DEFAULT_JOBS;
+      const activeJobId = localData?.[STORAGE_KEYS.activeJob] || jobs?.[0]?.id;
+      const activeJob = jobs.find((job) => job.id === activeJobId) || jobs[0];
+
+      if (!localData?.[STORAGE_KEYS.jobs]) {
+        await setInStorage("local", {
+          [STORAGE_KEYS.jobs]: jobs,
+          [STORAGE_KEYS.activeJob]: activeJob?.id,
+        });
+      }
+
+      return { settings, templates, activeTemplate, jobs, activeJob };
     };
 
     const resolveConversationRoot = (composer) => {
@@ -166,7 +347,10 @@
       return recentMessages;
     };
 
-    const generateReplyFromAPI = async (messages) => {
+    const generateReplyFromAPI = async (
+      messages,
+      { settings = DEFAULT_SETTINGS, template, job, conversationName = "", candidateName = "", followUp } = {}
+    ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
         return null;
@@ -178,9 +362,14 @@
       const payload = {
         messages,
         context: {
-          language: "fr",
-          tone: "friendly",
-          role: "candidate",
+          language: settings.languageFallback,
+          tone: settings.tone,
+          role: "recruiter",
+          candidateName,
+          conversationName,
+          template,
+          job,
+          followUp,
         },
       };
 
@@ -313,7 +502,19 @@
           return;
         }
 
-        const reply = await generateReplyFromAPI(messages);
+        const { settings, activeTemplate, activeJob } = await loadUserPreferences();
+        const language = detectLanguageFromMessages(messages, settings.languageFallback);
+        const candidateName = detectCandidateName(conversationName, messages);
+        const followUp = buildFollowUpContext(messages, activeJob, settings.followUpPreference);
+
+        const reply = await generateReplyFromAPI(messages, {
+          settings: { ...settings, languageFallback: language },
+          template: activeTemplate,
+          job: activeJob,
+          conversationName,
+          candidateName,
+          followUp,
+        });
         if (!reply) {
           warn(`PIPELINE api_call: reply missing, aborting`);
           alert("❌ Impossible de générer une réponse pour le moment.");
@@ -333,24 +534,24 @@
 
     const scanAndInject = () => {
       const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
-      console.log(`[Focals][MSG] scanAndInject: editors.length = ${editors.length}`);
+      log(`[SCAN] editors.length = ${editors.length}`);
 
       editors.forEach((editor, index) => {
         const composer = editor.closest(".msg-form");
         if (!composer) {
-          console.warn("[Focals][MSG] Unable to resolve composer for editor, skipping");
+          warn("[SCAN] Unable to resolve composer for editor, skipping");
           return;
         }
 
         const footer = composer.querySelector("footer.msg-form__footer");
         if (!footer) {
-          console.warn("[Focals][MSG] Missing footer in composer, skipping");
+          warn("[SCAN] Missing footer in composer, skipping");
           return;
         }
 
         const rightActions = footer.querySelector(".msg-form__right-actions");
         if (!rightActions) {
-          console.warn("[Focals][MSG] Missing right actions container, skipping");
+          warn("[SCAN] Missing right actions container, skipping");
           return;
         }
 
@@ -413,7 +614,7 @@
         });
 
         rightActions.appendChild(button);
-        console.log("[Focals][MSG] Suggest reply button injected", {
+        log("[MSG] Suggest reply button injected", {
           conversation: conversationName,
           editorIndex: index + 1,
         });
@@ -448,7 +649,7 @@
     } else {
       initMessagingWatcher();
     }
-  } catch (error) {
-    console.error("[Focals][MSG] Fatal error in content-messaging.js", error);
+  } catch (err) {
+    error("[MSG] Fatal error in content-messaging.js", err);
   }
 })();

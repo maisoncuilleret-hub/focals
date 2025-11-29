@@ -54,6 +54,53 @@
     <button id="exportPipeline" class="secondary">Exporter pipeline CSV</button>
   </div>
 
+  <h2>Réglages de réponse</h2>
+  <div class="field">
+    <div class="label">Ton</div>
+    <select id="toneSelect">
+      <option value="friendly">Amical</option>
+      <option value="formal">Formel</option>
+      <option value="concise">Concis</option>
+      <option value="enthusiastic">Enthousiaste</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <div class="label">Langue par défaut</div>
+    <select id="languageSelect">
+      <option value="en">English</option>
+      <option value="fr">Français</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <div class="label">Style de relance</div>
+    <select id="followUpSelect">
+      <option value="next_steps">Proposer une prochaine étape</option>
+      <option value="soft">Relance douce</option>
+      <option value="direct">Relance directe</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <div class="label">Modèles disponibles</div>
+    <select id="activeTemplate"></select>
+    <div id="templates"></div>
+    <textarea id="templateContent" placeholder="Contenu du modèle" rows="3"></textarea>
+    <input id="templateTitle" type="text" placeholder="Titre du modèle" />
+    <button id="saveTemplate" class="secondary">Ajouter / Mettre à jour le modèle</button>
+  </div>
+
+  <div class="field">
+    <div class="label">Fiches de poste</div>
+    <select id="activeJob"></select>
+    <div id="jobs"></div>
+    <input id="jobTitle" type="text" placeholder="Titre du poste" />
+    <textarea id="jobDescription" placeholder="Description du poste" rows="3"></textarea>
+    <input id="jobKeywords" type="text" placeholder="Mots-clés (séparés par des virgules)" />
+    <button id="saveJob" class="secondary">Ajouter / Mettre à jour le poste</button>
+  </div>
+
   <div id="pipelineProgress" class="progress"><div id="pipelineProgressBar" class="progress__bar"></div></div>
   <div id="pipelineProgressLabel" class="progress__label"></div>
 
