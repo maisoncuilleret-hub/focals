@@ -59,6 +59,15 @@
 
   const FOCALS_API_BASE = "https://ppawceknsedxaejpeylu.supabase.co/functions/v1";
   let lastScrapedProfile = null;
+  let lastProfileUrl = null;
+  let profileStatus = "idle";
+  let lastHref = window.location.href;
+  let currentScrapeToken = 0;
+
+  function setProfileStatus(status) {
+    profileStatus = status;
+    debugLog("PROFILE_STATUS", { status, url: window.location.href });
+  }
 
   async function callFocalsAPI(endpoint, payload) {
     const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
@@ -187,7 +196,7 @@
   const firstNonEmpty = (...values) => values.find((v) => normalizeText(v)) || "";
 
   const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
-  const isProfilePage = () => /linkedin\.com\/in\//i.test(window.location.href);
+  const isProfilePage = (href = window.location.href) => /linkedin\.com\/in\//i.test(href);
 
   function cleanNameText(text) {
     if (!text) return "";
@@ -304,8 +313,14 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "FOCALS_GET_PROFILE") {
-      debugLog("MSG_GET_PROFILE", { hasProfile: !!lastScrapedProfile });
-      sendResponse({ profile: lastScrapedProfile });
+      debugLog("MSG_GET_PROFILE", { hasProfile: !!lastScrapedProfile, status: profileStatus });
+      sendResponse({ profile: lastScrapedProfile, status: profileStatus, url: lastProfileUrl });
+      return true;
+    }
+    if (message?.type === "FOCALS_FORCE_RESCRAPE") {
+      debugLog("PROFILE_FORCE_RESCRAPE", { url: window.location.href });
+      triggerProfileScrape(true);
+      sendResponse({ ok: true });
       return true;
     }
     return false;
@@ -457,9 +472,96 @@
     };
 
     lastScrapedProfile = profile;
+    lastProfileUrl = window.location.href;
     debugLog("PROFILE_SCRAPED", profile);
     return profile;
   }
+
+  const PROFILE_READY_SELECTORS = [
+    ".pv-text-details__left-panel h1",
+    "div[data-view-name='profile-card'] h1",
+    "main section h1.inline.t-24.v-align-middle.break-words",
+    "h1.inline.t-24.v-align-middle.break-words",
+    "a[href*='/overlay/about-this-profile/'] h1",
+    ".text-heading-xlarge",
+    "main .pv-text-details__left-panel",
+  ];
+
+  async function waitForProfileDom(maxAttempts = 10, delayMs = 500) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const ready = PROFILE_READY_SELECTORS.some((selector) => document.querySelector(selector));
+      if (ready) {
+        debugLog("PROFILE_DOM_READY", { attempt });
+        return true;
+      }
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    debugLog("PROFILE_DOM_TIMEOUT", { attempts: maxAttempts });
+    return false;
+  }
+
+  async function runProfileScrape(force = false) {
+    if (!isProfilePage()) {
+      lastScrapedProfile = null;
+      lastProfileUrl = null;
+      setProfileStatus("idle");
+      return;
+    }
+
+    if (!force && profileStatus === "ready" && lastProfileUrl === window.location.href) {
+      return;
+    }
+
+    const token = ++currentScrapeToken;
+    lastScrapedProfile = null;
+    lastProfileUrl = window.location.href;
+    setProfileStatus("loading");
+
+    const domReady = await waitForProfileDom();
+    if (token !== currentScrapeToken) return;
+    if (!domReady) {
+      setProfileStatus("error");
+      return;
+    }
+
+    try {
+      scrapeProfileFromDom();
+      if (token === currentScrapeToken) {
+        setProfileStatus("ready");
+      }
+    } catch (err) {
+      debugLog("PROFILE_SCRAPE_ERROR", err?.message || String(err));
+      if (token === currentScrapeToken) {
+        setProfileStatus("error");
+      }
+    }
+  }
+
+  function triggerProfileScrape(force = false) {
+    runProfileScrape(force);
+  }
+
+  setProfileStatus(isProfilePage() ? "loading" : "idle");
+  if (isProfilePage()) {
+    triggerProfileScrape(true);
+  }
+
+  setInterval(() => {
+    const currentHref = window.location.href;
+    if (currentHref !== lastHref) {
+      debugLog("PROFILE_URL_CHANGED", { from: lastHref, to: currentHref });
+      lastHref = currentHref;
+      if (isProfilePage(currentHref)) {
+        triggerProfileScrape(true);
+      } else {
+        lastScrapedProfile = null;
+        lastProfileUrl = null;
+        setProfileStatus("idle");
+      }
+    }
+  }, 1000);
 
   let cachedBootstrap = null;
 
@@ -916,7 +1018,7 @@
 
   async function initProfileFlow() {
     debugLog("MODE", "profile");
-    lastScrapedProfile = scrapeProfileFromDom();
+    triggerProfileScrape(true);
   }
 
   async function init() {

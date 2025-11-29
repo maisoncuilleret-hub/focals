@@ -61,6 +61,7 @@ let state = {
   apiKey: "",
   loading: false,
   profile: null,
+  profileStatus: "idle",
   activeTab: "profile",
   supabaseSession: null,
 };
@@ -117,7 +118,23 @@ function renderProfileCard(profile) {
   if (!card) return;
   card.innerHTML = "";
 
-  if (!profile) {
+  if (state.profileStatus === "loading") {
+    const info = document.createElement("div");
+    info.className = "profile-info";
+    const title = document.createElement("div");
+    title.className = "profile-name";
+    title.textContent = "Analyse du profil en cours...";
+    const subtitle = document.createElement("div");
+    subtitle.className = "profile-sub muted";
+    subtitle.textContent = "Patientez quelques secondes pendant le chargement de LinkedIn.";
+    info.appendChild(title);
+    info.appendChild(subtitle);
+    card.appendChild(info);
+    if (status) status.textContent = "";
+    return;
+  }
+
+  if (!profile || state.profileStatus === "error") {
     const info = document.createElement("div");
     info.className = "profile-info";
     const title = document.createElement("div");
@@ -125,10 +142,15 @@ function renderProfileCard(profile) {
     title.textContent = "Aucun profil détecté";
     const subtitle = document.createElement("div");
     subtitle.className = "profile-sub muted";
-    subtitle.textContent = "Ouvrez un profil LinkedIn (/in/...) puis rechargez.";
+    subtitle.textContent =
+      "La page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes.";
     info.appendChild(title);
     info.appendChild(subtitle);
     card.appendChild(info);
+    if (status && state.profileStatus === "error") {
+      status.textContent =
+        "Aucun profil détecté (la page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes).";
+    }
     return;
   }
 
@@ -401,6 +423,7 @@ async function refreshProfileFromTab() {
     const activeTab = tabs?.[0];
     if (!activeTab?.id || !activeTab.url || !/linkedin\.com\/in\//i.test(activeTab.url)) {
       state.profile = null;
+      state.profileStatus = "error";
       renderProfileCard(null);
       return;
     }
@@ -411,8 +434,10 @@ async function refreshProfileFromTab() {
         if (chrome.runtime.lastError) {
           console.warn("[Focals][POPUP] No profile data:", chrome.runtime.lastError.message);
           state.profile = null;
+          state.profileStatus = "error";
         } else {
           state.profile = response?.profile || null;
+          state.profileStatus = response?.status || (state.profile ? "ready" : "error");
         }
         renderProfileCard(state.profile);
       }
@@ -420,6 +445,7 @@ async function refreshProfileFromTab() {
   } catch (err) {
     console.error("[Focals][POPUP] Profil indisponible", err);
     state.profile = null;
+    state.profileStatus = "error";
     renderProfileCard(null);
   }
 }
@@ -434,6 +460,34 @@ async function loadSupabaseSession() {
     });
   } catch (err) {
     console.error("[Focals][POPUP] Impossible de charger la session Supabase", err);
+  }
+}
+
+async function forceRescrapeProfile() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs?.[0];
+    if (!activeTab?.id || !activeTab.url || !/linkedin\.com\/in\//i.test(activeTab.url)) {
+      state.profile = null;
+      state.profileStatus = "error";
+      renderProfileCard(null);
+      return;
+    }
+    state.profileStatus = "loading";
+    renderProfileCard(state.profile);
+    chrome.tabs.sendMessage(activeTab.id, { type: "FOCALS_FORCE_RESCRAPE" }, () => {
+      if (chrome.runtime.lastError) {
+        console.warn("[Focals][POPUP] Force rescrape error:", chrome.runtime.lastError.message);
+        state.profileStatus = "error";
+        renderProfileCard(null);
+        return;
+      }
+      setTimeout(() => refreshProfileFromTab(), 200);
+    });
+  } catch (err) {
+    console.error("[Focals][POPUP] Force rescrape failed", err);
+    state.profileStatus = "error";
+    renderProfileCard(null);
   }
 }
 
@@ -465,7 +519,7 @@ async function handleAssociateProfile() {
 function setupProfileActions() {
   const refreshBtn = document.getElementById("refreshProfile");
   const associateBtn = document.getElementById("associateProfile");
-  if (refreshBtn) refreshBtn.addEventListener("click", () => refreshProfileFromTab());
+  if (refreshBtn) refreshBtn.addEventListener("click", () => forceRescrapeProfile());
   if (associateBtn) associateBtn.addEventListener("click", () => handleAssociateProfile());
 }
 
