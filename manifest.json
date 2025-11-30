@@ -47,7 +47,7 @@
         "https://www.linkedin.com/*",
         "https://linkedin.com/*"
       ],
-      "js": ["content-main.js", "content-messaging.js"],
+      "js": ["src/content/linkedinScraper.js", "content-main.js", "content-messaging.js"],
       "run_at": "document_idle"
     }
   ]
