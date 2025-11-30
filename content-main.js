@@ -196,7 +196,17 @@
   const firstNonEmpty = (...values) => values.find((v) => normalizeText(v)) || "";
 
   const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
-  const isProfilePage = (href = window.location.href) => /linkedin\.com\/in\//i.test(href);
+  const linkedinScraper = window.__FocalsLinkedinScraper || {};
+
+  const isProfilePage = (href = window.location.href) => {
+    if (typeof linkedinScraper.isRecruiterProfile === "function" && linkedinScraper.isRecruiterProfile()) {
+      return true;
+    }
+    if (typeof linkedinScraper.isPipelineProfile === "function" && linkedinScraper.isPipelineProfile()) {
+      return true;
+    }
+    return /linkedin\.com\/in\//i.test(href);
+  };
 
   function cleanNameText(text) {
     if (!text) return "";
@@ -487,21 +497,6 @@
     "main .pv-text-details__left-panel",
   ];
 
-  async function waitForProfileDom(maxAttempts = 10, delayMs = 500) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const ready = PROFILE_READY_SELECTORS.some((selector) => document.querySelector(selector));
-      if (ready) {
-        debugLog("PROFILE_DOM_READY", { attempt });
-        return true;
-      }
-      if (attempt < maxAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    debugLog("PROFILE_DOM_TIMEOUT", { attempts: maxAttempts });
-    return false;
-  }
-
   async function runProfileScrape(force = false) {
     if (!isProfilePage()) {
       lastScrapedProfile = null;
@@ -519,15 +514,38 @@
     lastProfileUrl = window.location.href;
     setProfileStatus("loading");
 
-    const domReady = await waitForProfileDom();
-    if (token !== currentScrapeToken) return;
-    if (!domReady) {
-      setProfileStatus("error");
-      return;
-    }
-
     try {
-      scrapeProfileFromDom();
+      const domReady =
+        typeof linkedinScraper.waitForDom === "function"
+          ? await linkedinScraper.waitForDom()
+          : await new Promise((resolve) => {
+              const fallbackReady = PROFILE_READY_SELECTORS.some((selector) => document.querySelector(selector));
+              resolve(fallbackReady);
+            });
+      if (token !== currentScrapeToken) return;
+      if (!domReady) {
+        setProfileStatus("error");
+        return;
+      }
+
+      const source = linkedinScraper.isPipelineProfile?.()
+        ? "pipeline"
+        : linkedinScraper.isRecruiterProfile?.()
+          ? "recruiter"
+          : "public";
+      debugLog("PROFILE_SOURCE", { source, url: window.location.href });
+
+      let profile = null;
+      if (source === "pipeline" && typeof linkedinScraper.scrapeRecruiterPipeline === "function") {
+        profile = await linkedinScraper.scrapeRecruiterPipeline({ expectedTotal: 25 });
+      } else if (typeof linkedinScraper.scrapePublicProfile === "function") {
+        profile = linkedinScraper.scrapePublicProfile();
+      } else {
+        profile = scrapeProfileFromDom();
+      }
+
+      lastScrapedProfile = profile;
+      debugLog("PROFILE_SCRAPED", { source: "historical", profile });
       if (token === currentScrapeToken) {
         setProfileStatus("ready");
       }
