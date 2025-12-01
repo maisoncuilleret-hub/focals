@@ -720,6 +720,40 @@
     return "";
   };
 
+  const requestPublicProfileViaBackground = (recruiterProfileUrl, name, requestId) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "RESOLVE_RECRUITER_PUBLIC_URL",
+            payload: {
+              recruiterProfileUrl,
+              name,
+              requestId,
+            },
+          },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              console.warn(
+                "[Focals][MSG][WARN] RESOLVE_RECRUITER_PUBLIC_URL error",
+                chrome.runtime.lastError
+              );
+              resolve("");
+              return;
+            }
+            if (!response || !response.ok || !response.url) {
+              resolve("");
+              return;
+            }
+            resolve(response.url);
+          }
+        );
+      } catch (err) {
+        console.warn("[Focals][MSG][WARN] RESOLVE_RECRUITER_PUBLIC_URL exception", err);
+        resolve("");
+      }
+    });
+
   const closePipelineQuickView = async () => {
     const selectors = [
       "[data-test-profile-modal] button[aria-label*='Fermer']",
@@ -781,7 +815,7 @@
   };
 
   const buildPipelineEntry = async (article, options = {}) => {
-    const { index = 0, total = 25 } = options;
+    const { index = 0, total = 25, requestId } = options;
     const profile = createEmptyPipelineProfile();
 
     const name = normalizeText(
@@ -825,6 +859,8 @@
       if (direct) publicProfileUrl = sanitizeLinkedinUrl(direct);
     }
     if (!publicProfileUrl) publicProfileUrl = await resolvePublicProfileViaQuickView(article, name);
+    if (!publicProfileUrl && recruiterProfileUrl)
+      publicProfileUrl = await requestPublicProfileViaBackground(recruiterProfileUrl, name, requestId);
     if (!publicProfileUrl && recruiterProfileUrl) publicProfileUrl = recruiterProfileUrl;
     if (publicProfileUrl) profile.linkedin_url = publicProfileUrl;
 
