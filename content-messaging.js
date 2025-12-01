@@ -349,7 +349,16 @@
 
     const generateReplyFromAPI = async (
       messages,
-      { settings = DEFAULT_SETTINGS, template, job, conversationName = "", candidateName = "", followUp } = {}
+      {
+        settings = DEFAULT_SETTINGS,
+        template,
+        job,
+        conversationName = "",
+        candidateName = "",
+        followUp,
+        customInstructions,
+        mode = "auto",
+      } = {}
     ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
@@ -358,6 +367,8 @@
 
       log(`PIPELINE api_call: about to call generate-reply`);
       log(`PIPELINE api_call: start (${messages.length} messages)`);
+
+      const trimmedInstructions = (customInstructions || "").trim();
 
       const payload = {
         messages,
@@ -371,6 +382,8 @@
           job,
           followUp,
         },
+        mode: trimmedInstructions ? "prompt" : mode,
+        customInstructions: trimmedInstructions || undefined,
       };
 
       let response;
@@ -480,6 +493,8 @@
       composer,
       conversationName = "Unknown conversation",
       editorIndex,
+      mode = "auto",
+      customInstructions,
     } = {}) => {
       try {
         log("Suggest reply button clicked");
@@ -514,6 +529,8 @@
           conversationName,
           candidateName,
           followUp,
+          customInstructions,
+          mode,
         });
         if (!reply) {
           warn(`PIPELINE api_call: reply missing, aborting`);
@@ -558,22 +575,34 @@
         const conversationRoot = resolveConversationRoot(composer);
         const conversationName = resolveConversationName(conversationRoot);
 
-        const existingButton = rightActions.querySelector(`.${BUTTON_CLASS}`);
-        if (existingButton) {
-          if (existingButton.dataset.focalsBound === "true") {
-            log(
-              `[MSG] BUTTON_BIND_SKIP already bound for this composer (conversation: "${conversationName}")`
-            );
-            return;
-          }
+        if (composer.dataset.focalsBound === "true") {
+          log(
+            `[MSG] BUTTON_BIND_SKIP already bound for this composer (conversation: "${conversationName}")`
+          );
+          return;
         }
 
-        const button = existingButton || document.createElement("button");
-        button.className = `${BUTTON_CLASS} artdeco-button artdeco-button--1`;
-        button.textContent = "Suggest reply";
-        button.style.marginLeft = "8px";
-        button.style.padding = "6px 10px";
-        button.style.cursor = "pointer";
+        const buttonRow = document.createElement("div");
+        buttonRow.className = BUTTON_CLASS;
+        buttonRow.style.display = "flex";
+        buttonRow.style.gap = "6px";
+        buttonRow.style.marginLeft = "8px";
+
+        const suggestButton = document.createElement("button");
+        suggestButton.className = "artdeco-button artdeco-button--1";
+        suggestButton.textContent = "Suggest reply";
+        suggestButton.style.padding = "6px 10px";
+        suggestButton.style.cursor = "pointer";
+        suggestButton.style.flex = "1";
+
+        const promptButton = document.createElement("button");
+        promptButton.className = "artdeco-button artdeco-button--1";
+        promptButton.textContent = "Prompt reply";
+        promptButton.style.padding = "6px 10px";
+        promptButton.style.cursor = "pointer";
+        promptButton.style.flex = "1";
+        promptButton.style.background = "#f2f0eb";
+        promptButton.style.borderColor = "#b45309";
 
         log("[MSG] BUTTON_BIND", {
           conversation: conversationName,
@@ -581,40 +610,126 @@
           editorIndex: index + 1,
         });
 
-        button.dataset.focalsBound = "true";
+        const promptContainer = document.createElement("div");
+        promptContainer.style.display = "none";
+        promptContainer.style.flexDirection = "column";
+        promptContainer.style.gap = "6px";
+        promptContainer.style.marginTop = "8px";
+        promptContainer.style.width = "100%";
 
-        button.addEventListener("click", async () => {
-          const originalText = button.textContent;
-          const originalDisabled = button.disabled;
-          const originalOpacity = button.style.opacity;
+        const promptLabel = document.createElement("label");
+        promptLabel.textContent = "Donne des instructions à l'IA pour répondre au candidat";
+        promptLabel.style.fontSize = "12px";
+        promptLabel.style.color = "#4b5563";
 
-          button.disabled = true;
-          button.textContent = "⏳ Génération...";
-          button.style.opacity = "0.7";
+        const promptInput = document.createElement("textarea");
+        promptInput.placeholder =
+          "Ex: Réponds en 3 phrases, propose un call, reste très concret, ne donne pas de détails techniques.";
+        promptInput.maxLength = 500;
+        promptInput.style.width = "100%";
+        promptInput.style.minHeight = "64px";
+        promptInput.style.resize = "vertical";
+        promptInput.style.padding = "8px";
+        promptInput.style.borderRadius = "6px";
+        promptInput.style.border = "1px solid #d1d5db";
+
+        const promptGenerate = document.createElement("button");
+        promptGenerate.textContent = "Generate reply";
+        promptGenerate.className = "artdeco-button artdeco-button--secondary";
+        promptGenerate.style.alignSelf = "flex-start";
+        promptGenerate.disabled = true;
+
+        const setPromptVisibility = (visible) => {
+          promptContainer.style.display = visible ? "flex" : "none";
+          promptButton.dataset.active = visible ? "true" : "false";
+        };
+
+        const updateGenerateState = () => {
+          const hasText = (promptInput.value || "").trim().length > 0;
+          promptGenerate.disabled = !hasText;
+        };
+
+        suggestButton.addEventListener("click", async () => {
+          const originalText = suggestButton.textContent;
+          const originalDisabled = suggestButton.disabled;
+          const originalOpacity = suggestButton.style.opacity;
+
+          suggestButton.disabled = true;
+          suggestButton.textContent = "⏳ Génération...";
+          suggestButton.style.opacity = "0.7";
+          setPromptVisibility(false);
           log(
             `[MSG][UI] Button set to loading (conversation: "${conversationName}")`
           );
 
           try {
             await runSuggestReplyPipeline({
-              button,
+              button: suggestButton,
               composer,
               conversationRoot,
               conversationName,
               editorIndex: index + 1,
+              mode: "auto",
             });
           } finally {
-            button.disabled = originalDisabled;
-            button.textContent = originalText;
-            button.style.opacity = originalOpacity;
+            suggestButton.disabled = originalDisabled;
+            suggestButton.textContent = originalText;
+            suggestButton.style.opacity = originalOpacity;
             log(
               `[MSG][UI] Button restored to idle (conversation: "${conversationName}")`
             );
           }
         });
 
-        rightActions.appendChild(button);
-        log("[MSG] Suggest reply button injected", {
+        promptButton.addEventListener("click", () => {
+          const shouldShow = promptContainer.style.display !== "flex";
+          setPromptVisibility(shouldShow);
+          if (shouldShow) {
+            promptInput.focus();
+          }
+        });
+
+        promptInput.addEventListener("input", updateGenerateState);
+
+        promptGenerate.addEventListener("click", async () => {
+          const originalText = promptGenerate.textContent;
+          const originalDisabled = promptGenerate.disabled;
+          const originalOpacity = promptGenerate.style.opacity;
+
+          promptGenerate.disabled = true;
+          promptGenerate.textContent = "⏳ Génération...";
+          promptGenerate.style.opacity = "0.7";
+
+          try {
+            await runSuggestReplyPipeline({
+              button: promptGenerate,
+              composer,
+              conversationRoot,
+              conversationName,
+              editorIndex: index + 1,
+              mode: "prompt",
+              customInstructions: (promptInput.value || "").trim(),
+            });
+          } finally {
+            promptGenerate.disabled = originalDisabled;
+            promptGenerate.textContent = originalText;
+            promptGenerate.style.opacity = originalOpacity;
+          }
+        });
+
+        buttonRow.appendChild(suggestButton);
+        buttonRow.appendChild(promptButton);
+        rightActions.appendChild(buttonRow);
+
+        promptContainer.appendChild(promptLabel);
+        promptContainer.appendChild(promptInput);
+        promptContainer.appendChild(promptGenerate);
+        footer.appendChild(promptContainer);
+
+        updateGenerateState();
+        composer.dataset.focalsBound = "true";
+
+        log("[MSG] Suggest and prompt reply buttons injected", {
           conversation: conversationName,
           editorIndex: index + 1,
         });

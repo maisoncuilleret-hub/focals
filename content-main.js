@@ -760,6 +760,8 @@
 
   function setButtonsLoading(isLoading, label = "") {
     const replyBtn = document.getElementById("focals-reply-btn");
+    const promptModeBtn = document.getElementById("focals-prompt-btn");
+    const generatePromptBtn = document.getElementById("focals-generate-prompt-btn");
     const softBtn = document.getElementById("focals-soft-btn");
     const strongBtn = document.getElementById("focals-strong-btn");
     const toggleButton = (btn, baseLabel) => {
@@ -769,6 +771,8 @@
       btn.style.opacity = isLoading ? "0.7" : "1";
     };
     toggleButton(replyBtn, "Suggest reply");
+    toggleButton(promptModeBtn, "Prompt reply");
+    toggleButton(generatePromptBtn, "Generate reply");
     toggleButton(softBtn, "Relance douce");
     toggleButton(strongBtn, "Relance forte");
   }
@@ -794,7 +798,7 @@
     return summary.join("\n");
   }
 
-  async function generateReply({ templateId, jobId }) {
+  async function generateReply({ templateId, jobId, mode = "auto", customInstructions }) {
     const allMessages = extractLinkedInMessages(10);
     if (!allMessages.length) {
       alert("Aucun message détecté dans la conversation.");
@@ -822,9 +826,10 @@
       createdAt: new Date(m.timestamp || Date.now()).toISOString(),
     }));
 
+    const trimmedInstructions = (customInstructions || "").trim();
     const request = {
       userId: await getUserId(),
-      mode: "initial",
+      mode: trimmedInstructions ? "prompt" : mode,
       conversation: {
         messages: messagesPayload,
         candidateFirstName: firstNameInfo.firstName || null,
@@ -834,6 +839,7 @@
       jobId: selectedJob?.id || undefined,
       templateId: selectedTemplate?.id || null,
       templateContentOverride: templateText,
+      customInstructions: trimmedInstructions || undefined,
     };
 
     try {
@@ -958,10 +964,15 @@
       jobSelect.appendChild(opt);
     });
 
+    const actionRow = document.createElement("div");
+    actionRow.style.display = "flex";
+    actionRow.style.gap = "6px";
+    actionRow.style.marginTop = "6px";
+
     const replyBtn = document.createElement("button");
     replyBtn.id = "focals-reply-btn";
     replyBtn.textContent = "Suggest reply";
-    replyBtn.style.width = "100%";
+    replyBtn.style.flex = "1";
     replyBtn.style.padding = "10px";
     replyBtn.style.background = "#22c55e";
     replyBtn.style.border = "none";
@@ -969,7 +980,58 @@
     replyBtn.style.color = "#0f172a";
     replyBtn.style.fontWeight = "700";
     replyBtn.style.cursor = "pointer";
-    replyBtn.style.marginTop = "6px";
+
+    const promptBtn = document.createElement("button");
+    promptBtn.id = "focals-prompt-btn";
+    promptBtn.textContent = "Prompt reply";
+    promptBtn.style.flex = "1";
+    promptBtn.style.padding = "10px";
+    promptBtn.style.background = "#fbbf24";
+    promptBtn.style.border = "none";
+    promptBtn.style.borderRadius = "10px";
+    promptBtn.style.color = "#0f172a";
+    promptBtn.style.fontWeight = "700";
+    promptBtn.style.cursor = "pointer";
+    promptBtn.style.transition = "all 0.2s ease";
+
+    const promptContainer = document.createElement("div");
+    promptContainer.id = "focals-prompt-container";
+    promptContainer.style.display = "none";
+    promptContainer.style.flexDirection = "column";
+    promptContainer.style.gap = "6px";
+    promptContainer.style.marginTop = "8px";
+
+    const promptLabel = document.createElement("label");
+    promptLabel.textContent = "Donne des instructions à l'IA pour répondre au candidat";
+    promptLabel.style.fontSize = "13px";
+    promptLabel.style.color = "#e2e8f0";
+
+    const promptInput = document.createElement("textarea");
+    promptInput.id = "focals-prompt-input";
+    promptInput.placeholder =
+      "Ex: Réponds en 3 phrases, propose un call, reste très concret, ne donne pas de détails techniques.";
+    promptInput.maxLength = 500;
+    promptInput.style.width = "100%";
+    promptInput.style.minHeight = "72px";
+    promptInput.style.padding = "8px";
+    promptInput.style.borderRadius = "8px";
+    promptInput.style.border = "1px solid #334155";
+    promptInput.style.background = "rgba(255,255,255,0.05)";
+    promptInput.style.color = "#e2e8f0";
+
+    const promptGenerateBtn = document.createElement("button");
+    promptGenerateBtn.id = "focals-generate-prompt-btn";
+    promptGenerateBtn.textContent = "Generate reply";
+    promptGenerateBtn.style.padding = "10px";
+    promptGenerateBtn.style.background = "#0ea5e9";
+    promptGenerateBtn.style.border = "none";
+    promptGenerateBtn.style.borderRadius = "10px";
+    promptGenerateBtn.style.color = "#0f172a";
+    promptGenerateBtn.style.fontWeight = "700";
+    promptGenerateBtn.style.cursor = "pointer";
+    promptGenerateBtn.style.alignSelf = "flex-start";
+    promptGenerateBtn.disabled = true;
+    promptGenerateBtn.style.opacity = "0.7";
 
     const followRow = document.createElement("div");
     followRow.style.display = "flex";
@@ -1022,8 +1084,40 @@
       }
     });
 
+    let replyMode = "auto";
+
+    const setReplyMode = (mode) => {
+      replyMode = mode;
+      const isPrompt = mode === "prompt";
+      promptContainer.style.display = isPrompt ? "flex" : "none";
+      promptBtn.style.boxShadow = isPrompt ? "0 0 0 2px #fbbf24" : "none";
+      promptBtn.style.opacity = isPrompt ? "1" : "0.9";
+      replyBtn.style.boxShadow = !isPrompt ? "0 0 0 2px #22c55e" : "none";
+    };
+
+    const updatePromptButtonState = () => {
+      const hasText = (promptInput.value || "").trim().length > 0;
+      promptGenerateBtn.disabled = !hasText;
+      promptGenerateBtn.style.opacity = hasText ? "1" : "0.7";
+    };
+
     replyBtn.onclick = () => {
-      generateReply({ templateId: templateSelect.value || null, jobId: jobSelect.value || null });
+      setReplyMode("auto");
+      generateReply({ templateId: templateSelect.value || null, jobId: jobSelect.value || null, mode: "auto" });
+    };
+    promptBtn.onclick = () => {
+      setReplyMode("prompt");
+      promptInput.focus();
+    };
+    promptInput.addEventListener("input", updatePromptButtonState);
+    promptGenerateBtn.onclick = () => {
+      const instructions = (promptInput.value || "").trim();
+      generateReply({
+        templateId: templateSelect.value || null,
+        jobId: jobSelect.value || null,
+        mode: "prompt",
+        customInstructions: instructions,
+      });
     };
     softBtn.onclick = () => {
       generateFollowUp({ strength: "soft", templateId: templateSelect.value || null, jobId: jobSelect.value || null });
@@ -1032,9 +1126,18 @@
       generateFollowUp({ strength: "strong", templateId: templateSelect.value || null, jobId: jobSelect.value || null });
     };
 
+    setReplyMode("auto");
+    updatePromptButtonState();
+
     container.appendChild(templateSelect);
     container.appendChild(jobSelect);
-    container.appendChild(replyBtn);
+    actionRow.appendChild(replyBtn);
+    actionRow.appendChild(promptBtn);
+    container.appendChild(actionRow);
+    promptContainer.appendChild(promptLabel);
+    promptContainer.appendChild(promptInput);
+    promptContainer.appendChild(promptGenerateBtn);
+    container.appendChild(promptContainer);
     followRow.appendChild(softBtn);
     followRow.appendChild(strongBtn);
     container.appendChild(followRow);
