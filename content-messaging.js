@@ -47,7 +47,7 @@
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
     const FOCALS_GENERATE_REPLY_URL =
-      "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/generate-reply";
+      "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply";
     const STORAGE_KEYS = {
       settings: "FOCALS_SETTINGS",
       templates: "FOCALS_TEMPLATES",
