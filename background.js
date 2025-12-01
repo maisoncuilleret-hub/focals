@@ -275,6 +275,93 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })();
       return true;
     }
+    case "GENERATE_REPLY": {
+      console.log("[Focals] Requête génération réponse:", message);
+
+      (async () => {
+        try {
+          const {
+            userId,
+            mode,
+            conversation,
+            toneOverride,
+            jobId,
+            templateId,
+            promptReply,
+          } = message;
+
+          if (!userId) {
+            sendResponse({ success: false, error: "userId manquant" });
+            return;
+          }
+          if (!mode) {
+            sendResponse({ success: false, error: "mode manquant" });
+            return;
+          }
+          if (!conversation?.messages?.length) {
+            sendResponse({ success: false, error: "conversation.messages manquant ou vide" });
+            return;
+          }
+
+          if (mode === "prompt_reply" && (!promptReply || promptReply.trim() === "")) {
+            sendResponse({ success: false, error: "promptReply requis pour mode prompt_reply" });
+            return;
+          }
+
+          const payload = {
+            userId,
+            mode,
+            conversation,
+          };
+
+          if (toneOverride) payload.toneOverride = toneOverride;
+          if (jobId) payload.jobId = jobId;
+          if (templateId) payload.templateId = templateId;
+          if (promptReply) payload.promptReply = promptReply;
+
+          console.log("[Focals] Payload envoyé:", JSON.stringify(payload, null, 2));
+
+          const response = await fetch(
+            "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(payload),
+            }
+          );
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            console.error("[Focals] Erreur API:", response.status, errorData);
+            sendResponse({
+              success: false,
+              error: errorData.error || `HTTP ${response.status}`,
+              status: response.status,
+            });
+            return;
+          }
+
+          const data = await response.json();
+          console.log("[Focals] Réponse générée:", data.replyText?.substring(0, 100) + "...");
+
+          sendResponse({
+            success: true,
+            replyText: data.replyText,
+            model: data.model,
+          });
+        } catch (error) {
+          console.error("[Focals] Erreur génération:", error);
+          sendResponse({
+            success: false,
+            error: error?.message || "Erreur réseau",
+          });
+        }
+      })();
+
+      return true;
+    }
     default:
       break;
   }
