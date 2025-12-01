@@ -285,8 +285,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             mode,
             conversation,
             toneOverride,
-            jobId,
-            templateId,
             promptReply,
           } = message;
 
@@ -298,8 +296,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: false, error: "mode manquant" });
             return;
           }
-          if (!conversation?.messages?.length) {
-            sendResponse({ success: false, error: "conversation.messages manquant ou vide" });
+          const conversationMessages = conversation?.messages || conversation;
+
+          if (!Array.isArray(conversationMessages) || !conversationMessages.length) {
+            sendResponse({ success: false, error: "conversation manquante ou vide" });
             return;
           }
 
@@ -311,12 +311,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const payload = {
             userId,
             mode,
-            conversation,
+            conversation: conversationMessages,
           };
 
           if (toneOverride) payload.toneOverride = toneOverride;
-          if (jobId) payload.jobId = jobId;
-          if (templateId) payload.templateId = templateId;
           if (promptReply) payload.promptReply = promptReply;
 
           console.log("[Focals] Payload envoyé:", JSON.stringify(payload, null, 2));
