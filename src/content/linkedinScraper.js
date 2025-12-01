@@ -348,6 +348,17 @@
     }
   };
 
+  const buildSafeRegex = (pattern, flags = "", label = "") => {
+    const allowedFlags = Array.from(new Set((flags || "").split("").filter(Boolean)));
+    const normalizedFlags = allowedFlags.filter((flag) => "gimsuy".includes(flag)).join("");
+    try {
+      return new RegExp(pattern, normalizedFlags);
+    } catch (err) {
+      debugLog("SCRAPER_REGEX_ERROR", `${label || "regex"}: ${err?.message || err}`);
+      return null;
+    }
+  };
+
   let publicProfileCache = null;
   const buildPublicProfileIndex = () => {
     const html = document.documentElement.innerHTML || "";
@@ -357,7 +368,10 @@
     }
 
     const map = new Map();
-    const regex = /"publicProfileUrl":"(https:\\/\\/[^"}]+)"[^{}]*?"firstName":"([^"}]*)"[^{}]*?"lastName":"([^"}]*)"/g;
+    const publicProfilePattern =
+      '"publicProfileUrl":"(https:\\/\\/[^"}]+)"[^{}]*?"firstName":"([^"}]*)"[^{}]*?"lastName":"([^"}]*)"';
+    const regex = buildSafeRegex(publicProfilePattern, "g", "publicProfileIndex");
+    if (!regex) return map;
     let match;
     while ((match = regex.exec(html))) {
       const url = sanitizeLinkedinUrl(decodeJsonString(match[1]));
@@ -1115,6 +1129,8 @@
 
   const isRecruiterProfile = () => {
     const href = location.href;
+    const quickViewWrapper = getPipelineQuickViewWrapper();
+    if (quickViewWrapper) return true;
     if (/linkedin\.com\/.*\/profile\//i.test(href)) return true;
     if (
       document.querySelector(".topcard-condensed__bing-container") ||
@@ -1132,7 +1148,7 @@
     );
   };
 
-  const isPipelineProfile = () => isPipelineListPage();
+  const isPipelineProfile = () => isPipelineListPage() && !getPipelineQuickViewWrapper();
 
   const waitForDom = async (options = {}) => {
     const {
@@ -1474,15 +1490,24 @@
     return profile;
   };
 
-  window.__FocalsLinkedinScraper = {
-    waitForDom,
-    scrapePublicProfile,
-    scrapeRecruiterProfile,
-    scrapeRecruiterPipeline,
-    isRecruiterProfile,
-    isPipelineProfile,
-    findPublicProfileUrl,
-  };
+    const detectedMode = isPipelineProfile()
+      ? "recruiter_pipeline"
+      : isRecruiterProfile()
+        ? "recruiter_profile"
+        : /linkedin\.com\/in\//i.test(location.href)
+          ? "public_profile"
+          : "other";
+    debugLog("ENV", { href: location.href, mode: detectedMode });
+
+    window.__FocalsLinkedinScraper = {
+      waitForDom,
+      scrapePublicProfile,
+      scrapeRecruiterProfile,
+      scrapeRecruiterPipeline,
+      isRecruiterProfile,
+      isPipelineProfile,
+      findPublicProfileUrl,
+    };
 })();
 
 
