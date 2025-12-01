@@ -382,7 +382,7 @@
           job,
           followUp,
         },
-        mode: trimmedInstructions ? "prompt" : mode,
+        mode,
         customInstructions: trimmedInstructions || undefined,
       };
 
@@ -588,6 +588,13 @@
         buttonRow.style.gap = "6px";
         buttonRow.style.marginLeft = "8px";
 
+        const controlsWrapper = document.createElement("div");
+        controlsWrapper.style.position = "relative";
+        controlsWrapper.style.display = "flex";
+        controlsWrapper.style.flexDirection = "column";
+        controlsWrapper.style.alignItems = "flex-end";
+        controlsWrapper.style.flex = "1";
+
         const suggestButton = document.createElement("button");
         suggestButton.className = "artdeco-button artdeco-button--1";
         suggestButton.textContent = "Suggest reply";
@@ -597,57 +604,191 @@
 
         const promptButton = document.createElement("button");
         promptButton.className = "artdeco-button artdeco-button--1";
-        promptButton.textContent = "Prompt reply";
+        promptButton.textContent = "Prompt reply ▼";
         promptButton.style.padding = "6px 10px";
         promptButton.style.cursor = "pointer";
         promptButton.style.flex = "1";
-        promptButton.style.background = "#f2f0eb";
-        promptButton.style.borderColor = "#b45309";
+        promptButton.style.background = "#f3f3f3";
+        promptButton.style.borderColor = "#d0d0d0";
+        promptButton.style.color = "#333";
+
+        const popover = document.createElement("div");
+        popover.style.display = "none";
+        popover.style.flexDirection = "column";
+        popover.style.gap = "10px";
+        popover.style.position = "absolute";
+        popover.style.bottom = "48px";
+        popover.style.right = "0";
+        popover.style.width = "340px";
+        popover.style.background = "#ffffff";
+        popover.style.border = "1px solid #d0d0d0";
+        popover.style.borderRadius = "8px";
+        popover.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.12)";
+        popover.style.padding = "14px";
+        popover.style.zIndex = "2147483647";
+
+        const replyState = {
+          replyMode: "initial",
+          promptReply: "",
+          isPanelOpen: false,
+        };
+
+        const popoverTitle = document.createElement("div");
+        popoverTitle.textContent = "Mode de réponse IA";
+        popoverTitle.style.fontSize = "14px";
+        popoverTitle.style.fontWeight = "600";
+        popoverTitle.style.color = "#111827";
+
+        const popoverDescription = document.createElement("div");
+        popoverDescription.textContent =
+          "Choisissez le type de réponse à générer puis, si besoin, donnez des instructions à l’IA.";
+        popoverDescription.style.fontSize = "12px";
+        popoverDescription.style.color = "#4b5563";
+        popoverDescription.style.lineHeight = "1.4";
+
+        const modesContainer = document.createElement("div");
+        modesContainer.style.display = "grid";
+        modesContainer.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+        modesContainer.style.gap = "8px";
+
+        const modes = [
+          { label: "Initial", value: "initial" },
+          { label: "Relance douce", value: "followup_soft" },
+          { label: "Relance forte", value: "followup_strong" },
+          { label: "Prompt personnalisé", value: "prompt_reply" },
+        ];
+
+        const modeButtons = [];
+
+        modes.forEach(({ label, value }) => {
+          const modeButton = document.createElement("button");
+          modeButton.textContent = label;
+          modeButton.dataset.value = value;
+          modeButton.style.padding = "8px 10px";
+          modeButton.style.border = "1px solid #d0d0d0";
+          modeButton.style.borderRadius = "999px";
+          modeButton.style.background = "#f3f3f3";
+          modeButton.style.cursor = "pointer";
+          modeButton.style.fontSize = "13px";
+          modeButton.style.color = "#333";
+          modeButton.style.transition = "background 0.15s ease";
+
+          modeButton.addEventListener("click", () => {
+            replyState.replyMode = value;
+            syncUI();
+          });
+
+          modeButtons.push(modeButton);
+          modesContainer.appendChild(modeButton);
+        });
+
+        const instructionsBlock = document.createElement("div");
+        instructionsBlock.style.display = "none";
+        instructionsBlock.style.flexDirection = "column";
+        instructionsBlock.style.gap = "6px";
+
+        const promptLabel = document.createElement("label");
+        promptLabel.textContent =
+          "Instructions personnalisées pour guider la réponse";
+        promptLabel.style.fontSize = "12px";
+        promptLabel.style.color = "#4b5563";
+
+        const promptInput = document.createElement("textarea");
+        promptInput.placeholder =
+          "Ex : réponds en 3 phrases maximum, propose un call cette semaine, garde un ton chaleureux et concret.";
+        promptInput.maxLength = 500;
+        promptInput.style.width = "100%";
+        promptInput.style.minHeight = "96px";
+        promptInput.style.resize = "vertical";
+        promptInput.style.padding = "10px";
+        promptInput.style.borderRadius = "8px";
+        promptInput.style.border = "1px solid #d1d5db";
+        promptInput.style.fontSize = "13px";
+        promptInput.style.outline = "none";
+        promptInput.addEventListener("focus", () => {
+          promptInput.style.boxShadow = "0 0 0 2px rgba(14,118,168,0.2)";
+        });
+        promptInput.addEventListener("blur", () => {
+          promptInput.style.boxShadow = "none";
+        });
+
+        promptInput.addEventListener("input", () => {
+          replyState.promptReply = promptInput.value;
+          syncUI();
+        });
+
+        instructionsBlock.appendChild(promptLabel);
+        instructionsBlock.appendChild(promptInput);
+
+        const promptGenerate = document.createElement("button");
+        promptGenerate.textContent = "Générer la réponse";
+        promptGenerate.className = "artdeco-button artdeco-button--1";
+        promptGenerate.style.width = "100%";
+        promptGenerate.style.padding = "10px";
+        promptGenerate.style.cursor = "pointer";
+
+        const syncUI = () => {
+          modeButtons.forEach((btn) => {
+            const isActive = btn.dataset.value === replyState.replyMode;
+            btn.style.background = isActive ? "#0a66c2" : "#f3f3f3";
+            btn.style.color = isActive ? "#ffffff" : "#333";
+            btn.style.borderColor = isActive ? "#0a66c2" : "#d0d0d0";
+          });
+
+          const shouldShowInstructions = replyState.replyMode === "prompt_reply";
+          instructionsBlock.style.display = shouldShowInstructions ? "flex" : "none";
+
+          const hasValidPrompt = (replyState.promptReply || "").trim().length > 0;
+          promptGenerate.disabled = shouldShowInstructions && !hasValidPrompt;
+
+          popover.style.display = replyState.isPanelOpen ? "flex" : "none";
+          promptButton.style.background = replyState.isPanelOpen ? "#e5e7eb" : "#f3f3f3";
+          promptButton.style.borderColor = replyState.isPanelOpen ? "#a3a3a3" : "#d0d0d0";
+          promptButton.textContent = replyState.isPanelOpen
+            ? "Prompt reply ▲"
+            : "Prompt reply ▼";
+        };
+
+        const closePanel = () => {
+          replyState.isPanelOpen = false;
+          syncUI();
+        };
+
+        promptGenerate.addEventListener("click", async () => {
+          const originalText = promptGenerate.textContent;
+          const originalDisabled = promptGenerate.disabled;
+          const originalOpacity = promptGenerate.style.opacity;
+
+          promptGenerate.disabled = true;
+          promptGenerate.textContent = "⏳ Génération...";
+          promptGenerate.style.opacity = "0.7";
+
+          try {
+            await runSuggestReplyPipeline({
+              button: promptGenerate,
+              composer,
+              conversationRoot,
+              conversationName,
+              editorIndex: index + 1,
+              mode: replyState.replyMode,
+              customInstructions:
+                replyState.replyMode === "prompt_reply"
+                  ? (replyState.promptReply || "").trim()
+                  : null,
+            });
+          } finally {
+            promptGenerate.disabled = originalDisabled;
+            promptGenerate.textContent = originalText;
+            promptGenerate.style.opacity = originalOpacity;
+            closePanel();
+          }
+        });
 
         log("[MSG] BUTTON_BIND", {
           conversation: conversationName,
           composerId: composer.id || null,
           editorIndex: index + 1,
         });
-
-        const promptContainer = document.createElement("div");
-        promptContainer.style.display = "none";
-        promptContainer.style.flexDirection = "column";
-        promptContainer.style.gap = "6px";
-        promptContainer.style.marginTop = "8px";
-        promptContainer.style.width = "100%";
-
-        const promptLabel = document.createElement("label");
-        promptLabel.textContent = "Donne des instructions à l'IA pour répondre au candidat";
-        promptLabel.style.fontSize = "12px";
-        promptLabel.style.color = "#4b5563";
-
-        const promptInput = document.createElement("textarea");
-        promptInput.placeholder =
-          "Ex: Réponds en 3 phrases, propose un call, reste très concret, ne donne pas de détails techniques.";
-        promptInput.maxLength = 500;
-        promptInput.style.width = "100%";
-        promptInput.style.minHeight = "64px";
-        promptInput.style.resize = "vertical";
-        promptInput.style.padding = "8px";
-        promptInput.style.borderRadius = "6px";
-        promptInput.style.border = "1px solid #d1d5db";
-
-        const promptGenerate = document.createElement("button");
-        promptGenerate.textContent = "Generate reply";
-        promptGenerate.className = "artdeco-button artdeco-button--secondary";
-        promptGenerate.style.alignSelf = "flex-start";
-        promptGenerate.disabled = true;
-
-        const setPromptVisibility = (visible) => {
-          promptContainer.style.display = visible ? "flex" : "none";
-          promptButton.dataset.active = visible ? "true" : "false";
-        };
-
-        const updateGenerateState = () => {
-          const hasText = (promptInput.value || "").trim().length > 0;
-          promptGenerate.disabled = !hasText;
-        };
 
         suggestButton.addEventListener("click", async () => {
           const originalText = suggestButton.textContent;
@@ -657,7 +798,7 @@
           suggestButton.disabled = true;
           suggestButton.textContent = "⏳ Génération...";
           suggestButton.style.opacity = "0.7";
-          setPromptVisibility(false);
+          closePanel();
           log(
             `[MSG][UI] Button set to loading (conversation: "${conversationName}")`
           );
@@ -682,51 +823,35 @@
         });
 
         promptButton.addEventListener("click", () => {
-          const shouldShow = promptContainer.style.display !== "flex";
-          setPromptVisibility(shouldShow);
-          if (shouldShow) {
+          replyState.isPanelOpen = !replyState.isPanelOpen;
+          syncUI();
+          if (replyState.isPanelOpen) {
             promptInput.focus();
           }
         });
 
-        promptInput.addEventListener("input", updateGenerateState);
-
-        promptGenerate.addEventListener("click", async () => {
-          const originalText = promptGenerate.textContent;
-          const originalDisabled = promptGenerate.disabled;
-          const originalOpacity = promptGenerate.style.opacity;
-
-          promptGenerate.disabled = true;
-          promptGenerate.textContent = "⏳ Génération...";
-          promptGenerate.style.opacity = "0.7";
-
-          try {
-            await runSuggestReplyPipeline({
-              button: promptGenerate,
-              composer,
-              conversationRoot,
-              conversationName,
-              editorIndex: index + 1,
-              mode: "prompt",
-              customInstructions: (promptInput.value || "").trim(),
-            });
-          } finally {
-            promptGenerate.disabled = originalDisabled;
-            promptGenerate.textContent = originalText;
-            promptGenerate.style.opacity = originalOpacity;
-          }
+        document.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!replyState.isPanelOpen) return;
+          if (popover.contains(target) || promptButton.contains(target)) return;
+          closePanel();
         });
+
+        popover.appendChild(popoverTitle);
+        popover.appendChild(popoverDescription);
+        popover.appendChild(modesContainer);
+        popover.appendChild(instructionsBlock);
+        popover.appendChild(promptGenerate);
 
         buttonRow.appendChild(suggestButton);
         buttonRow.appendChild(promptButton);
-        rightActions.appendChild(buttonRow);
 
-        promptContainer.appendChild(promptLabel);
-        promptContainer.appendChild(promptInput);
-        promptContainer.appendChild(promptGenerate);
-        footer.appendChild(promptContainer);
+        controlsWrapper.appendChild(buttonRow);
+        controlsWrapper.appendChild(popover);
 
-        updateGenerateState();
+        rightActions.appendChild(controlsWrapper);
+
+        syncUI();
         composer.dataset.focalsBound = "true";
 
         log("[MSG] Suggest and prompt reply buttons injected", {
