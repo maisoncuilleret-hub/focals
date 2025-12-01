@@ -1,4 +1,4 @@
-import supabase from "./supabase-client.js";
+import supabase, { SUPABASE_ANON_KEY } from "./supabase-client.js";
 
 const FOCALS_DEBUG = true;
 
@@ -280,44 +280,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
-          const {
-            userId,
-            mode,
-            conversation,
-            toneOverride,
-            jobId,
-            templateId,
-            promptReply,
-          } = message;
+          const { mode, conversation, toneOverride, jobId, templateId, promptReply } = message;
+
+          const storage = await chrome.storage.local.get(["supabaseUserId"]);
+          const userId = storage.supabaseUserId;
 
           if (!userId) {
-            sendResponse({ success: false, error: "userId manquant" });
-            return;
+            sendResponse({ success: false, error: "USER_NOT_AUTHENTICATED" });
+            return true;
           }
           if (!mode) {
             sendResponse({ success: false, error: "mode manquant" });
-            return;
+            return true;
           }
-          if (!conversation?.messages?.length) {
-            sendResponse({ success: false, error: "conversation.messages manquant ou vide" });
-            return;
+          const conversationMessages = conversation;
+
+          if (!Array.isArray(conversationMessages) || !conversationMessages.length) {
+            sendResponse({ success: false, error: "conversation manquante ou vide" });
+            return true;
           }
 
           if (mode === "prompt_reply" && (!promptReply || promptReply.trim() === "")) {
             sendResponse({ success: false, error: "promptReply requis pour mode prompt_reply" });
-            return;
+            return true;
           }
 
           const payload = {
             userId,
             mode,
-            conversation,
+            conversation: conversationMessages,
+            toneOverride,
+            jobId,
+            templateId,
+            promptReply,
           };
-
-          if (toneOverride) payload.toneOverride = toneOverride;
-          if (jobId) payload.jobId = jobId;
-          if (templateId) payload.templateId = templateId;
-          if (promptReply) payload.promptReply = promptReply;
 
           console.log("[Focals] Payload envoyé:", JSON.stringify(payload, null, 2));
 
@@ -327,6 +323,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
               },
               body: JSON.stringify(payload),
             }
