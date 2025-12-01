@@ -126,14 +126,10 @@
 
   /**
    * Scrape l'historique de conversation depuis LinkedIn Messaging
-   * @returns {{ messages: Array<{senderType: string, text: string, createdAt?: string}>, candidateFirstName?: string }}
+   * @returns {Array<{senderType: string, text: string, timestamp?: number}>}
    */
   function scrapeLinkedInConversation() {
-    const conversation = {
-      messages: [],
-      candidateFirstName: null,
-      language: null,
-    };
+    const conversation = [];
 
     const messageSelectors = [
       ".msg-s-message-list__event",
@@ -166,28 +162,12 @@
       const timeEl = msgEl.querySelector("time");
       const createdAt = timeEl ? timeEl.getAttribute("datetime") : undefined;
 
-      conversation.messages.push({
+      conversation.push({
         senderType: isFromMe ? "me" : "candidate",
         text,
-        createdAt,
+        timestamp: createdAt ? Date.parse(createdAt) || undefined : undefined,
       });
     });
-
-    const headerNameEl = document.querySelector(
-      ".msg-conversation-card__participant-names, " +
-        ".msg-thread__link-to-profile, " +
-        "[data-test-conversation-title]"
-    );
-    if (headerNameEl) {
-      const fullName = headerNameEl.innerText.trim();
-      const [firstName] = fullName.split(/\s+/);
-      conversation.candidateFirstName = firstName;
-    }
-
-    const allText = conversation.messages.map((m) => m.text).join(" ").toLowerCase();
-    const frenchKeywords = ["bonjour", "merci", "je", "vous", "poste", "entretien"];
-    const frenchCount = frenchKeywords.filter((kw) => allText.includes(kw)).length;
-    conversation.language = frenchCount >= 2 ? "fr" : "en";
 
     return conversation;
   }
@@ -205,21 +185,9 @@
   async function generateReply(options) {
     const { mode, toneOverride, jobId, templateId, promptReply } = options;
 
-    const storage = await chrome.storage.local.get([USER_ID_STORAGE_KEY]);
-    let userId = storage[USER_ID_STORAGE_KEY];
-
-    if (!userId) {
-      try {
-        userId = await getOrCreateUserId();
-      } catch (err) {
-        debugLog("GENERATE_REPLY", "userId non trouvé et création échouée");
-        return { success: false, error: "Utilisateur non connecté à Focals" };
-      }
-    }
-
     const conversation = scrapeLinkedInConversation();
 
-    if (!conversation.messages.length) {
+    if (!conversation.length) {
       debugLog("GENERATE_REPLY", "Aucun message trouvé dans la conversation");
       return { success: false, error: "Aucun message trouvé" };
     }
@@ -228,7 +196,6 @@
       chrome.runtime.sendMessage(
         {
           type: "GENERATE_REPLY",
-          userId,
           mode,
           conversation,
           toneOverride,
