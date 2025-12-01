@@ -45,7 +45,8 @@
     {
       "matches": [
         "https://www.linkedin.com/*",
-        "https://linkedin.com/*"
+        "https://linkedin.com/*",
+        "https://*.linkedin.com/*"
       ],
       "js": ["src/content/linkedinScraper.js", "content-main.js", "content-messaging.js"],
       "run_at": "document_idle"

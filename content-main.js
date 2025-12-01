@@ -61,6 +61,7 @@
   let lastScrapedProfile = null;
   let lastProfileUrl = null;
   let profileStatus = "idle";
+  let lastProfileMode = "unknown";
   let lastHref = window.location.href;
   let currentScrapeToken = 0;
 
@@ -198,6 +199,15 @@
   const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
   const linkedinScraper = window.__FocalsLinkedinScraper || {};
 
+  const detectedMode = linkedinScraper.isPipelineProfile?.()
+    ? "recruiter_pipeline"
+    : linkedinScraper.isRecruiterProfile?.()
+      ? "recruiter_profile"
+      : /linkedin\.com\/in\//i.test(window.location.href)
+        ? "public_profile"
+        : "other";
+  debugLog("ENV_MODE", { href: window.location.href, mode: detectedMode });
+
   const isProfilePage = (href = window.location.href) => {
     if (typeof linkedinScraper.isRecruiterProfile === "function" && linkedinScraper.isRecruiterProfile()) {
       return true;
@@ -321,12 +331,22 @@
     return "unknown";
   }
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === "FOCALS_GET_PROFILE") {
-      debugLog("MSG_GET_PROFILE", { hasProfile: !!lastScrapedProfile, status: profileStatus });
-      sendResponse({ profile: lastScrapedProfile, status: profileStatus, url: lastProfileUrl });
-      return true;
-    }
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message?.type === "FOCALS_GET_PROFILE") {
+        debugLog("MSG_GET_PROFILE", { hasProfile: !!lastScrapedProfile, status: profileStatus });
+        const isPipelineMode = lastProfileMode === "pipeline";
+        sendResponse({
+          profile: isPipelineMode ? null : lastScrapedProfile,
+          pipeline: isPipelineMode ? lastScrapedProfile : null,
+          status: isPipelineMode ? "unsupported" : profileStatus,
+          url: lastProfileUrl,
+          mode: lastProfileMode,
+          message: isPipelineMode
+            ? "Cette page LinkedIn Recruiter n’est pas encore supportée pour l’aperçu de profil."
+            : "",
+        });
+        return true;
+      }
     if (message?.type === "FOCALS_FORCE_RESCRAPE") {
       debugLog("PROFILE_FORCE_RESCRAPE", { url: window.location.href });
       triggerProfileScrape(true);
@@ -497,13 +517,14 @@
     "main .pv-text-details__left-panel",
   ];
 
-  async function runProfileScrape(force = false) {
-    if (!isProfilePage()) {
-      lastScrapedProfile = null;
-      lastProfileUrl = null;
-      setProfileStatus("idle");
-      return;
-    }
+    async function runProfileScrape(force = false) {
+      if (!isProfilePage()) {
+        lastScrapedProfile = null;
+        lastProfileUrl = null;
+        lastProfileMode = "none";
+        setProfileStatus("idle");
+        return;
+      }
 
     if (!force && profileStatus === "ready" && lastProfileUrl === window.location.href) {
       return;
@@ -534,6 +555,7 @@
           ? "recruiter"
           : "public";
       debugLog("PROFILE_SOURCE", { source, url: window.location.href });
+      lastProfileMode = source;
 
       let profile = null;
       if (source === "pipeline" && typeof linkedinScraper.scrapeRecruiterPipeline === "function") {
