@@ -124,6 +124,245 @@
     return callFocalsAPI("focals-generate-reply", request);
   }
 
+  /**
+   * Scrape l'historique de conversation depuis LinkedIn Messaging
+   * @returns {{ messages: Array<{senderType: string, text: string, createdAt?: string}>, candidateFirstName?: string }}
+   */
+  function scrapeLinkedInConversation() {
+    const conversation = {
+      messages: [],
+      candidateFirstName: null,
+      language: null,
+    };
+
+    const messageSelectors = [
+      ".msg-s-message-list__event",
+      ".msg-s-message-group",
+      "[data-test-conversation-panel-message]",
+    ];
+
+    let messageElements = [];
+    for (const selector of messageSelectors) {
+      messageElements = document.querySelectorAll(selector);
+      if (messageElements.length > 0) break;
+    }
+
+    debugLog("SCRAPE_MESSAGES", { count: messageElements.length });
+
+    messageElements.forEach((msgEl) => {
+      const isFromMe =
+        msgEl.classList.contains("msg-s-message-group--is-from-me") ||
+        msgEl.querySelector(".msg-s-message-group__meta--link") !== null ||
+        msgEl.closest("[data-test-sender-is-me]") !== null;
+
+      const textEl =
+        msgEl.querySelector(".msg-s-event-listitem__body") ||
+        msgEl.querySelector(".msg-s-message-group__body") ||
+        msgEl.querySelector("[data-test-message-body]");
+
+      const text = textEl ? textEl.innerText.trim() : "";
+      if (!text) return;
+
+      const timeEl = msgEl.querySelector("time");
+      const createdAt = timeEl ? timeEl.getAttribute("datetime") : undefined;
+
+      conversation.messages.push({
+        senderType: isFromMe ? "me" : "candidate",
+        text,
+        createdAt,
+      });
+    });
+
+    const headerNameEl = document.querySelector(
+      ".msg-conversation-card__participant-names, " +
+        ".msg-thread__link-to-profile, " +
+        "[data-test-conversation-title]"
+    );
+    if (headerNameEl) {
+      const fullName = headerNameEl.innerText.trim();
+      const [firstName] = fullName.split(/\s+/);
+      conversation.candidateFirstName = firstName;
+    }
+
+    const allText = conversation.messages.map((m) => m.text).join(" ").toLowerCase();
+    const frenchKeywords = ["bonjour", "merci", "je", "vous", "poste", "entretien"];
+    const frenchCount = frenchKeywords.filter((kw) => allText.includes(kw)).length;
+    conversation.language = frenchCount >= 2 ? "fr" : "en";
+
+    return conversation;
+  }
+
+  /**
+   * Envoie une requête de génération de réponse au background script
+   * @param {Object} options
+   * @param {string} options.mode - "initial" | "followup_soft" | "followup_strong" | "prompt_reply"
+   * @param {string} [options.toneOverride] - "professional" | "warm" | "direct" | "very_formal"
+   * @param {string} [options.jobId] - UUID du job
+   * @param {string} [options.templateId] - UUID du template
+   * @param {string} [options.promptReply] - Instructions custom (requis si mode === "prompt_reply")
+   * @returns {Promise<{success: boolean, replyText?: string, error?: string}>}
+   */
+  async function generateReply(options) {
+    const { mode, toneOverride, jobId, templateId, promptReply } = options;
+
+    const storage = await chrome.storage.local.get([USER_ID_STORAGE_KEY]);
+    let userId = storage[USER_ID_STORAGE_KEY];
+
+    if (!userId) {
+      try {
+        userId = await getOrCreateUserId();
+      } catch (err) {
+        debugLog("GENERATE_REPLY", "userId non trouvé et création échouée");
+        return { success: false, error: "Utilisateur non connecté à Focals" };
+      }
+    }
+
+    const conversation = scrapeLinkedInConversation();
+
+    if (!conversation.messages.length) {
+      debugLog("GENERATE_REPLY", "Aucun message trouvé dans la conversation");
+      return { success: false, error: "Aucun message trouvé" };
+    }
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: "GENERATE_REPLY",
+          userId,
+          mode,
+          conversation,
+          toneOverride,
+          jobId,
+          templateId,
+          promptReply,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            debugLog("GENERATE_REPLY_ERROR", chrome.runtime.lastError.message);
+            resolve({ success: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          resolve(response);
+        }
+      );
+    });
+  }
+
+  /**
+   * Injecte les boutons de génération dans l'UI LinkedIn Messaging
+   */
+  function injectGenerationButtons() {
+    if (document.querySelector("#focals-generate-buttons")) return;
+
+    const inputContainer = document.querySelector(
+      ".msg-form__contenteditable, " +
+        ".msg-form__msg-content-container, " +
+        "[data-test-message-input-container]"
+    );
+    if (!inputContainer) return;
+
+    const buttonContainer = document.createElement("div");
+    buttonContainer.id = "focals-generate-buttons";
+    buttonContainer.style.cssText = `
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      background: #f3f6f8;
+      border-radius: 8px;
+      margin-bottom: 8px;
+    `;
+
+    const modes = [
+      { mode: "initial", label: "✨ Réponse initiale", tone: "professional" },
+      { mode: "followup_soft", label: "🔔 Relance douce", tone: "warm" },
+      { mode: "followup_strong", label: "⚡ Relance ferme", tone: "direct" },
+    ];
+
+    modes.forEach(({ mode, label, tone }) => {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.style.cssText = `
+        padding: 6px 12px;
+        background: #0073b1;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+      `;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "⏳ Génération...";
+
+        const result = await generateReply({ mode, toneOverride: tone });
+
+        if (result.success) {
+          const input = document.querySelector(".msg-form__contenteditable");
+          if (input) {
+            input.innerHTML = `<p>${result.replyText}</p>`;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        } else {
+          alert("Erreur: " + result.error);
+        }
+
+        btn.disabled = false;
+        btn.textContent = label;
+      });
+      buttonContainer.appendChild(btn);
+    });
+
+    const promptBtn = document.createElement("button");
+    promptBtn.textContent = "🎯 Instructions custom";
+    promptBtn.style.cssText = `
+      padding: 6px 12px;
+      background: #5c3d2e;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    `;
+    promptBtn.addEventListener("click", async () => {
+      const instructions = prompt(
+        "Instructions pour la réponse (ex: 'Propose un call mardi ou mercredi')"
+      );
+      if (!instructions?.trim()) return;
+
+      promptBtn.disabled = true;
+      promptBtn.textContent = "⏳ Génération...";
+
+      const result = await generateReply({
+        mode: "prompt_reply",
+        promptReply: instructions.trim(),
+      });
+
+      if (result.success) {
+        const input = document.querySelector(".msg-form__contenteditable");
+        if (input) {
+          input.innerHTML = `<p>${result.replyText}</p>`;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      } else {
+        alert("Erreur: " + result.error);
+      }
+
+      promptBtn.disabled = false;
+      promptBtn.textContent = "🎯 Instructions custom";
+    });
+    buttonContainer.appendChild(promptBtn);
+
+    inputContainer.parentNode?.insertBefore(buttonContainer, inputContainer);
+  }
+
+  const messagingObserver = new MutationObserver(() => {
+    if (window.location.href.includes("/messaging/")) {
+      setTimeout(injectGenerationButtons, 500);
+    }
+  });
+
+  messagingObserver.observe(document.body, { childList: true, subtree: true });
+
   const USER_ID_STORAGE_KEY = "focals_user_id";
   let cachedUserId = null;
 
@@ -798,7 +1037,12 @@
     return summary.join("\n");
   }
 
-  async function generateReply({ templateId, jobId, mode = "auto", customInstructions }) {
+  async function generateReplyLegacy({
+    templateId,
+    jobId,
+    mode = "auto",
+    customInstructions,
+  }) {
     const allMessages = extractLinkedInMessages(10);
     if (!allMessages.length) {
       alert("Aucun message détecté dans la conversation.");
@@ -1103,7 +1347,11 @@
 
     replyBtn.onclick = () => {
       setReplyMode("auto");
-      generateReply({ templateId: templateSelect.value || null, jobId: jobSelect.value || null, mode: "auto" });
+      generateReplyLegacy({
+        templateId: templateSelect.value || null,
+        jobId: jobSelect.value || null,
+        mode: "auto",
+      });
     };
     promptBtn.onclick = () => {
       setReplyMode("prompt");
@@ -1112,7 +1360,7 @@
     promptInput.addEventListener("input", updatePromptButtonState);
     promptGenerateBtn.onclick = () => {
       const instructions = (promptInput.value || "").trim();
-      generateReply({
+      generateReplyLegacy({
         templateId: templateSelect.value || null,
         jobId: jobSelect.value || null,
         mode: "prompt",
