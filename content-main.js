@@ -238,10 +238,14 @@
       promptReply: mode === "prompt_reply" ? promptReply : null,
     };
 
-    console.log("[Focals][CONTENT][GENERATE_REPLY] Sending message:", {
+    console.log("[Focals][CONTENT] GENERATE_REPLY payload", {
+      userId,
       mode,
-      conversationLength: conversation.messages.length,
+      conversationLength: conversation?.messages?.length,
       hasPromptReply: !!promptReply,
+      toneOverride,
+      jobId,
+      templateId,
     });
 
     return new Promise((resolve) => {
