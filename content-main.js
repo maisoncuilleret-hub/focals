@@ -217,6 +217,7 @@
       }
     }
 
+    // Scrape la conversation LinkedIn pour constituer le payload envoyé au background
     const conversation = scrapeLinkedInConversation();
 
     if (!conversation?.messages?.length) {
@@ -227,6 +228,9 @@
       return { success: false, error: "Aucun message trouvé" };
     }
 
+    const normalizedPromptReply =
+      mode === "prompt_reply" && promptReply ? promptReply.trim() : null;
+
     const messagePayload = {
       type: "GENERATE_REPLY",
       userId,
@@ -235,14 +239,14 @@
       toneOverride,
       jobId,
       templateId,
-      promptReply: mode === "prompt_reply" ? promptReply : null,
+      promptReply: normalizedPromptReply,
     };
 
     console.log("[Focals][CONTENT] GENERATE_REPLY payload", {
       userId,
       mode,
       conversationLength: conversation?.messages?.length,
-      hasPromptReply: !!promptReply,
+      hasPromptReply: !!normalizedPromptReply,
       toneOverride,
       jobId,
       templateId,

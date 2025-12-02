@@ -307,7 +307,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             conversation?.messages || (Array.isArray(conversation) ? conversation : []);
 
           if (!conversationMessages.length) {
-            console.error("[Focals][BG] Empty conversation in GENERATE_REPLY", { mode });
+            console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY", { mode });
             sendResponse({ success: false, error: "Empty conversation" });
             return;
           }
