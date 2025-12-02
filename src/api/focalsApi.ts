@@ -63,7 +63,14 @@ export interface GenerateReplyRequest {
 }
 
 export interface GenerateReplyResponse {
-  replyText: string;
+  reply?: {
+    text: string;
+    meta?: Record<string, unknown>;
+  };
+  /**
+   * Legacy field kept for backward compatibility with older edge function responses.
+   */
+  replyText?: string;
 }
 
 const FOCALS_API_BASE = 'https://ppawceknsedxaejpeylu.supabase.co/functions/v1';
