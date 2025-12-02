@@ -280,23 +280,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
-          const { mode, conversation, toneOverride, promptReply, jobId, templateId } = message;
+          const {
+            userId: userIdFromMessage,
+            mode,
+            conversation,
+            toneOverride,
+            promptReply,
+            jobId,
+            templateId,
+          } = message;
 
-          const storedUser = await localStore.get(["focals_user_id"]);
-          const userId = storedUser?.focals_user_id;
+          const stored = await chrome.storage.local.get(["focals_user_id"]);
+          const userIdFromStorage = stored.focals_user_id;
+          const userId = userIdFromMessage || userIdFromStorage;
 
           if (!userId) {
-            sendResponse({ success: false, error: "userId manquant" });
+            console.error("[Focals][BG] Missing userId for GENERATE_REPLY");
+            sendResponse({ success: false, error: "Missing userId" });
             return;
           }
           if (!mode) {
             sendResponse({ success: false, error: "mode manquant" });
             return;
           }
-          const conversationMessages = conversation?.messages || conversation;
+          const conversationMessages =
+            conversation?.messages || (Array.isArray(conversation) ? conversation : []);
 
-          if (!Array.isArray(conversationMessages) || !conversationMessages.length) {
-            sendResponse({ success: false, error: "conversation manquante ou vide" });
+          if (!conversationMessages.length) {
+            console.error("[Focals][BG] Empty conversation in GENERATE_REPLY", { mode });
+            sendResponse({ success: false, error: "Empty conversation" });
             return;
           }
 
@@ -309,14 +321,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             userId,
             mode,
             conversation: conversationMessages,
+            toneOverride,
+            jobId,
+            templateId,
           };
 
-          if (toneOverride) payload.toneOverride = toneOverride;
-          if (jobId) payload.jobId = jobId;
-          if (templateId) payload.templateId = templateId;
-          if (mode === "prompt_reply") payload.promptReply = promptReply;
+          if (mode === "prompt_reply" && promptReply && promptReply.trim().length > 0) {
+            payload.promptReply = promptReply.trim();
+          }
 
-          console.log("[Focals][GENERATE_REPLY] Payload sent to focals-generate-reply:", payload);
+          console.log("[Focals][BG] Calling focals-generate-reply with payload", {
+            ...payload,
+            conversationLength: conversationMessages.length,
+            hasPromptReply: !!payload.promptReply,
+          });
 
           const response = await fetch(
             "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply",
@@ -330,13 +348,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           );
 
           if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            console.error("[Focals] Erreur API:", response.status, errorData);
-            sendResponse({
-              success: false,
-              error: errorData.error || `HTTP ${response.status}`,
+            const errorText = await response.text().catch(() => null);
+            console.error("[Focals][BG] focals-generate-reply failed", {
               status: response.status,
+              errorText,
             });
+            sendResponse({ success: false, error: "focals-generate-reply failed" });
             return;
           }
 
