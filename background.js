@@ -358,11 +358,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           const data = await response.json();
-          console.log("[Focals] Réponse générée:", data.replyText?.substring(0, 100) + "...");
+          const replyText =
+            data?.reply?.text ||
+            (typeof data?.reply === "string" ? data.reply : null) ||
+            data?.replyText;
+
+          console.log("[Focals] Réponse générée:", replyText?.substring(0, 100) + "...");
 
           sendResponse({
             success: true,
-            replyText: data.replyText,
+            replyText,
             model: data.model,
           });
         } catch (error) {

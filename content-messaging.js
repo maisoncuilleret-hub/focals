@@ -423,10 +423,15 @@
         return null;
       }
 
-      const replyPresent = !!data?.reply;
+      const replyText =
+        data?.reply?.text ||
+        (typeof data?.reply === "string" ? data.reply : null) ||
+        data?.replyText;
+
+      const replyPresent = !!replyText;
       log(`PIPELINE api_call: reply present = ${replyPresent}`);
 
-      return data?.reply || null;
+      return replyText || null;
     };
 
     const insertReplyIntoMessageInput = (

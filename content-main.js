@@ -124,6 +124,13 @@
     return callFocalsAPI("focals-generate-reply", request);
   }
 
+  function extractReplyText(response) {
+    if (!response) return null;
+    if (response.reply?.text) return response.reply.text;
+    if (typeof response.reply === "string") return response.reply;
+    return response.replyText || null;
+  }
+
   /**
    * Scrape l'historique de conversation depuis LinkedIn Messaging
    * @returns {{ messages: Array<{senderType: string, text: string, createdAt?: string}>, candidateFirstName?: string }}
@@ -312,10 +319,12 @@
 
         const result = await generateReply({ mode, toneOverride: tone });
 
-        if (result.success) {
+        const replyText = extractReplyText(result);
+
+        if (result.success && replyText) {
           const input = document.querySelector(".msg-form__contenteditable");
           if (input) {
-            input.innerHTML = `<p>${result.replyText}</p>`;
+            input.innerHTML = `<p>${replyText}</p>`;
             input.dispatchEvent(new Event("input", { bubbles: true }));
           }
         } else {
@@ -353,10 +362,12 @@
         promptReply: instructions.trim(),
       });
 
-      if (result.success) {
+      const replyText = extractReplyText(result);
+
+      if (result.success && replyText) {
         const input = document.querySelector(".msg-form__contenteditable");
         if (input) {
-          input.innerHTML = `<p>${result.replyText}</p>`;
+          input.innerHTML = `<p>${replyText}</p>`;
           input.dispatchEvent(new Event("input", { bubbles: true }));
         }
       } else {
@@ -1104,7 +1115,8 @@
 
     try {
       setButtonsLoading(true, "Génération...");
-      const { replyText } = await generateReplyApi(request);
+      const response = await generateReplyApi(request);
+      const replyText = extractReplyText(response);
       if (!replyText) {
         alert("Impossible de générer une réponse.");
         return;
@@ -1157,7 +1169,8 @@
 
     try {
       setButtonsLoading(true, "Génération...");
-      const { replyText } = await generateReplyApi(request);
+      const response = await generateReplyApi(request);
+      const replyText = extractReplyText(response);
       if (!replyText) {
         alert("Impossible de générer la relance.");
         return;
