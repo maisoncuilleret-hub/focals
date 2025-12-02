@@ -280,13 +280,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
-          const {
-            userId,
-            mode,
-            conversation,
-            toneOverride,
-            promptReply,
-          } = message;
+          const { mode, conversation, toneOverride, promptReply, jobId, templateId } = message;
+
+          const storedUser = await localStore.get(["focals_user_id"]);
+          const userId = storedUser?.focals_user_id;
 
           if (!userId) {
             sendResponse({ success: false, error: "userId manquant" });
@@ -315,9 +312,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
 
           if (toneOverride) payload.toneOverride = toneOverride;
-          if (promptReply) payload.promptReply = promptReply;
+          if (jobId) payload.jobId = jobId;
+          if (templateId) payload.templateId = templateId;
+          if (mode === "prompt_reply") payload.promptReply = promptReply;
 
-          console.log("[Focals] Payload envoyé:", JSON.stringify(payload, null, 2));
+          console.log("[Focals][GENERATE_REPLY] Payload sent to focals-generate-reply:", payload);
 
           const response = await fetch(
             "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply",

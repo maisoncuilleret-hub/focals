@@ -219,32 +219,40 @@
 
     const conversation = scrapeLinkedInConversation();
 
-    if (!conversation.messages.length) {
+    if (!conversation?.messages?.length) {
+      console.error("[Focals][ERROR][SCRAPE_CONVERSATION] Aucun message trouvé dans la conversation", {
+        conversation,
+      });
       debugLog("GENERATE_REPLY", "Aucun message trouvé dans la conversation");
       return { success: false, error: "Aucun message trouvé" };
     }
 
+    const messagePayload = {
+      type: "GENERATE_REPLY",
+      userId,
+      mode,
+      conversation,
+      toneOverride,
+      jobId,
+      templateId,
+      promptReply: mode === "prompt_reply" ? promptReply : null,
+    };
+
+    console.log("[Focals][CONTENT][GENERATE_REPLY] Sending message:", {
+      mode,
+      conversationLength: conversation.messages.length,
+      hasPromptReply: !!promptReply,
+    });
+
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        {
-          type: "GENERATE_REPLY",
-          userId,
-          mode,
-          conversation,
-          toneOverride,
-          jobId,
-          templateId,
-          promptReply,
-        },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            debugLog("GENERATE_REPLY_ERROR", chrome.runtime.lastError.message);
-            resolve({ success: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          resolve(response);
+      chrome.runtime.sendMessage(messagePayload, (response) => {
+        if (chrome.runtime.lastError) {
+          debugLog("GENERATE_REPLY_ERROR", chrome.runtime.lastError.message);
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+          return;
         }
-      );
+        resolve(response);
+      });
     });
   }
 
