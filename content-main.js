@@ -1,6 +1,8 @@
 (() => {
   const FOCALS_DEBUG = true;
 
+  const LOCAL_API_BASE = "http://localhost:5000";
+
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
     try {
@@ -12,6 +14,34 @@
     } catch (e) {
       console.log(`[Focals][${stage}]`, details);
     }
+  }
+
+  function isLocalhostUrl(url = "") {
+    return /^http:\/\/localhost(?::\d+)?/i.test(url);
+  }
+
+  function extractLinkedInSlugFromUrl(url = window.location.href) {
+    const match = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  function sendLocalApiRequest({ endpoint, options = {} }) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: "BOUNCER_REQUEST", endpoint, options },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response?.ok) {
+            reject(new Error(response?.error || "Local API request failed"));
+            return;
+          }
+          resolve(response.data);
+        }
+      );
+    });
   }
 
   function getEnvInfo() {
@@ -71,11 +101,22 @@
   }
 
   async function callFocalsAPI(endpoint, payload) {
-    const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
+    const url = `${FOCALS_API_BASE}/${endpoint}`;
+    const requestOptions = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
+    };
+
+    if (isLocalhostUrl(url)) {
+      const data = await sendLocalApiRequest({
+        endpoint: url.replace(LOCAL_API_BASE, ""),
+        options: requestOptions,
+      });
+      return data;
+    }
+
+    const res = await fetch(url, requestOptions);
 
     if (!res.ok) {
       let errorMessage = `HTTP ${res.status}`;
@@ -640,6 +681,7 @@
   }
 
   function scrapeProfileFromDom() {
+    const profileSlug = extractLinkedInSlugFromUrl();
     const rawName =
       pickText(
         ".pv-text-details__left-panel h1",
@@ -754,6 +796,8 @@
       current_title = inferCurrentRole(headline, "");
     }
 
+    const linkedinUrl = profileSlug ? `https://www.linkedin.com/in/${profileSlug}` : location.href;
+
     const profile = {
       name: name || "—",
       firstName: normalizeText(firstName),
@@ -763,7 +807,8 @@
       current_company: normalizeText(current_company) || "—",
       contract: normalizeText(contract) || "—",
       localisation: normalizeText(localisation) || "—",
-      linkedin_url: location.href,
+      linkedin_url: linkedinUrl,
+      profile_slug: profileSlug || "",
       photo_url: photo_url || "",
     };
 

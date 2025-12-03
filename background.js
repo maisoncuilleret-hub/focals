@@ -1,6 +1,7 @@
 import supabase from "./supabase-client.js";
 
 const FOCALS_DEBUG = true;
+const LOCAL_API_BASE = "http://localhost:5000";
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -13,6 +14,29 @@ function debugLog(stage, details) {
   } catch (e) {
     console.log(`[Focals][${stage}]`, details);
   }
+}
+
+function normalizeLocalEndpoint(endpoint = "") {
+  if (endpoint.startsWith("http")) return endpoint;
+  const trimmed = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  return `${LOCAL_API_BASE}${trimmed}`;
+}
+
+async function fetchLocalApi(endpoint, options = {}) {
+  const url = normalizeLocalEndpoint(endpoint);
+  const response = await fetch(url, options);
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => "");
+
+  if (!response.ok) {
+    const errorMessage =
+      typeof payload === "string" && payload ? payload : `HTTP ${response.status}`;
+    return { ok: false, status: response.status, error: errorMessage };
+  }
+
+  return { ok: true, status: response.status, data: payload };
 }
 
 const STORAGE_KEYS = {
@@ -144,6 +168,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    case "BOUNCER_REQUEST": {
+      const { endpoint, options = {} } = message || {};
+      if (!endpoint) {
+        sendResponse({ ok: false, error: "Missing endpoint" });
+        return false;
+      }
+
+      fetchLocalApi(endpoint, options)
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "Local request failed" }));
+      return true;
+    }
     case "SUPABASE_SESSION": {
       const session = message.session;
       debugLog("BG_SUPABASE_SESSION", {

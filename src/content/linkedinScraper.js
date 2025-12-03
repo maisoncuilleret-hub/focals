@@ -1,5 +1,5 @@
 (() => {
-  const FOCALS_DEBUG = true;
+  const FOCALS_DEBUG = false;
 
   const debugLog = (stage, details) => {
     if (!FOCALS_DEBUG) return;
@@ -8,6 +8,11 @@
     } else {
       console.log(`[Focals][${stage}]`, details);
     }
+  };
+
+  const extractLinkedInSlugFromUrl = (url = location.href) => {
+    const match = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
+    return match ? decodeURIComponent(match[1]) : null;
   };
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -780,6 +785,7 @@
     contract: "—",
     localisation: "—",
     linkedin_url: "—",
+    profile_slug: "",
     photo_url: "",
     firstName: "",
     lastName: "",
@@ -863,6 +869,17 @@
       publicProfileUrl = await requestPublicProfileViaBackground(recruiterProfileUrl, name, requestId);
     if (!publicProfileUrl && recruiterProfileUrl) publicProfileUrl = recruiterProfileUrl;
     if (publicProfileUrl) profile.linkedin_url = publicProfileUrl;
+
+    const slugFromUrl = extractLinkedInSlugFromUrl(
+      profile.linkedin_url || recruiterProfileUrl || location.href
+    );
+
+    if (!profile.linkedin_url && slugFromUrl)
+      profile.linkedin_url = `https://www.linkedin.com/in/${slugFromUrl}`;
+    else if (!profile.linkedin_url && recruiterProfileUrl)
+      profile.linkedin_url = recruiterProfileUrl;
+
+    profile.profile_slug = slugFromUrl || "";
 
     const photoUrl =
       pickAttrFrom(article, [".artdeco-entity-lockup__image img"], "src") ||
@@ -1502,6 +1519,10 @@
 
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
+    const profileSlug = extractLinkedInSlugFromUrl(publicProfileUrl || location.href);
+    const fallbackLinkedinUrl =
+      publicProfileUrl ||
+      (profileSlug ? `https://www.linkedin.com/in/${profileSlug}` : sanitizeLinkedinUrl(location.href));
 
     const sanitizedCompany = sanitizeCompanyName(current_company);
 
@@ -1511,7 +1532,8 @@
       current_company: sanitizedCompany || "—",
       contract: contract || "—",
       localisation: localisation || "—",
-      linkedin_url: publicProfileUrl || location.href || "—",
+      linkedin_url: fallbackLinkedinUrl || "—",
+      profile_slug: profileSlug || "",
       photo_url: photo_url || "",
       firstName,
       lastName,

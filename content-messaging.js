@@ -1,5 +1,6 @@
 (() => {
-  const FOCALS_DEBUG = true;
+  const FOCALS_DEBUG = false;
+  const LOCAL_API_BASE = "http://localhost:5000";
 
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
@@ -12,6 +13,29 @@
     } catch (e) {
       console.log(`[Focals][MSG][${stage}]`, details);
     }
+  }
+
+  function isLocalhostUrl(url = "") {
+    return /^http:\/\/localhost(?::\d+)?/i.test(url);
+  }
+
+  function sendLocalApiRequest({ endpoint, options = {} }) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { type: "BOUNCER_REQUEST", endpoint, options },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response?.ok) {
+            reject(new Error(response?.error || "Local API request failed"));
+            return;
+          }
+          resolve(response.data);
+        }
+      );
+    });
   }
 
   const env = {
@@ -90,15 +114,19 @@
     const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
 
     const log = (message, ...args) => {
-      debugLog("LOG", { message, args });
+      if (FOCALS_DEBUG) {
+        debugLog("LOG", { message, args });
+      }
     };
 
     const warn = (message, ...args) => {
-      debugLog("WARN", { message, args });
+      if (FOCALS_DEBUG) {
+        debugLog("WARN", { message, args });
+      }
     };
 
     const error = (message, ...args) => {
-      debugLog("ERROR", { message, args });
+      console.error("[Focals][MSG][ERROR]", message, ...args);
     };
 
     const getFromStorage = (area, defaults = {}) =>
@@ -387,14 +415,27 @@
       };
 
       let response;
+      const requestOptions = {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      };
+
       try {
-        response = await fetch(FOCALS_GENERATE_REPLY_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
+        if (isLocalhostUrl(FOCALS_GENERATE_REPLY_URL)) {
+          const data = await sendLocalApiRequest({
+            endpoint: FOCALS_GENERATE_REPLY_URL.replace(LOCAL_API_BASE, ""),
+            options: requestOptions,
+          });
+          response = {
+            ok: true,
+            json: async () => data,
+          };
+        } else {
+          response = await fetch(FOCALS_GENERATE_REPLY_URL, requestOptions);
+        }
       } catch (err) {
         error(`PIPELINE api_call: network failure`, err);
         throw err;
@@ -554,9 +595,13 @@
       }
     };
 
+    let scanScheduled = false;
+
     const scanAndInject = () => {
       const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
-      log(`[SCAN] editors.length = ${editors.length}`);
+      if (editors.length === 0) {
+        return;
+      }
 
       editors.forEach((editor, index) => {
         const composer = editor.closest(".msg-form");
@@ -866,12 +911,21 @@
       });
     };
 
+    const scheduleScan = () => {
+      if (scanScheduled) return;
+      scanScheduled = true;
+      setTimeout(() => {
+        scanScheduled = false;
+        scanAndInject();
+      }, 250);
+    };
+
     const initMessagingWatcher = () => {
       scanAndInject();
 
       const startObserver = () => {
         const observer = new MutationObserver(() => {
-          scanAndInject();
+          scheduleScan();
         });
 
         observer.observe(document.body, { childList: true, subtree: true });
@@ -881,12 +935,12 @@
         startObserver();
       } else {
         document.addEventListener("DOMContentLoaded", () => {
-          scanAndInject();
+          scheduleScan();
           startObserver();
         });
       }
 
-      setInterval(scanAndInject, 1000);
+      setInterval(scheduleScan, 3000);
     };
 
     if (document.readyState === "loading") {
