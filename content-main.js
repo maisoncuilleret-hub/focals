@@ -1,5 +1,12 @@
 (() => {
+  console.log("[FOCALS] content-script loaded on", window.location.href);
+
   const FOCALS_DEBUG = false;
+
+  const DEBUG = false;
+  function safeLog(...args) {
+    if (DEBUG) console.warn("[FOCALS]", ...args);
+  }
 
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
@@ -14,37 +21,24 @@
     }
   }
 
-  let extractMemberIdErrorLogged = false;
-
-  function extractSlugFromUrl(href = window.location.href) {
-    const match = href.match(/linkedin\.com\/in\/([^/?#]+)/i);
-    if (!match) return null;
-
+  function extractMemberIdFromProfile() {
     try {
-      return decodeURIComponent(match[1]);
-    } catch (error) {
-      return match[1];
-    }
-  }
-
-  function extractMemberIdFromProfile(href = window.location.href) {
-    const slugFromUrl = extractSlugFromUrl(href);
-    if (slugFromUrl) return slugFromUrl;
-
-    try {
-      const ogUrl = document.querySelector('meta[property="og:url"]')?.content || "";
-      const canonicalUrl = document.querySelector("link[rel='canonical']")?.href || "";
-      const slugFromDom = extractSlugFromUrl(ogUrl || canonicalUrl);
-
-      if (slugFromDom) return slugFromDom;
-    } catch (error) {
-      if (!extractMemberIdErrorLogged) {
-        debugLog("EXTRACT_MEMBER_ID", `Fallback failed: ${error?.message || error}`);
-        extractMemberIdErrorLogged = true;
+      const url = window.location.href;
+      const match = url.match(/linkedin\.com\/in\/([^\/?#]+)/);
+      if (match && match[1]) {
+        try {
+          return decodeURIComponent(match[1]);
+        } catch {
+          return match[1];
+        }
       }
-    }
 
-    return null;
+      console.warn("[FOCALS] No profile slug found from URL.");
+      return null;
+    } catch (e) {
+      console.error("[FOCALS] extractMemberIdFromProfile crashed", e);
+      return null;
+    }
   }
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
@@ -1475,6 +1469,7 @@
     container.appendChild(info);
 
     document.body.appendChild(container);
+    console.log("[FOCALS] React portal mounted successfully");
   }
 
   async function initConversationFlow() {
@@ -1493,6 +1488,12 @@
   async function initProfileFlow() {
     debugLog("MODE", "profile");
     triggerProfileScrape(true);
+  }
+
+  console.log("[FOCALS] initAppsInjections start");
+  const memberId = extractMemberIdFromProfile();
+  if (!memberId) {
+    console.warn("[FOCALS] No memberId extracted, continuing without it.");
   }
 
   async function init() {
