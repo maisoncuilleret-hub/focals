@@ -14,9 +14,37 @@
     }
   }
 
-  function extractLinkedInSlugFromUrl(url = window.location.href) {
-    const match = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
-    return match ? decodeURIComponent(match[1]) : null;
+  let extractMemberIdErrorLogged = false;
+
+  function extractSlugFromUrl(href = window.location.href) {
+    const match = href.match(/linkedin\.com\/in\/([^/?#]+)/i);
+    if (!match) return null;
+
+    try {
+      return decodeURIComponent(match[1]);
+    } catch (error) {
+      return match[1];
+    }
+  }
+
+  function extractMemberIdFromProfile(href = window.location.href) {
+    const slugFromUrl = extractSlugFromUrl(href);
+    if (slugFromUrl) return slugFromUrl;
+
+    try {
+      const ogUrl = document.querySelector('meta[property="og:url"]')?.content || "";
+      const canonicalUrl = document.querySelector("link[rel='canonical']")?.href || "";
+      const slugFromDom = extractSlugFromUrl(ogUrl || canonicalUrl);
+
+      if (slugFromDom) return slugFromDom;
+    } catch (error) {
+      if (!extractMemberIdErrorLogged) {
+        debugLog("EXTRACT_MEMBER_ID", `Fallback failed: ${error?.message || error}`);
+        extractMemberIdErrorLogged = true;
+      }
+    }
+
+    return null;
   }
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
@@ -662,7 +690,7 @@
   }
 
   function scrapeProfileFromDom() {
-    const profileSlug = extractLinkedInSlugFromUrl();
+    const profileSlug = extractMemberIdFromProfile();
     const rawName =
       pickText(
         ".pv-text-details__left-panel h1",
