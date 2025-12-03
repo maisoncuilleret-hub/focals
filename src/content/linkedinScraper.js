@@ -10,9 +10,37 @@
     }
   };
 
-  const extractLinkedInSlugFromUrl = (url = location.href) => {
-    const match = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
-    return match ? decodeURIComponent(match[1]) : null;
+  let extractMemberIdErrorLogged = false;
+
+  const extractSlugFromUrl = (href = location.href) => {
+    const match = href.match(/linkedin\.com\/in\/([^/?#]+)/i);
+    if (!match) return null;
+
+    try {
+      return decodeURIComponent(match[1]);
+    } catch (error) {
+      return match[1];
+    }
+  };
+
+  const extractMemberIdFromProfile = (href = location.href) => {
+    const slugFromUrl = extractSlugFromUrl(href);
+    if (slugFromUrl) return slugFromUrl;
+
+    try {
+      const ogUrl = document.querySelector('meta[property="og:url"]')?.content || "";
+      const canonicalUrl = document.querySelector("link[rel='canonical']")?.href || "";
+      const slugFromDom = extractSlugFromUrl(ogUrl || canonicalUrl);
+
+      if (slugFromDom) return slugFromDom;
+    } catch (error) {
+      if (!extractMemberIdErrorLogged) {
+        debugLog("EXTRACT_MEMBER_ID", `Fallback failed: ${error?.message || error}`);
+        extractMemberIdErrorLogged = true;
+      }
+    }
+
+    return null;
   };
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -870,7 +898,7 @@
     if (!publicProfileUrl && recruiterProfileUrl) publicProfileUrl = recruiterProfileUrl;
     if (publicProfileUrl) profile.linkedin_url = publicProfileUrl;
 
-    const slugFromUrl = extractLinkedInSlugFromUrl(
+    const slugFromUrl = extractMemberIdFromProfile(
       profile.linkedin_url || recruiterProfileUrl || location.href
     );
 
@@ -1519,7 +1547,7 @@
 
     const connectionInfo = computeConnectionInfo();
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
-    const profileSlug = extractLinkedInSlugFromUrl(publicProfileUrl || location.href);
+    const profileSlug = extractMemberIdFromProfile(publicProfileUrl || location.href);
     const fallbackLinkedinUrl =
       publicProfileUrl ||
       (profileSlug ? `https://www.linkedin.com/in/${profileSlug}` : sanitizeLinkedinUrl(location.href));
