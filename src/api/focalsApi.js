@@ -1,8 +1,9 @@
-const FOCALS_API_BASE = 'https://ppawceknsedxaejpeylu.supabase.co/functions/v1';
+import { API_BASE_URL } from './config.js';
+
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
 
 async function callFocalsAPI(endpoint, payload) {
-  const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
+  const res = await fetch(`${API_BASE_URL}/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

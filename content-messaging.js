@@ -1,6 +1,5 @@
 (() => {
   const FOCALS_DEBUG = false;
-  const LOCAL_API_BASE = "http://localhost:5000";
 
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
@@ -15,21 +14,17 @@
     }
   }
 
-  function isLocalhostUrl(url = "") {
-    return /^http:\/\/localhost(?::\d+)?/i.test(url);
-  }
-
-  function sendLocalApiRequest({ endpoint, options = {} }) {
+  function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
-        { type: "BOUNCER_REQUEST", endpoint, options },
+        { type: "API_REQUEST", endpoint, method, body, params },
         (response) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
             return;
           }
           if (!response?.ok) {
-            reject(new Error(response?.error || "Local API request failed"));
+            reject(new Error(response?.error || "API request failed"));
             return;
           }
           resolve(response.data);
@@ -70,8 +65,7 @@
 
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
-    const FOCALS_GENERATE_REPLY_URL =
-      "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply";
+    const FOCALS_GENERATE_REPLY_ENDPOINT = "/focals-generate-reply";
     const STORAGE_KEYS = {
       settings: "FOCALS_SETTINGS",
       templates: "FOCALS_TEMPLATES",
@@ -414,65 +408,26 @@
         customInstructions: trimmedInstructions || undefined,
       };
 
-      let response;
-      const requestOptions = {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      };
-
       try {
-        if (isLocalhostUrl(FOCALS_GENERATE_REPLY_URL)) {
-          const data = await sendLocalApiRequest({
-            endpoint: FOCALS_GENERATE_REPLY_URL.replace(LOCAL_API_BASE, ""),
-            options: requestOptions,
-          });
-          response = {
-            ok: true,
-            json: async () => data,
-          };
-        } else {
-          response = await fetch(FOCALS_GENERATE_REPLY_URL, requestOptions);
-        }
+        const data = await sendApiRequest({
+          endpoint: FOCALS_GENERATE_REPLY_ENDPOINT,
+          method: "POST",
+          body: payload,
+        });
+
+        const replyText =
+          data?.reply?.text ||
+          (typeof data?.reply === "string" ? data.reply : null) ||
+          data?.replyText;
+
+        const replyPresent = !!replyText;
+        log(`PIPELINE api_call: reply present = ${replyPresent}`);
+
+        return replyText || null;
       } catch (err) {
         error(`PIPELINE api_call: network failure`, err);
-        throw err;
-      }
-
-      log(`PIPELINE api_call: response status = ${response.status}`);
-
-      let data = null;
-      if (!response.ok) {
-        try {
-          data = await response.json();
-        } catch (parseErr) {
-          data = null;
-        }
-        error(`PIPELINE api_call: error response`, {
-          status: response.status,
-          body: data,
-        });
         return null;
       }
-
-      try {
-        data = await response.json();
-      } catch (parseErr) {
-        error(`PIPELINE api_call: failed to parse JSON`, parseErr);
-        return null;
-      }
-
-      const replyText =
-        data?.reply?.text ||
-        (typeof data?.reply === "string" ? data.reply : null) ||
-        data?.replyText;
-
-      const replyPresent = !!replyText;
-      log(`PIPELINE api_call: reply present = ${replyPresent}`);
-
-      return replyText || null;
     };
 
     const insertReplyIntoMessageInput = (

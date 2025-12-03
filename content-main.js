@@ -1,7 +1,5 @@
 (() => {
-  const FOCALS_DEBUG = true;
-
-  const LOCAL_API_BASE = "http://localhost:5000";
+  const FOCALS_DEBUG = false;
 
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
@@ -16,26 +14,28 @@
     }
   }
 
-  function isLocalhostUrl(url = "") {
-    return /^http:\/\/localhost(?::\d+)?/i.test(url);
-  }
-
   function extractLinkedInSlugFromUrl(url = window.location.href) {
     const match = url.match(/linkedin\.com\/in\/([^/?#]+)/i);
     return match ? decodeURIComponent(match[1]) : null;
   }
 
-  function sendLocalApiRequest({ endpoint, options = {} }) {
+  function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
-        { type: "BOUNCER_REQUEST", endpoint, options },
+        {
+          type: "API_REQUEST",
+          endpoint,
+          method,
+          body,
+          params,
+        },
         (response) => {
           if (chrome.runtime.lastError) {
             reject(new Error(chrome.runtime.lastError.message));
             return;
           }
           if (!response?.ok) {
-            reject(new Error(response?.error || "Local API request failed"));
+            reject(new Error(response?.error || "API request failed"));
             return;
           }
           resolve(response.data);
@@ -87,7 +87,6 @@
     selectedJob: "focals_selectedJob",
   };
 
-  const FOCALS_API_BASE = "https://ppawceknsedxaejpeylu.supabase.co/functions/v1";
   let lastScrapedProfile = null;
   let lastProfileUrl = null;
   let profileStatus = "idle";
@@ -101,36 +100,18 @@
   }
 
   async function callFocalsAPI(endpoint, payload) {
-    const url = `${FOCALS_API_BASE}/${endpoint}`;
-    const requestOptions = {
+    const response = await sendApiRequest({
+      endpoint,
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    };
+      body: payload,
+    });
 
-    if (isLocalhostUrl(url)) {
-      const data = await sendLocalApiRequest({
-        endpoint: url.replace(LOCAL_API_BASE, ""),
-        options: requestOptions,
-      });
-      return data;
+    if (!response) {
+      debugLog("API_ERROR", { endpoint, errorMessage: "Empty response" });
+      throw new Error("API response vide");
     }
 
-    const res = await fetch(url, requestOptions);
-
-    if (!res.ok) {
-      let errorMessage = `HTTP ${res.status}`;
-      try {
-        const data = await res.json();
-        if (data?.error) errorMessage = data.error;
-      } catch (err) {
-        // ignore JSON parse error
-      }
-      debugLog("API_ERROR", { endpoint, errorMessage });
-      throw new Error(errorMessage);
-    }
-
-    return res.json();
+    return response;
   }
 
   async function bootstrapUser(userId) {

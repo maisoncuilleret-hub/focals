@@ -1,7 +1,7 @@
 import supabase from "./supabase-client.js";
+import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 
-const FOCALS_DEBUG = true;
-const LOCAL_API_BASE = "http://localhost:5000";
+const FOCALS_DEBUG = IS_DEV;
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -16,15 +16,34 @@ function debugLog(stage, details) {
   }
 }
 
-function normalizeLocalEndpoint(endpoint = "") {
-  if (endpoint.startsWith("http")) return endpoint;
-  const trimmed = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
-  return `${LOCAL_API_BASE}${trimmed}`;
-}
+const buildApiUrl = (endpoint = "") => {
+  if (!endpoint) return API_BASE_URL;
+  if (/^https?:\/\//i.test(endpoint)) return endpoint;
+  const normalizedBase = API_BASE_URL.replace(/\/?$/, "");
+  const normalizedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  return `${normalizedBase}${normalizedEndpoint}`;
+};
 
-async function fetchLocalApi(endpoint, options = {}) {
-  const url = normalizeLocalEndpoint(endpoint);
-  const response = await fetch(url, options);
+async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }) {
+  const url = new URL(buildApiUrl(endpoint));
+
+  if (method === "GET" && params) {
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        url.searchParams.set(key, String(value));
+      }
+    });
+  }
+
+  const response = await fetch(url.toString(), {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: method && method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
+  });
+
   const contentType = response.headers.get("content-type") || "";
   const payload = contentType.includes("application/json")
     ? await response.json().catch(() => null)
@@ -33,7 +52,7 @@ async function fetchLocalApi(endpoint, options = {}) {
   if (!response.ok) {
     const errorMessage =
       typeof payload === "string" && payload ? payload : `HTTP ${response.status}`;
-    return { ok: false, status: response.status, error: errorMessage };
+    return { ok: false, status: response.status, error: errorMessage, data: payload };
   }
 
   return { ok: true, status: response.status, data: payload };
@@ -168,6 +187,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    case "API_REQUEST": {
+      const { endpoint, method = "GET", params, body, headers } = message;
+      if (!endpoint) {
+        sendResponse({ ok: false, error: "Missing endpoint" });
+        return false;
+      }
+
+      fetchApi({ endpoint, method, params, body, headers })
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error?.message || "API request failed" }));
+
+      return true;
+    }
     case "BOUNCER_REQUEST": {
       const { endpoint, options = {} } = message || {};
       if (!endpoint) {
@@ -175,7 +207,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      fetchLocalApi(endpoint, options)
+      const { method = "GET", headers = {}, body, params } = options;
+      let parsedBody = body;
+      if (typeof body === "string") {
+        try {
+          parsedBody = JSON.parse(body);
+        } catch (e) {
+          parsedBody = body;
+        }
+      }
+
+      fetchApi({ endpoint, method, headers, body: parsedBody, params })
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: error?.message || "Local request failed" }));
       return true;

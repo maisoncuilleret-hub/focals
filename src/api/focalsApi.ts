@@ -1,3 +1,5 @@
+import { API_BASE_URL } from './config';
+
 export type ToneType = 'very_formal' | 'professional' | 'warm' | 'direct';
 export type LanguageType = 'fr' | 'en';
 export type ReplyMode = 'initial' | 'followup_soft' | 'followup_strong';
@@ -73,10 +75,8 @@ export interface GenerateReplyResponse {
   replyText?: string;
 }
 
-const FOCALS_API_BASE = 'https://ppawceknsedxaejpeylu.supabase.co/functions/v1';
-
 async function callFocalsAPI<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
-  const res = await fetch(`${FOCALS_API_BASE}/${endpoint}`, {
+  const res = await fetch(`${API_BASE_URL}/${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -149,4 +149,6 @@ export async function generateReply(request: GenerateReplyRequest): Promise<Gene
   return callFocalsAPI('focals-generate-reply', request);
 }
 
-export const __private = { callFocalsAPI, FOCALS_API_BASE };
+export const __private = { callFocalsAPI, API_BASE_URL };
+import { API_BASE_URL } from './config';
+
