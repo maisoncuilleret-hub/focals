@@ -1,6 +1,11 @@
 (() => {
   const FOCALS_DEBUG = false;
 
+  const DEBUG = false;
+  const safeLog = (...args) => {
+    if (DEBUG) console.warn("[FOCALS]", ...args);
+  };
+
   const debugLog = (stage, details) => {
     if (!FOCALS_DEBUG) return;
     if (typeof details === "string") {
@@ -10,37 +15,24 @@
     }
   };
 
-  let extractMemberIdErrorLogged = false;
-
-  const extractSlugFromUrl = (href = location.href) => {
-    const match = href.match(/linkedin\.com\/in\/([^/?#]+)/i);
-    if (!match) return null;
-
+  const extractMemberIdFromProfile = () => {
     try {
-      return decodeURIComponent(match[1]);
-    } catch (error) {
-      return match[1];
-    }
-  };
-
-  const extractMemberIdFromProfile = (href = location.href) => {
-    const slugFromUrl = extractSlugFromUrl(href);
-    if (slugFromUrl) return slugFromUrl;
-
-    try {
-      const ogUrl = document.querySelector('meta[property="og:url"]')?.content || "";
-      const canonicalUrl = document.querySelector("link[rel='canonical']")?.href || "";
-      const slugFromDom = extractSlugFromUrl(ogUrl || canonicalUrl);
-
-      if (slugFromDom) return slugFromDom;
-    } catch (error) {
-      if (!extractMemberIdErrorLogged) {
-        debugLog("EXTRACT_MEMBER_ID", `Fallback failed: ${error?.message || error}`);
-        extractMemberIdErrorLogged = true;
+      const url = window.location.href;
+      const match = url.match(/linkedin\.com\/in\/([^\/?#]+)/);
+      if (match && match[1]) {
+        try {
+          return decodeURIComponent(match[1]);
+        } catch {
+          return match[1];
+        }
       }
-    }
 
-    return null;
+      console.warn("[FOCALS] No profile slug found from URL.");
+      return null;
+    } catch (e) {
+      console.error("[FOCALS] extractMemberIdFromProfile crashed", e);
+      return null;
+    }
   };
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -767,7 +759,7 @@
           },
           (response) => {
             if (chrome.runtime.lastError) {
-              console.warn(
+              safeLog(
                 "[Focals][MSG][WARN] RESOLVE_RECRUITER_PUBLIC_URL error",
                 chrome.runtime.lastError
               );
@@ -782,7 +774,7 @@
           }
         );
       } catch (err) {
-        console.warn("[Focals][MSG][WARN] RESOLVE_RECRUITER_PUBLIC_URL exception", err);
+        safeLog("[Focals][MSG][WARN] RESOLVE_RECRUITER_PUBLIC_URL exception", err);
         resolve("");
       }
     });
