@@ -17,6 +17,7 @@
     "https://www.linkedin.com/*",
     "https://linkedin.com/*",
     "https://*.linkedin.com/*",
+    "http://localhost:5000/*",
     "https://api.my-saas.com/*",
     "https://ppawceknsedxaejpeylu.supabase.co/*",
     "https://*.lovable.app/*",
