@@ -1,4 +1,5 @@
 (() => {
+  console.log("[FOCALS] content-script loaded on", window.location.href);
   const FOCALS_DEBUG = false;
 
   const DEBUG = false;
@@ -15,9 +16,9 @@
     }
   };
 
-  const extractMemberIdFromProfile = () => {
+  const extractMemberIdFromProfile = (targetUrl) => {
     try {
-      const url = window.location.href;
+      const url = targetUrl || window.location.href;
       const match = url.match(/linkedin\.com\/in\/([^\/?#]+)/);
       if (match && match[1]) {
         try {
