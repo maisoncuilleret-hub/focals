@@ -519,6 +519,18 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
   const firstNonEmpty = (...values) => values.find((v) => normalizeText(v)) || "";
 
+  const isConnectionActivityText = (text = "") => {
+    const normalized = normalizeText(text).toLowerCase();
+    if (!normalized) return false;
+    const markers = [
+      /nouvelle? relation/,
+      /new connection/,
+      /vous [eê]tes (?:maintenant )?en relation/,
+      /is (?:now )?a new connection/,
+    ];
+    return markers.some((regex) => regex.test(normalized));
+  };
+
   const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
   const linkedinScraper = window.__FocalsLinkedinScraper || {};
 
@@ -534,6 +546,43 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         ? "public_profile"
         : "other";
   debugLog("ENV_MODE", { href: window.location.href, mode: detectedMode });
+
+  const cacheProfile = (profile, source = "profile") => {
+    if (!profile) return;
+    try {
+      chrome.storage.local.set(
+        { [PROFILE_STORAGE_KEY]: { ...profile, experiences: (profile.experiences || []).slice(0, 6) } },
+        () => {
+          console.log(`[Focals][PROFILE] Saved ${source} profile`, {
+            url: profile.linkedin_url,
+            name: profile.name,
+            currentTitle: profile.current_title,
+            currentCompany: profile.current_company,
+            experiencesCount: profile.experiences?.length || 0,
+          });
+        }
+      );
+    } catch (err) {
+      debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
+    }
+  };
+
+  const clearCachedProfile = () => {
+    try {
+      chrome.storage.local.remove([PROFILE_STORAGE_KEY]);
+    } catch (err) {
+      debugLog("PROFILE_CACHE_CLEAR_ERROR", err?.message || String(err));
+    }
+  };
+
+  const isProfileUsable = (profile) => {
+    if (!profile) return false;
+    const name = normalizeText(profile.name || "");
+    const title = normalizeText(profile.current_title || profile.headline || "");
+    const company = normalizeText(profile.current_company || "");
+    const hasExperiences = Array.isArray(profile.experiences) && profile.experiences.length > 0;
+    return !!(name && (title || company || hasExperiences));
+  };
 
   const isProfilePage = (href = window.location.href) => {
     if (typeof linkedinScraper.isRecruiterProfile === "function" && linkedinScraper.isRecruiterProfile()) {
@@ -859,6 +908,10 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           end = normalizeText(to || "");
         }
 
+        if (isConnectionActivityText(title) || isConnectionActivityText(company)) {
+          return;
+        }
+
         if (title || company) {
           experiences.push({
             title: title || "",
@@ -895,22 +948,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     lastScrapedProfile = profile;
     lastProfileUrl = window.location.href;
     debugLog("PROFILE_SCRAPED", profile);
-    try {
-      chrome.storage.local.set(
-        { [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 6) } },
-        () => {
-          console.log("[Focals][PROFILE] Saved profile", {
-            url: profile.linkedin_url,
-            name: profile.name,
-            currentTitle: profile.current_title,
-            currentCompany: profile.current_company,
-            experiencesCount: profile.experiences.length,
-          });
-        }
-      );
-    } catch (err) {
-      debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
-    }
+    cacheProfile(profile, "public");
     return profile;
   }
 
@@ -1022,22 +1060,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
     lastScrapedProfile = profile;
     lastProfileUrl = window.location.href;
-    try {
-      chrome.storage.local.set(
-        { [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 6) } },
-        () => {
-          console.log("[Focals][PROFILE] Saved inline recruiter profile", {
-            url: profile.linkedin_url,
-            name: profile.name,
-            currentTitle: profile.current_title,
-            currentCompany: profile.current_company,
-            experiencesCount: profile.experiences.length,
-          });
-        }
-      );
-    } catch (err) {
-      debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
-    }
+    cacheProfile(profile, "recruiter_inline");
 
     return profile;
   }
@@ -1110,7 +1133,13 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       lastScrapedProfile = profile;
       debugLog("PROFILE_SCRAPED", { source: "historical", profile });
       if (token === currentScrapeToken) {
-        setProfileStatus("ready");
+        if (isProfileUsable(profile)) {
+          cacheProfile(profile, source);
+          setProfileStatus("ready");
+        } else {
+          clearCachedProfile();
+          setProfileStatus("error");
+        }
       }
     } catch (err) {
       debugLog("PROFILE_SCRAPE_ERROR", err?.message || String(err));
