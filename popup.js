@@ -329,13 +329,20 @@ function buildFollowupConversation(contextLabel, job, profile) {
 
   const text = details.filter(Boolean).join(" | ") || contextLabel || "Relance";
 
-  return [
-    {
-      text,
-      senderType: "me",
-      timestamp: new Date().toISOString(),
-    },
-  ];
+  const conversation = {
+    messages: [
+      {
+        text,
+        senderType: "me",
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+
+  if (job?.language) conversation.language = job.language;
+  if (profile?.firstName) conversation.candidateFirstName = profile.firstName;
+
+  return conversation;
 }
 
 async function handleGenerateFollowup() {
@@ -364,10 +371,11 @@ async function handleGenerateFollowup() {
     const userId = state.userId || (await getOrCreateUserId());
     const mode = resolveFollowupMode();
 
+    const conversation = buildFollowupConversation(context, job, state.profile);
     const payload = {
       userId,
       mode,
-      conversation: buildFollowupConversation(context, job, state.profile),
+      conversation,
       toneOverride: state.tone || DEFAULT_TONE,
       jobId: job?.id,
       templateId: state.selectedTemplate || undefined,
@@ -393,7 +401,11 @@ async function handleGenerateFollowup() {
       state.followup.error = "Réponse vide renvoyée par le backend.";
     }
   } catch (err) {
-    state.followup.error = err?.message || "Impossible de générer la relance.";
+    console.error("[FOCALS][POPUP][ERROR] generateFollowup failed", err);
+    const message = err?.message || "Impossible de générer la relance.";
+    state.followup.error = message.startsWith("HTTP 404")
+      ? "HTTP 404 – Fonction backend introuvable"
+      : message;
   } finally {
     state.followup.loading = false;
     renderFollowupUI();

@@ -74,6 +74,32 @@
       activeJob: "FOCALS_ACTIVE_JOB",
     };
 
+    const USER_ID_STORAGE_KEY = "focals_user_id";
+    let cachedUserId = null;
+
+    const getOrCreateUserId = async () => {
+      if (cachedUserId) return cachedUserId;
+      return new Promise((resolve, reject) => {
+        try {
+          chrome.storage.local.get([USER_ID_STORAGE_KEY], (result) => {
+            const existing = result?.[USER_ID_STORAGE_KEY];
+            if (existing && typeof existing === "string") {
+              cachedUserId = existing;
+              resolve(existing);
+              return;
+            }
+            const newId = crypto.randomUUID();
+            chrome.storage.local.set({ [USER_ID_STORAGE_KEY]: newId }, () => {
+              cachedUserId = newId;
+              resolve(newId);
+            });
+          });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    };
+
     const DEFAULT_SETTINGS = {
       tone: "friendly",
       languageFallback: "en",
@@ -391,22 +417,50 @@
       log(`PIPELINE api_call: start (${messages.length} messages)`);
 
       const trimmedInstructions = (customInstructions || "").trim();
+      let userId;
+
+      try {
+        userId = await getOrCreateUserId();
+      } catch (err) {
+        error("PIPELINE api_call: unable to resolve userId", err);
+        return null;
+      }
+
+      const conversationMessages = messages.map((msg) => ({
+        text: msg.text,
+        senderType: msg.fromMe ? "me" : "candidate",
+        timestamp: msg.timestampRaw || new Date().toISOString(),
+      }));
+
+      const resolvedMode =
+        mode === "prompt" || mode === "prompt_reply"
+          ? "prompt_reply"
+          : mode === "followup_strong"
+          ? "followup_strong"
+          : mode === "initial"
+          ? "initial"
+          : "followup_soft";
+
+      const conversationPayload = {
+        messages: conversationMessages,
+      };
+
+      if (settings.languageFallback) conversationPayload.language = settings.languageFallback;
+      const candidateFirstName = (candidateName || "").split(/\s+/)[0] || null;
+      if (candidateFirstName) conversationPayload.candidateFirstName = candidateFirstName;
 
       const payload = {
-        messages,
-        context: {
-          language: settings.languageFallback,
-          tone: settings.tone,
-          role: "recruiter",
-          candidateName,
-          conversationName,
-          template,
-          job,
-          followUp,
-        },
-        mode,
-        customInstructions: trimmedInstructions || undefined,
+        userId,
+        mode: resolvedMode,
+        conversation: conversationPayload,
+        toneOverride: settings.tone,
+        jobId: job?.id,
+        templateId: template?.id,
       };
+
+      if (resolvedMode === "prompt_reply" && trimmedInstructions) {
+        payload.promptReply = trimmedInstructions;
+      }
 
       try {
         const data = await sendApiRequest({
