@@ -1,3 +1,5 @@
+console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
+
 (() => {
   console.log("[FOCALS] content-script loaded on", window.location.href);
 
