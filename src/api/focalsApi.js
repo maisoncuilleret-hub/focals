@@ -57,7 +57,7 @@ async function generateReply(request) {
 }
 
 async function generateFollowup(request) {
-  return callFocalsAPI('focals-generate-followup', request);
+  return callFocalsAPI('focals-generate-reply', request);
 }
 
 async function associateProfile(profile, accessToken, userId) {
