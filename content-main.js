@@ -110,6 +110,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     selectedTemplate: "focals_selectedTemplate",
     selectedJob: "focals_selectedJob",
   };
+  const PROFILE_STORAGE_KEY = "FOCALS_LAST_PROFILE";
 
   let lastScrapedProfile = null;
   let lastProfileUrl = null;
@@ -773,6 +774,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       return null;
     })();
 
+    const experiences = [];
     if (experienceSection) {
       const listItems = Array.from(experienceSection.querySelectorAll("ul li"));
       let firstEntity = null;
@@ -797,6 +799,41 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           contract = parsed.contract || contract;
         }
       }
+
+      const maxExperiences = 5;
+      for (const item of listItems.slice(0, maxExperiences)) {
+        const entity =
+          item.querySelector("[data-view-name='profile-component-entity']") ||
+          item.querySelector("article") ||
+          item;
+
+        const title = normalizeText(
+          pickTextFrom(entity, [".t-bold span[aria-hidden='true']", ".t-bold", "strong"]) || ""
+        );
+        const company = normalizeText(
+          pickTextFrom(entity, [".t-14.t-normal span[aria-hidden='true']", ".t-14.t-normal"]) || ""
+        );
+        const dateText = normalizeText(
+          pickTextFrom(entity, [".t-14.t-normal.t-black--light", ".t-12.t-black--light"])
+        );
+
+        let start = "";
+        let end = "";
+        if (dateText && dateText.includes("–")) {
+          const [from, to] = dateText.split("–");
+          start = normalizeText(from || "");
+          end = normalizeText(to || "");
+        }
+
+        if (title || company) {
+          experiences.push({
+            title: title || "",
+            company: company || "",
+            start: start || dateText || "",
+            end: end || "",
+          });
+        }
+      }
     }
 
     if (!current_title) {
@@ -817,11 +854,17 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       linkedin_url: linkedinUrl,
       profile_slug: profileSlug || "",
       photo_url: photo_url || "",
+      experiences,
     };
 
     lastScrapedProfile = profile;
     lastProfileUrl = window.location.href;
     debugLog("PROFILE_SCRAPED", profile);
+    try {
+      chrome.storage.local.set({ [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 5) } });
+    } catch (err) {
+      debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
+    }
     return profile;
   }
 
