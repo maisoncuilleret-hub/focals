@@ -100,6 +100,13 @@ const FOLLOWUP_CONTEXT_LABELS = {
   autre: "Autre",
 };
 
+const FOLLOWUP_MODE_MAP = {
+  premiere_relance: "followup_soft",
+  apres_call: "followup_soft",
+  sans_reponse: "followup_strong",
+  autre: "prompt_reply",
+};
+
 function setStatus(message) {
   const el = document.getElementById("status");
   if (el) {
@@ -299,6 +306,38 @@ function resolveFollowupContext() {
   return FOLLOWUP_CONTEXT_LABELS[state.followup.context] || state.followup.context;
 }
 
+function resolveFollowupMode() {
+  return FOLLOWUP_MODE_MAP[state.followup.context] || "followup_soft";
+}
+
+function buildFollowupConversation(contextLabel, job, profile) {
+  const details = [];
+
+  if (contextLabel) details.push(`Contexte: ${contextLabel}`);
+
+  if (profile) {
+    const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
+    if (name) details.push(`Candidat: ${name}`);
+    if (profile.headline) details.push(`Profil: ${profile.headline}`);
+    if (profile.company) details.push(`Entreprise actuelle: ${profile.company}`);
+  }
+
+  if (job) {
+    const jobParts = [job.title || "", job.company || ""].filter(Boolean).join(" @ ");
+    if (jobParts) details.push(`Job ciblé: ${jobParts}`);
+  }
+
+  const text = details.filter(Boolean).join(" | ") || contextLabel || "Relance";
+
+  return [
+    {
+      text,
+      senderType: "me",
+      timestamp: new Date().toISOString(),
+    },
+  ];
+}
+
 async function handleGenerateFollowup() {
   if (state.followup.loading) return;
   if (!state.profile) {
@@ -323,19 +362,30 @@ async function handleGenerateFollowup() {
 
   try {
     const userId = state.userId || (await getOrCreateUserId());
-    const response = await apiModule.generateFollowup({
+    const mode = resolveFollowupMode();
+
+    const payload = {
       userId,
-      linkedinProfile: state.profile,
-      job,
-      context,
-    });
+      mode,
+      conversation: buildFollowupConversation(context, job, state.profile),
+      toneOverride: state.tone || DEFAULT_TONE,
+      jobId: job?.id,
+      templateId: state.selectedTemplate || undefined,
+    };
+
+    if (mode === "prompt_reply") {
+      payload.promptReply = context;
+    }
+
+    const response = await apiModule.generateFollowup(payload);
 
     const replyText =
       response?.message ||
+      response?.reply?.text ||
+      (typeof response?.reply === "string" ? response.reply : null) ||
+      response?.replyText ||
       response?.text ||
       response?.followup ||
-      response?.replyText ||
-      response?.reply?.text ||
       "";
 
     state.followup.result = replyText;
