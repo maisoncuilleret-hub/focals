@@ -98,6 +98,32 @@ function setLoading(isLoading, message = "") {
   setStatus(isLoading ? message : "");
 }
 
+async function ensureProfileScripts(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["src/content/linkedinScraper.js", "content-main.js"],
+    });
+    debugLog("POPUP_SCRIPT_INJECT", { tabId });
+    return true;
+  } catch (err) {
+    console.warn("[Focals][POPUP] Unable to inject content scripts", err);
+    return false;
+  }
+}
+
+function requestProfileFromTab(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: "FOCALS_GET_PROFILE" }, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({ error: chrome.runtime.lastError });
+        return;
+      }
+      resolve({ response });
+    });
+  });
+}
+
 function switchTab(tab) {
   state.activeTab = tab;
   const profileView = document.getElementById("profileView");
@@ -478,39 +504,52 @@ async function refreshProfileFromTab() {
     }
     state.profileStatusMessage = "";
     debugLog("POPUP_PROFILE_REQUEST", { tabId: activeTab.id, url: activeTab.url });
-    chrome.tabs.sendMessage(
-      activeTab.id,
-      { type: "FOCALS_GET_PROFILE" },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          console.warn("[Focals][POPUP] No profile data:", chrome.runtime.lastError.message);
-          state.profile = null;
-          state.profileStatus = "error";
-          state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-        } else if (!response) {
-          debugLog("POPUP_PROFILE_NO_RESPONSE", { tabId: activeTab.id });
-          state.profile = null;
-          state.profileStatus = "error";
-          state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-        } else {
-          if (response.status === "unsupported") {
-            state.profile = null;
-            state.profileStatus = "unsupported";
-            state.profileStatusMessage =
-              response.message || "Cette page LinkedIn Recruiter n’est pas encore supportée pour l’aperçu de profil.";
-          } else {
-            state.profile = response?.profile || null;
-            state.profileStatus = response?.status || (state.profile ? "ready" : "error");
-            if (response?.message) state.profileStatusMessage = response.message;
-            if (state.profileStatus === "ready") state.profileStatusMessage = "";
-            if (state.profileStatus === "error" && !state.profileStatusMessage) {
-              state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-            }
-          }
-        }
-        renderProfileCard(state.profile);
+    const { response: initialResponse, error: initialError } = await requestProfileFromTab(activeTab.id);
+
+    let response = initialResponse;
+    let requestError = initialError;
+
+    const needsInjection =
+      requestError && /Receiving end does not exist/i.test(requestError?.message || requestError?.toString() || "");
+
+    if (needsInjection) {
+      debugLog("POPUP_PROFILE_RETRY", { tabId: activeTab.id, reason: requestError?.message });
+      const injected = await ensureProfileScripts(activeTab.id);
+      if (injected) {
+        const retry = await requestProfileFromTab(activeTab.id);
+        response = retry.response;
+        requestError = retry.error;
       }
-    );
+    }
+
+    if (requestError) {
+      console.warn("[Focals][POPUP] No profile data:", requestError.message || String(requestError));
+      state.profile = null;
+      state.profileStatus = "error";
+      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+    } else if (!response) {
+      debugLog("POPUP_PROFILE_NO_RESPONSE", { tabId: activeTab.id });
+      state.profile = null;
+      state.profileStatus = "error";
+      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+    } else {
+      if (response.status === "unsupported") {
+        state.profile = null;
+        state.profileStatus = "unsupported";
+        state.profileStatusMessage =
+          response.message || "Cette page LinkedIn Recruiter n’est pas encore supportée pour l’aperçu de profil.";
+      } else {
+        state.profile = response?.profile || null;
+        state.profileStatus = response?.status || (state.profile ? "ready" : "error");
+        if (response?.message) state.profileStatusMessage = response.message;
+        if (state.profileStatus === "ready") state.profileStatusMessage = "";
+        if (state.profileStatus === "error" && !state.profileStatusMessage) {
+          state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+        }
+      }
+    }
+
+    renderProfileCard(state.profile);
   } catch (err) {
     console.error("[Focals][POPUP] Profil indisponible", err);
     state.profile = null;

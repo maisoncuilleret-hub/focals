@@ -674,19 +674,11 @@
             return;
           }
 
-          const linkedinProfileCandidate =
-            profileResolution.linkedinProfile ||
-            profileResolution.cachedProfile ||
-            null;
+          const linkedinProfileCandidate = profileResolution.cachedProfile || null;
           const hasValidProfile =
             linkedinProfileCandidate &&
-            ((Array.isArray(linkedinProfileCandidate.experiences) &&
-              linkedinProfileCandidate.experiences.length > 0) ||
-              linkedinProfileCandidate.headline ||
-              linkedinProfileCandidate.current_title ||
-              linkedinProfileCandidate.current_company ||
-              linkedinProfileCandidate.url ||
-              linkedinProfileCandidate.currentRole);
+            Array.isArray(linkedinProfileCandidate.experiences) &&
+            linkedinProfileCandidate.experiences.length > 0;
 
           payloadContext = {
             ...baseContext,
@@ -694,39 +686,16 @@
           };
 
           if (hasValidProfile) {
-            const normalizedLinkedinProfile =
-              profileResolution.linkedinProfile ||
-              buildLinkedinProfileContext(
-                linkedinProfileCandidate,
-                profileResolution.candidateProfileUrl || null
-              );
-
-            if (
-              normalizedLinkedinProfile &&
-              !normalizedLinkedinProfile.url &&
-              profileResolution.candidateProfileUrl
-            ) {
-              normalizedLinkedinProfile.url = profileResolution.candidateProfileUrl;
+            if (!linkedinProfileCandidate.linkedin_url && profileResolution.candidateProfileUrl) {
+              linkedinProfileCandidate.linkedin_url = profileResolution.candidateProfileUrl;
             }
-
-            payloadContext.linkedinProfile =
-              normalizedLinkedinProfile || linkedinProfileCandidate;
+            payloadContext.linkedinProfile = linkedinProfileCandidate;
             console.log("[Focals][MSG] Attaching linkedinProfile to context", {
-              url:
-                normalizedLinkedinProfile?.url ||
-                linkedinProfileCandidate.linkedin_url ||
-                linkedinProfileCandidate.url,
-              name:
-                linkedinProfileCandidate.name || normalizedLinkedinProfile?.name,
-              currentTitle:
-                linkedinProfileCandidate.current_title ||
-                normalizedLinkedinProfile?.currentRole?.title,
-              currentCompany:
-                linkedinProfileCandidate.current_company ||
-                normalizedLinkedinProfile?.currentRole?.company,
-              experiencesCount:
-                (normalizedLinkedinProfile?.experiences || linkedinProfileCandidate.experiences || [])
-                  .length,
+              url: linkedinProfileCandidate.linkedin_url,
+              name: linkedinProfileCandidate.name,
+              currentTitle: linkedinProfileCandidate.current_title,
+              currentCompany: linkedinProfileCandidate.current_company,
+              experiencesCount: linkedinProfileCandidate.experiences.length,
             });
           } else {
             console.warn(
