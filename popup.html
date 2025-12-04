@@ -55,23 +55,6 @@
     </div>
     <div class="muted" id="profileStatus" style="margin-top:6px;"></div>
 
-    <div class="section" style="margin-top:10px;">
-      <h2 style="margin-top:0">Relance personnalisée</h2>
-      <label for="followupContext">Contexte de relance</label>
-      <select id="followupContext">
-        <option value="premiere_relance">1ère relance après premier message</option>
-        <option value="apres_call">Relance après un call</option>
-        <option value="sans_reponse">Relance après absence de réponse</option>
-        <option value="autre">Autre (personnaliser)</option>
-      </select>
-      <input id="followupContextCustom" type="text" placeholder="Précisez le contexte" style="display:none; margin-top:8px;" />
-      <div class="row" style="margin-top:10px; gap:8px; align-items:center;">
-        <button id="generateFollowup" style="flex:1">Générer une relance personnalisée</button>
-        <button id="copyFollowup" class="secondary" style="flex:0 0 auto;">Copier</button>
-      </div>
-      <div id="followupError" class="muted" style="color:#fca5a5; margin-top:6px;"></div>
-      <textarea id="followupResult" readonly placeholder="Le message généré s'affichera ici" style="margin-top:8px;"></textarea>
-    </div>
   </div>
 
   <div id="settingsView" style="display:none;">
