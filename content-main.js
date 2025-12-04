@@ -112,6 +112,14 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   };
   const PROFILE_STORAGE_KEY = "FOCALS_LAST_PROFILE";
 
+  function getLastScrapedProfile() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get([PROFILE_STORAGE_KEY], (result) => {
+        resolve(result?.[PROFILE_STORAGE_KEY] || null);
+      });
+    });
+  }
+
   let lastScrapedProfile = null;
   let lastProfileUrl = null;
   let profileStatus = "idle";
@@ -514,6 +522,10 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
   const linkedinScraper = window.__FocalsLinkedinScraper || {};
 
+  function hasInlineRecruiterProfileCard() {
+    return !!document.querySelector("section.artdeco-card.pv-profile-card");
+  }
+
   const detectedMode = linkedinScraper.isPipelineProfile?.()
     ? "recruiter_pipeline"
     : linkedinScraper.isRecruiterProfile?.()
@@ -776,22 +788,22 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
     const experiences = [];
     if (experienceSection) {
-      const listItems = Array.from(experienceSection.querySelectorAll("ul li"));
-      let firstEntity = null;
-      for (const item of listItems) {
-        const entity = item.querySelector("[data-view-name='profile-component-entity']");
-        if (entity) {
-          firstEntity = entity;
-          break;
-        }
-      }
-      if (!firstEntity) {
-        firstEntity = experienceSection.querySelector("[data-view-name='profile-component-entity']");
-      }
+      const entityNodes = Array.from(
+        experienceSection.querySelectorAll("div[data-view-name='profile-component-entity']")
+      ).slice(0, 6);
 
+      const firstEntity = entityNodes[0] || null;
       if (firstEntity) {
-        const roleText = pickTextFrom(firstEntity, [".t-bold span[aria-hidden='true']", ".t-bold"]);
-        const companyText = pickTextFrom(firstEntity, [".t-14.t-normal span[aria-hidden='true']", ".t-14.t-normal"]);
+        const roleText = pickTextFrom(firstEntity, [
+          ".hoverable-link-text.t-bold span[aria-hidden='true']",
+          ".hoverable-link-text.t-bold",
+          ".t-bold span[aria-hidden='true']",
+          ".t-bold",
+        ]);
+        const companyText = pickTextFrom(firstEntity, [
+          ".t-14.t-normal span[aria-hidden='true']",
+          ".t-14.t-normal",
+        ]);
         if (roleText) current_title = normalizeText(roleText);
         if (companyText) {
           const parsed = parseCompanyAndContract(companyText);
@@ -800,21 +812,34 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         }
       }
 
-      const maxExperiences = 5;
-      for (const item of listItems.slice(0, maxExperiences)) {
-        const entity =
-          item.querySelector("[data-view-name='profile-component-entity']") ||
-          item.querySelector("article") ||
-          item;
-
+      entityNodes.forEach((entity) => {
         const title = normalizeText(
-          pickTextFrom(entity, [".t-bold span[aria-hidden='true']", ".t-bold", "strong"]) || ""
+          pickTextFrom(entity, [
+            ".hoverable-link-text.t-bold span[aria-hidden='true']",
+            ".hoverable-link-text.t-bold",
+            ".t-bold span[aria-hidden='true']",
+            ".t-bold",
+          ]) || ""
         );
-        const company = normalizeText(
-          pickTextFrom(entity, [".t-14.t-normal span[aria-hidden='true']", ".t-14.t-normal"]) || ""
-        );
+        const companyText = pickTextFrom(entity, [
+          ".t-14.t-normal span[aria-hidden='true']",
+          ".t-14.t-normal",
+        ]);
+        let company = normalizeText(companyText || "");
+        if (!company) {
+          const parentCompany = pickTextFrom(entity.closest("li.artdeco-list__item, li"), [
+            ".t-14.t-normal span[aria-hidden='true']",
+            ".t-14.t-normal",
+          ]);
+          company = normalizeText(parentCompany || "");
+        }
+
         const dateText = normalizeText(
-          pickTextFrom(entity, [".t-14.t-normal.t-black--light", ".t-12.t-black--light"])
+          pickTextFrom(entity, [
+            ".t-14.t-normal.t-black--light .pvs-entity__caption-wrapper span[aria-hidden='true']",
+            ".t-14.t-normal.t-black--light span[aria-hidden='true']",
+            ".t-14.t-normal.t-black--light",
+          ]) || ""
         );
 
         let start = "";
@@ -833,7 +858,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
             end: end || "",
           });
         }
-      }
+      });
     }
 
     if (!current_title) {
@@ -861,10 +886,139 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     lastProfileUrl = window.location.href;
     debugLog("PROFILE_SCRAPED", profile);
     try {
-      chrome.storage.local.set({ [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 5) } });
+      chrome.storage.local.set(
+        { [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 6) } },
+        () => {
+          console.log("[Focals][PROFILE] Saved profile", {
+            url: profile.linkedin_url,
+            name: profile.name,
+            currentTitle: profile.current_title,
+            currentCompany: profile.current_company,
+            experiencesCount: profile.experiences.length,
+          });
+        }
+      );
     } catch (err) {
       debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
     }
+    return profile;
+  }
+
+  function scrapeInlineRecruiterProfileFromDom() {
+    const card = document.querySelector("section.artdeco-card.pv-profile-card");
+    if (!card) return null;
+
+    const rawName =
+      pickTextFrom(card, ["h1", ".pv-text-details__left-panel h1", "header h1"]) || "";
+    const name = normalizeText(rawName) || "—";
+    const [firstName, ...restName] = name.split(/\s+/);
+    const lastName = normalizeText(restName.join(" "));
+
+    const headline =
+      pickTextFrom(card, [
+        ".text-body-medium.break-words",
+        ".pv-text-details__left-panel .text-body-medium",
+      ]) || "";
+
+    const experiences = [];
+    const entityNodes = Array.from(
+      card.querySelectorAll("div[data-view-name='profile-component-entity']")
+    ).slice(0, 6);
+
+    let current_title = "";
+    let current_company = "";
+
+    entityNodes.forEach((entity, index) => {
+      const title = normalizeText(
+        pickTextFrom(entity, [
+          ".hoverable-link-text.t-bold span[aria-hidden='true']",
+          ".hoverable-link-text.t-bold",
+          ".t-bold span[aria-hidden='true']",
+          ".t-bold",
+        ]) || ""
+      );
+      const companyText = pickTextFrom(entity, [
+        ".t-14.t-normal span[aria-hidden='true']",
+        ".t-14.t-normal",
+      ]);
+      let company = normalizeText(companyText || "");
+      if (!company) {
+        const parentCompany = pickTextFrom(entity.closest("li.artdeco-list__item, li"), [
+          ".t-14.t-normal span[aria-hidden='true']",
+          ".t-14.t-normal",
+        ]);
+        company = normalizeText(parentCompany || "");
+      }
+
+      const dateText = normalizeText(
+        pickTextFrom(entity, [
+          ".t-14.t-normal.t-black--light .pvs-entity__caption-wrapper span[aria-hidden='true']",
+          ".t-14.t-normal.t-black--light span[aria-hidden='true']",
+          ".t-14.t-normal.t-black--light",
+        ]) || ""
+      );
+
+      let start = "";
+      let end = "";
+      if (dateText && dateText.includes("–")) {
+        const [from, to] = dateText.split("–");
+        start = normalizeText(from || "");
+        end = normalizeText(to || "");
+      }
+
+      if (title || company) {
+        experiences.push({
+          title: title || "",
+          company: company || "",
+          start: start || dateText || "",
+          end: end || "",
+        });
+      }
+
+      if (index === 0) {
+        current_title = title || current_title;
+        current_company = company || current_company;
+      }
+    });
+
+    if (!current_title) {
+      current_title = inferCurrentRole(headline, experiences[0]?.title || "");
+    }
+
+    const profile = {
+      name,
+      firstName: normalizeText(firstName),
+      lastName: lastName || "",
+      headline: normalizeText(headline),
+      current_title: normalizeText(current_title) || "—",
+      current_company: normalizeText(current_company) || "—",
+      contract: "",
+      localisation: "",
+      linkedin_url: window.location.href,
+      profile_slug: "",
+      photo_url: "",
+      experiences,
+    };
+
+    lastScrapedProfile = profile;
+    lastProfileUrl = window.location.href;
+    try {
+      chrome.storage.local.set(
+        { [PROFILE_STORAGE_KEY]: { ...profile, experiences: experiences.slice(0, 6) } },
+        () => {
+          console.log("[Focals][PROFILE] Saved inline recruiter profile", {
+            url: profile.linkedin_url,
+            name: profile.name,
+            currentTitle: profile.current_title,
+            currentCompany: profile.current_company,
+            experiencesCount: profile.experiences.length,
+          });
+        }
+      );
+    } catch (err) {
+      debugLog("PROFILE_CACHE_ERROR", err?.message || String(err));
+    }
+
     return profile;
   }
 
@@ -879,7 +1033,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   ];
 
     async function runProfileScrape(force = false) {
-      if (!isProfilePage()) {
+      if (!isProfilePage() && !hasInlineRecruiterProfileCard()) {
         lastScrapedProfile = null;
         lastProfileUrl = null;
         lastProfileMode = "none";
@@ -914,13 +1068,19 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         ? "pipeline"
         : linkedinScraper.isRecruiterProfile?.()
           ? "recruiter"
-          : "public";
+          : hasInlineRecruiterProfileCard()
+            ? "recruiter_inline"
+            : "public";
       debugLog("PROFILE_SOURCE", { source, url: window.location.href });
       lastProfileMode = source;
 
       let profile = null;
       if (source === "pipeline" && typeof linkedinScraper.scrapeRecruiterPipeline === "function") {
         profile = await linkedinScraper.scrapeRecruiterPipeline({ expectedTotal: 25 });
+      } else if (source === "recruiter" && typeof linkedinScraper.scrapePublicProfile === "function") {
+        profile = linkedinScraper.scrapePublicProfile();
+      } else if (source === "recruiter_inline") {
+        profile = scrapeInlineRecruiterProfileFromDom();
       } else if (typeof linkedinScraper.scrapePublicProfile === "function") {
         profile = linkedinScraper.scrapePublicProfile();
       } else {
@@ -944,8 +1104,8 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     runProfileScrape(force);
   }
 
-  setProfileStatus(isProfilePage() ? "loading" : "idle");
-  if (isProfilePage()) {
+  setProfileStatus(isProfilePage() || hasInlineRecruiterProfileCard() ? "loading" : "idle");
+  if (isProfilePage() || hasInlineRecruiterProfileCard()) {
     triggerProfileScrape(true);
   }
 
@@ -954,7 +1114,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     if (currentHref !== lastHref) {
       debugLog("PROFILE_URL_CHANGED", { from: lastHref, to: currentHref });
       lastHref = currentHref;
-      if (isProfilePage(currentHref)) {
+      if (isProfilePage(currentHref) || hasInlineRecruiterProfileCard()) {
         triggerProfileScrape(true);
       } else {
         lastScrapedProfile = null;

@@ -134,6 +134,8 @@
 
     const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
 
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
     const log = (message, ...args) => {
       if (FOCALS_DEBUG) {
         debugLog("LOG", { message, args });
@@ -258,7 +260,7 @@
       return { candidateProfileUrl, candidateProfileSummary };
     };
 
-    const getCachedProfileFromStorage = () =>
+    const getLastScrapedProfile = () =>
       new Promise((resolve) => {
         try {
           chrome.storage.local.get([PROFILE_STORAGE_KEY], (result) => {
@@ -307,7 +309,7 @@
 
     const resolveLinkedinProfileContext = async (rootElement = document) => {
       const pageProfile = extractCandidateProfileFromPage(rootElement);
-      const cachedProfile = await getCachedProfileFromStorage();
+      const cachedProfile = await getLastScrapedProfile();
       const linkedinProfile = buildLinkedinProfileContext(
         cachedProfile,
         pageProfile?.candidateProfileUrl || null
@@ -315,6 +317,16 @@
 
       return { linkedinProfile, cachedProfile, candidateProfileUrl: pageProfile?.candidateProfileUrl };
     };
+
+    const forceProfileRescrape = () =>
+      new Promise((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: "FOCALS_FORCE_RESCRAPE" }, () => resolve(true));
+        } catch (err) {
+          warn("PROFILE_FORCE_RESCRAPE_ERROR", err?.message || err);
+          resolve(false);
+        }
+      });
 
     const loadUserPreferences = async () => {
       const [syncData, localData] = await Promise.all([
@@ -623,6 +635,10 @@
         const tone = settings?.tone || settings?.default_tone || "warm";
         const language =
           detectLanguageFromMessages(messages, settings.languageFallback || "fr") || "fr";
+        if (generationMode === "followup_personalized") {
+          await forceProfileRescrape();
+          await wait(400);
+        }
         const profileResolution = await resolveLinkedinProfileContext(conversationRoot);
         const candidateName =
           profileResolution.cachedProfile?.firstName ||
@@ -658,22 +674,34 @@
             return;
           }
 
-          const linkedinProfile =
-            profileResolution.linkedinProfile ||
-            buildLinkedinProfileContext(null, profileResolution.candidateProfileUrl || null);
-
-          if (!linkedinProfile?.url) {
-            alert(
-              "❌ Profil LinkedIn introuvable. Ouvre le profil candidat pour personnaliser la relance."
-            );
-            return;
-          }
+          const linkedinProfileCandidate = profileResolution.cachedProfile || null;
+          const hasValidProfile =
+            linkedinProfileCandidate &&
+            Array.isArray(linkedinProfileCandidate.experiences) &&
+            linkedinProfileCandidate.experiences.length > 0;
 
           payloadContext = {
             ...baseContext,
             job: jobContext,
-            linkedinProfile,
           };
+
+          if (hasValidProfile) {
+            if (!linkedinProfileCandidate.linkedin_url && profileResolution.candidateProfileUrl) {
+              linkedinProfileCandidate.linkedin_url = profileResolution.candidateProfileUrl;
+            }
+            payloadContext.linkedinProfile = linkedinProfileCandidate;
+            console.log("[Focals][MSG] Attaching linkedinProfile to context", {
+              url: linkedinProfileCandidate.linkedin_url,
+              name: linkedinProfileCandidate.name,
+              currentTitle: linkedinProfileCandidate.current_title,
+              currentCompany: linkedinProfileCandidate.current_company,
+              experiencesCount: linkedinProfileCandidate.experiences.length,
+            });
+          } else {
+            console.warn(
+              "[Focals][MSG] No usable linkedinProfile found, personalized mode will fall back to classic follow-up"
+            );
+          }
         } else if (generationMode === "prompt_custom") {
           payloadMode = "prompt_reply";
           const trimmed = (customInstructions || "").trim();
