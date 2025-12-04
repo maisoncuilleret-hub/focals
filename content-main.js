@@ -218,11 +218,13 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
       const timeEl = msgEl.querySelector("time");
       const createdAt = timeEl ? timeEl.getAttribute("datetime") : undefined;
+      const timestamp = createdAt || new Date().toISOString();
 
       conversation.messages.push({
         senderType: isFromMe ? "me" : "candidate",
         text,
         createdAt,
+        timestamp,
       });
     });
 
@@ -1141,11 +1143,15 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       ? applyTemplate(selectedTemplate.content, { firstNameInfo, job: selectedJob })
       : null;
 
-    const messagesPayload = allMessages.map((m) => ({
-      senderType: m.fromMe ? "me" : "candidate",
-      text: m.text,
-      createdAt: new Date(m.timestamp || Date.now()).toISOString(),
-    }));
+    const messagesPayload = allMessages.map((m) => {
+      const timestamp = new Date(m.timestamp || Date.now()).toISOString();
+      return {
+        senderType: m.fromMe ? "me" : "candidate",
+        text: m.text,
+        createdAt: timestamp,
+        timestamp,
+      };
+    });
 
     const trimmedInstructions = (customInstructions || "").trim();
     const request = {
@@ -1197,11 +1203,15 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       ? applyTemplate(selectedTemplate.content, { firstNameInfo, job: selectedJob })
       : null;
 
-    const messagesPayload = allMessages.map((m) => ({
-      senderType: m.fromMe ? "me" : "candidate",
-      text: m.text,
-      createdAt: new Date(m.timestamp || Date.now()).toISOString(),
-    }));
+    const messagesPayload = allMessages.map((m) => {
+      const timestamp = new Date(m.timestamp || Date.now()).toISOString();
+      return {
+        senderType: m.fromMe ? "me" : "candidate",
+        text: m.text,
+        createdAt: timestamp,
+        timestamp,
+      };
+    });
 
     const request = {
       userId: await getUserId(),

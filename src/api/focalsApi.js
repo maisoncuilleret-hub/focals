@@ -1,63 +1,86 @@
-import { API_BASE_URL } from './config.js';
+import { API_BASE_URL, IS_DEV } from './config.js';
 
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
 
-async function callFocalsAPI(endpoint, payload) {
-  const res = await fetch(`${API_BASE_URL}/${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+const buildApiUrl = (endpoint = '') => {
+  const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return `${normalizedBase}${normalizedEndpoint}`;
+};
 
-  if (!res.ok) {
-    let errorMessage = `HTTP ${res.status}`;
-    try {
-      const data = await res.json();
-      if (data?.error) errorMessage = data.error;
-    } catch (err) {
-      // ignore JSON parse error
-    }
-    console.error(`[Focals API] ${endpoint} error:`, errorMessage);
-    throw new Error(errorMessage);
+async function postJson(endpoint, payload) {
+  const url = buildApiUrl(endpoint);
+
+  if (IS_DEV) {
+    console.log('[FOCALS][API][REQUEST]', { url, payload });
   }
 
-  return res.json();
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await res.json().catch(() => null) : await res.text();
+
+  if (!res.ok) {
+    const errorDetail = body?.error || body?.message || (typeof body === 'string' && body ? body : '');
+    const message = errorDetail ? `HTTP ${res.status}: ${errorDetail}` : `HTTP ${res.status}`;
+    if (IS_DEV) {
+      console.error('[FOCALS][API][ERROR]', { url, status: res.status, message, payload });
+    }
+    throw new Error(message);
+  }
+
+  if (IS_DEV) {
+    console.log('[FOCALS][API][RESPONSE]', { url, status: res.status });
+  }
+
+  return body;
 }
 
 async function bootstrapUser(userId) {
-  return callFocalsAPI('focals-bootstrap-user', { userId });
+  return postJson('focals-bootstrap-user', { userId });
 }
 
 async function getAllData(userId) {
-  return callFocalsAPI('focals-get-data', { userId });
+  return postJson('focals-get-data', { userId });
 }
 
 async function upsertSettings(userId, partial) {
-  return callFocalsAPI('focals-upsert-settings', { userId, ...partial });
+  const payload = { userId };
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_tone')) {
+    payload.default_tone = partial.default_tone;
+  }
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_job_id')) {
+    payload.default_job_id = partial.default_job_id;
+  }
+  return postJson('focals-upsert-settings', payload);
 }
 
 async function upsertJob(userId, jobInput) {
-  return callFocalsAPI('focals-upsert-job', { userId, job: jobInput });
+  return postJson('focals-upsert-job', { userId, job: jobInput });
 }
 
 async function deleteJob(userId, jobId) {
-  return callFocalsAPI('focals-delete-job', { userId, jobId });
+  return postJson('focals-delete-job', { userId, jobId });
 }
 
 async function upsertTemplate(userId, templateInput) {
-  return callFocalsAPI('focals-upsert-template', { userId, template: templateInput });
+  return postJson('focals-upsert-template', { userId, template: templateInput });
 }
 
 async function deleteTemplate(userId, templateId) {
-  return callFocalsAPI('focals-delete-template', { userId, templateId });
+  return postJson('focals-delete-template', { userId, templateId });
 }
 
 async function generateReply(request) {
-  return callFocalsAPI('focals-generate-reply', request);
+  return postJson('focals-generate-reply', request);
 }
 
 async function generateFollowup(request) {
-  return callFocalsAPI('focals-generate-reply', request);
+  return postJson('focals-generate-reply', request);
 }
 
 async function associateProfile(profile, accessToken, userId) {

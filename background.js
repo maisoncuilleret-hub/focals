@@ -381,8 +381,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: false, error: "mode manquant" });
             return;
           }
-          const conversationMessages =
-            conversation?.messages || (Array.isArray(conversation) ? conversation : []);
+          const normalizeMessage = (msg = {}) => ({
+            text: msg.text || "",
+            senderType: msg.senderType || (msg.fromMe ? "me" : "candidate"),
+            timestamp: msg.timestamp || msg.createdAt || msg.timestampRaw || new Date().toISOString(),
+          });
+
+          const rawMessages = Array.isArray(conversation?.messages)
+            ? conversation.messages
+            : Array.isArray(conversation)
+            ? conversation
+            : [];
+
+          const conversationMessages = rawMessages.map(normalizeMessage).filter((m) => m.text);
 
           if (!conversationMessages.length) {
             console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY", { mode });
@@ -395,10 +406,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
+          const conversationPayload = {
+            messages: conversationMessages,
+          };
+
+          if (conversation?.language) conversationPayload.language = conversation.language;
+          if (conversation?.candidateFirstName)
+            conversationPayload.candidateFirstName = conversation.candidateFirstName;
+
           const payload = {
             userId,
             mode,
-            conversation: conversationMessages,
+            conversation: conversationPayload,
             toneOverride,
             jobId,
             templateId,
@@ -414,28 +433,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             hasPromptReply: !!payload.promptReply,
           });
 
-          const response = await fetch(
-            "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/focals-generate-reply",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(payload),
-            }
-          );
+          const apiResponse = await fetchApi({
+            endpoint: "focals-generate-reply",
+            method: "POST",
+            body: payload,
+          });
 
-          if (!response.ok) {
-            const errorText = await response.text().catch(() => null);
-            console.error("[Focals][BG] focals-generate-reply failed", {
-              status: response.status,
-              errorText,
-            });
-            sendResponse({ success: false, error: "focals-generate-reply failed" });
+          if (!apiResponse.ok) {
+            console.error("[Focals][BG] focals-generate-reply failed", apiResponse);
+            sendResponse({ success: false, error: apiResponse.error || "focals-generate-reply failed" });
             return;
           }
 
-          const data = await response.json();
+          const data = apiResponse.data;
           const replyText =
             data?.reply?.text ||
             (typeof data?.reply === "string" ? data.reply : null) ||

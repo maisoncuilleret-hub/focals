@@ -1,8 +1,8 @@
-import { API_BASE_URL } from './config';
+import { API_BASE_URL, IS_DEV } from './config';
 
 export type ToneType = 'very_formal' | 'professional' | 'warm' | 'direct';
 export type LanguageType = 'fr' | 'en';
-export type ReplyMode = 'initial' | 'followup_soft' | 'followup_strong';
+export type ReplyMode = 'initial' | 'followup_soft' | 'followup_strong' | 'prompt_reply';
 export type SenderType = 'candidate' | 'me' | 'other';
 
 export interface FocalsSettings {
@@ -33,7 +33,8 @@ export interface FocalsTemplate {
 export interface ConversationMessage {
   senderType: SenderType;
   text: string;
-  createdAt: string;
+  timestamp?: string;
+  createdAt?: string;
 }
 
 export interface FocalsBootstrapResponse {
@@ -56,7 +57,7 @@ export interface GenerateReplyRequest {
   conversation: {
     messages: ConversationMessage[];
     candidateFirstName?: string | null;
-    language: LanguageType;
+    language?: LanguageType;
   };
   toneOverride?: ToneType;
   jobId?: string;
@@ -75,41 +76,64 @@ export interface GenerateReplyResponse {
   replyText?: string;
 }
 
-async function callFocalsAPI<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
-  const res = await fetch(`${API_BASE_URL}/${endpoint}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+const buildApiUrl = (endpoint = '') => {
+  const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return `${normalizedBase}${normalizedEndpoint}`;
+};
 
-  if (!res.ok) {
-    let errorMessage = `HTTP ${res.status}`;
-    try {
-      const data = await res.json();
-      if ((data as any)?.error) errorMessage = (data as any).error;
-    } catch (err) {
-      // ignore JSON parse error
-    }
-    console.error(`[Focals API] ${endpoint} error:`, errorMessage);
-    throw new Error(errorMessage);
+async function postJson<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
+  const url = buildApiUrl(endpoint);
+
+  if (IS_DEV) {
+    console.log('[FOCALS][API][REQUEST]', { url, payload });
   }
 
-  return res.json() as Promise<TResponse>;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await res.json().catch(() => null) : await res.text();
+
+  if (!res.ok) {
+    const errorDetail = (body as any)?.error || (body as any)?.message || (typeof body === 'string' && body ? body : '');
+    const message = errorDetail ? `HTTP ${res.status}: ${errorDetail}` : `HTTP ${res.status}`;
+    if (IS_DEV) {
+      console.error('[FOCALS][API][ERROR]', { url, status: res.status, message, payload });
+    }
+    throw new Error(message);
+  }
+
+  if (IS_DEV) {
+    console.log('[FOCALS][API][RESPONSE]', { url, status: res.status });
+  }
+
+  return body as TResponse;
 }
 
 export async function bootstrapUser(userId: string): Promise<FocalsBootstrapResponse> {
-  return callFocalsAPI('focals-bootstrap-user', { userId });
+  return postJson('focals-bootstrap-user', { userId });
 }
 
 export async function getAllData(userId: string): Promise<FocalsGetDataResponse> {
-  return callFocalsAPI('focals-get-data', { userId });
+  return postJson('focals-get-data', { userId });
 }
 
 export async function upsertSettings(
   userId: string,
   partial: Partial<Pick<FocalsSettings, 'default_tone' | 'default_job_id'>>
 ): Promise<FocalsSettings> {
-  return callFocalsAPI('focals-upsert-settings', { userId, ...partial });
+  const payload: Record<string, unknown> = { userId };
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_tone')) {
+    payload.default_tone = partial.default_tone;
+  }
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_job_id')) {
+    payload.default_job_id = partial.default_job_id;
+  }
+  return postJson('focals-upsert-settings', payload);
 }
 
 export async function upsertJob(
@@ -124,31 +148,30 @@ export async function upsertJob(
     is_default?: boolean;
   }
 ): Promise<FocalsJob> {
-  return callFocalsAPI('focals-upsert-job', { userId, job: jobInput });
+  return postJson('focals-upsert-job', { userId, job: jobInput });
 }
 
 export async function deleteJob(userId: string, jobId: string): Promise<{ success: true }> {
-  return callFocalsAPI('focals-delete-job', { userId, jobId });
+  return postJson('focals-delete-job', { userId, jobId });
 }
 
 export async function upsertTemplate(
   userId: string,
   templateInput: { id?: string; label: string; language: LanguageType; content: string }
 ): Promise<FocalsTemplate> {
-  return callFocalsAPI('focals-upsert-template', { userId, template: templateInput });
+  return postJson('focals-upsert-template', { userId, template: templateInput });
 }
 
 export async function deleteTemplate(
   userId: string,
   templateId: string
 ): Promise<{ success: true }> {
-  return callFocalsAPI('focals-delete-template', { userId, templateId });
+  return postJson('focals-delete-template', { userId, templateId });
 }
 
 export async function generateReply(request: GenerateReplyRequest): Promise<GenerateReplyResponse> {
-  return callFocalsAPI('focals-generate-reply', request);
+  return postJson('focals-generate-reply', request);
 }
 
-export const __private = { callFocalsAPI, API_BASE_URL };
-import { API_BASE_URL } from './config';
+export const __private = { postJson, API_BASE_URL };
 
