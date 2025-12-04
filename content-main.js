@@ -21,9 +21,9 @@
     }
   }
 
-  function extractMemberIdFromProfile() {
+  function extractMemberIdFromProfile(targetUrl) {
     try {
-      const url = window.location.href;
+      const url = targetUrl || window.location.href;
       const match = url.match(/linkedin\.com\/in\/([^\/?#]+)/);
       if (match && match[1]) {
         try {
