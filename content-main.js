@@ -834,7 +834,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           company = normalizeText(parentCompany || "");
         }
 
-        const dateText = normalizeText(
+        const metadataText = normalizeText(
           pickTextFrom(entity, [
             ".t-14.t-normal.t-black--light .pvs-entity__caption-wrapper span[aria-hidden='true']",
             ".t-14.t-normal.t-black--light span[aria-hidden='true']",
@@ -842,10 +842,19 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           ]) || ""
         );
 
+        let dateText = metadataText;
+        let location = "";
+        if (metadataText.includes("·")) {
+          const [maybeDates, ...rest] = metadataText.split("·").map(normalizeText);
+          dateText = maybeDates;
+          location = rest.filter(Boolean).join(" · ");
+        }
+
         let start = "";
         let end = "";
-        if (dateText && dateText.includes("–")) {
-          const [from, to] = dateText.split("–");
+        const rangeSeparator = dateText.includes("–") ? "–" : dateText.includes("-") ? "-" : null;
+        if (dateText && rangeSeparator) {
+          const [from, to] = dateText.split(rangeSeparator);
           start = normalizeText(from || "");
           end = normalizeText(to || "");
         }
@@ -856,6 +865,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
             company: company || "",
             start: start || dateText || "",
             end: end || "",
+            location,
           });
         }
       });
@@ -950,7 +960,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         company = normalizeText(parentCompany || "");
       }
 
-      const dateText = normalizeText(
+      const metadataText = normalizeText(
         pickTextFrom(entity, [
           ".t-14.t-normal.t-black--light .pvs-entity__caption-wrapper span[aria-hidden='true']",
           ".t-14.t-normal.t-black--light span[aria-hidden='true']",
@@ -958,10 +968,19 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         ]) || ""
       );
 
+      let dateText = metadataText;
+      let location = "";
+      if (metadataText.includes("·")) {
+        const [maybeDates, ...rest] = metadataText.split("·").map(normalizeText);
+        dateText = maybeDates;
+        location = rest.filter(Boolean).join(" · ");
+      }
+
       let start = "";
       let end = "";
-      if (dateText && dateText.includes("–")) {
-        const [from, to] = dateText.split("–");
+      const rangeSeparator = dateText.includes("–") ? "–" : dateText.includes("-") ? "-" : null;
+      if (dateText && rangeSeparator) {
+        const [from, to] = dateText.split(rangeSeparator);
         start = normalizeText(from || "");
         end = normalizeText(to || "");
       }
@@ -972,6 +991,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           company: company || "",
           start: start || dateText || "",
           end: end || "",
+          location,
         });
       }
 

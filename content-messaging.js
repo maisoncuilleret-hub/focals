@@ -667,23 +667,25 @@
           }
         } else if (generationMode === "followup_personalized") {
           payloadMode = "followup_soft";
-          if (!jobContext) {
-            alert(
-              "❌ Aucune fiche de poste sélectionnée. Choisis un job dans les paramètres Focals."
-            );
-            return;
-          }
 
           const linkedinProfileCandidate = profileResolution.cachedProfile || null;
-          const hasValidProfile =
+          const hasValidProfile = !!(
             linkedinProfileCandidate &&
-            Array.isArray(linkedinProfileCandidate.experiences) &&
-            linkedinProfileCandidate.experiences.length > 0;
+            (
+              (Array.isArray(linkedinProfileCandidate.experiences) &&
+                linkedinProfileCandidate.experiences.length > 0) ||
+              linkedinProfileCandidate.current_title ||
+              linkedinProfileCandidate.current_company ||
+              linkedinProfileCandidate.headline
+            )
+          );
 
           payloadContext = {
             ...baseContext,
-            job: jobContext,
           };
+          if (jobContext) {
+            payloadContext.job = jobContext;
+          }
 
           if (hasValidProfile) {
             if (!linkedinProfileCandidate.linkedin_url && profileResolution.candidateProfileUrl) {
@@ -695,7 +697,7 @@
               name: linkedinProfileCandidate.name,
               currentTitle: linkedinProfileCandidate.current_title,
               currentCompany: linkedinProfileCandidate.current_company,
-              experiencesCount: linkedinProfileCandidate.experiences.length,
+              experiencesCount: linkedinProfileCandidate.experiences?.length || 0,
             });
           } else {
             console.warn(
