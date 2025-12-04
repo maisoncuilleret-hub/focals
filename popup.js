@@ -81,10 +81,24 @@ let state = {
   profileStatusMessage: "",
   activeTab: "profile",
   supabaseSession: null,
+  followup: {
+    context: "premiere_relance",
+    customContext: "",
+    result: "",
+    error: "",
+    loading: false,
+  },
 };
 
 let editingTemplateId = null;
 let editingJobId = null;
+
+const FOLLOWUP_CONTEXT_LABELS = {
+  premiere_relance: "1ère relance après premier message sans réponse",
+  apres_call: "Relance après un call",
+  sans_reponse: "Relance après absence de réponse",
+  autre: "Autre",
+};
 
 function setStatus(message) {
   const el = document.getElementById("status");
@@ -237,6 +251,141 @@ function renderProfileCard(profile) {
     chips.appendChild(firstChip);
   }
   info.appendChild(chips);
+}
+
+function getActiveJob() {
+  const selectedId = state.selectedJob || state.settings?.default_job_id || null;
+  if (selectedId) {
+    const selected = (state.jobs || []).find((job) => job.id === selectedId);
+    if (selected) return selected;
+  }
+  return Array.isArray(state.jobs) && state.jobs.length > 0 ? state.jobs[0] : null;
+}
+
+function renderFollowupUI() {
+  const contextSelect = document.getElementById("followupContext");
+  const customInput = document.getElementById("followupContextCustom");
+  const resultArea = document.getElementById("followupResult");
+  const errorArea = document.getElementById("followupError");
+  const generateBtn = document.getElementById("generateFollowup");
+  const copyBtn = document.getElementById("copyFollowup");
+
+  if (contextSelect) {
+    contextSelect.value = state.followup.context;
+  }
+  if (customInput) {
+    customInput.style.display = state.followup.context === "autre" ? "block" : "none";
+    customInput.value = state.followup.customContext || "";
+  }
+  if (resultArea) {
+    resultArea.value = state.followup.result || "";
+  }
+  if (errorArea) {
+    errorArea.textContent = state.followup.error || "";
+  }
+  if (generateBtn) {
+    generateBtn.disabled = state.followup.loading;
+    generateBtn.textContent = state.followup.loading ? "Génération..." : "Générer une relance personnalisée";
+  }
+  if (copyBtn) {
+    copyBtn.disabled = !state.followup.result;
+  }
+}
+
+function resolveFollowupContext() {
+  if (state.followup.context === "autre") {
+    return state.followup.customContext?.trim() || FOLLOWUP_CONTEXT_LABELS.autre;
+  }
+  return FOLLOWUP_CONTEXT_LABELS[state.followup.context] || state.followup.context;
+}
+
+async function handleGenerateFollowup() {
+  if (state.followup.loading) return;
+  if (!state.profile) {
+    state.followup.error =
+      "Aucun profil LinkedIn détecté. Ouvrez un profil LinkedIn compatible puis réessayez.";
+    renderFollowupUI();
+    return;
+  }
+
+  const job = getActiveJob();
+  if (!job) {
+    state.followup.error = "Aucun job disponible. Ajoutez ou sélectionnez un job dans les paramètres.";
+    renderFollowupUI();
+    return;
+  }
+
+  const context = resolveFollowupContext();
+  state.followup.loading = true;
+  state.followup.error = "";
+  state.followup.result = "";
+  renderFollowupUI();
+
+  try {
+    const userId = state.userId || (await getOrCreateUserId());
+    const response = await apiModule.generateFollowup({
+      userId,
+      linkedinProfile: state.profile,
+      job,
+      context,
+    });
+
+    const replyText =
+      response?.message ||
+      response?.text ||
+      response?.followup ||
+      response?.replyText ||
+      response?.reply?.text ||
+      "";
+
+    state.followup.result = replyText;
+    if (!replyText) {
+      state.followup.error = "Réponse vide renvoyée par le backend.";
+    }
+  } catch (err) {
+    state.followup.error = err?.message || "Impossible de générer la relance.";
+  } finally {
+    state.followup.loading = false;
+    renderFollowupUI();
+  }
+}
+
+async function handleCopyFollowup() {
+  if (!state.followup.result) return;
+  try {
+    await navigator.clipboard.writeText(state.followup.result);
+    setStatus("Message copié dans le presse-papiers");
+  } catch (err) {
+    setStatus("Impossible de copier le message");
+  }
+}
+
+function setupFollowup() {
+  const contextSelect = document.getElementById("followupContext");
+  const customInput = document.getElementById("followupContextCustom");
+  const generateBtn = document.getElementById("generateFollowup");
+  const copyBtn = document.getElementById("copyFollowup");
+
+  if (contextSelect) {
+    contextSelect.addEventListener("change", (e) => {
+      state.followup.context = e.target.value;
+      if (state.followup.context !== "autre") {
+        state.followup.customContext = "";
+      }
+      renderFollowupUI();
+    });
+  }
+
+  if (customInput) {
+    customInput.addEventListener("input", (e) => {
+      state.followup.customContext = e.target.value;
+    });
+  }
+
+  if (generateBtn) generateBtn.addEventListener("click", () => handleGenerateFollowup());
+  if (copyBtn) copyBtn.addEventListener("click", () => handleCopyFollowup());
+
+  renderFollowupUI();
 }
 
 function renderTemplates() {
@@ -443,6 +592,7 @@ async function loadState() {
     renderTone();
     renderTemplates();
     renderJobs();
+    renderFollowupUI();
     const apiInput = document.getElementById("apiKey");
     if (apiInput) apiInput.value = state.apiKey || "";
   } catch (err) {
@@ -788,6 +938,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupApiKey();
   setupTabs();
   setupProfileActions();
+  setupFollowup();
   await refreshProfileFromTab();
   await loadSupabaseSession();
   debugLog("POPUP_READY", state);

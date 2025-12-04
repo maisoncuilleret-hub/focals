@@ -56,6 +56,10 @@ async function generateReply(request) {
   return callFocalsAPI('focals-generate-reply', request);
 }
 
+async function generateFollowup(request) {
+  return callFocalsAPI('focals-generate-followup', request);
+}
+
 async function associateProfile(profile, accessToken, userId) {
   const res = await fetch(`${FOCALS_APP_BASE}/api/associate-profile`, {
     method: 'POST',
@@ -83,5 +87,6 @@ export {
   upsertTemplate,
   deleteTemplate,
   generateReply,
+  generateFollowup,
   associateProfile,
 };
