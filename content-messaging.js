@@ -209,17 +209,32 @@
       return "";
     };
 
-    const buildFollowUpContext = (messages = [], job = null, preference = "next_steps") => {
-      const lastUserMessage = messages.filter((m) => !m.fromMe).slice(-1)[0];
-      const highlight = lastUserMessage ? lastUserMessage.text.slice(0, 240) : "";
-
+    const buildJobContext = (job) => {
+      if (!job) return null;
       return {
-        preference,
-        highlight,
-        jobTitle: job?.title || "",
-        jobDescription: job?.description || "",
-        jobKeywords: job?.keywords || [],
+        title: job.title || job.label || job.id || "",
+        description: job.raw_description || job.summary || job.description || "",
+        keywords: Array.isArray(job.keywords) ? job.keywords : [],
       };
+    };
+
+    const extractCandidateProfileFromPage = (rootElement = document) => {
+      const urlFromLocation = /linkedin\.com\/in\//i.test(window.location.href)
+        ? window.location.href.split(/[?#]/)[0]
+        : null;
+
+      const profileAnchor =
+        rootElement.querySelector("a[href*='/in/']") ||
+        document.querySelector("a[href*='/in/']");
+
+      const candidateProfileUrl =
+        profileAnchor?.href?.split(/[?#]/)[0] || urlFromLocation || null;
+
+      const candidateProfileSummary = null;
+
+      debugLog("PROFILE_RESOLVE", { candidateProfileUrl, hasAnchor: !!profileAnchor });
+
+      return { candidateProfileUrl, candidateProfileSummary };
     };
 
     const loadUserPreferences = async () => {
@@ -397,70 +412,25 @@
 
     const generateReplyFromAPI = async (
       messages,
-      {
-        settings = DEFAULT_SETTINGS,
-        template,
-        job,
-        conversationName = "",
-        candidateName = "",
-        followUp,
-        customInstructions,
-        mode = "auto",
-      } = {}
+      { mode = "auto", context = {}, customInstructions = null } = {}
     ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
         return null;
       }
 
-      log(`PIPELINE api_call: about to call generate-reply`);
-      log(`PIPELINE api_call: start (${messages.length} messages)`);
-
-      const trimmedInstructions = (customInstructions || "").trim();
-      let userId;
-
-      try {
-        userId = await getOrCreateUserId();
-      } catch (err) {
-        error("PIPELINE api_call: unable to resolve userId", err);
-        return null;
-      }
-
-      const conversationMessages = messages.map((msg) => ({
-        text: msg.text,
-        senderType: msg.fromMe ? "me" : "candidate",
-        timestamp: msg.timestampRaw || new Date().toISOString(),
-      }));
-
-      const resolvedMode =
-        mode === "prompt" || mode === "prompt_reply"
-          ? "prompt_reply"
-          : mode === "followup_strong"
-          ? "followup_strong"
-          : mode === "initial"
-          ? "initial"
-          : "followup_soft";
-
-      const conversationPayload = {
-        messages: conversationMessages,
-      };
-
-      if (settings.languageFallback) conversationPayload.language = settings.languageFallback;
-      const candidateFirstName = (candidateName || "").split(/\s+/)[0] || null;
-      if (candidateFirstName) conversationPayload.candidateFirstName = candidateFirstName;
-
       const payload = {
-        userId,
-        mode: resolvedMode,
-        conversation: conversationPayload,
-        toneOverride: settings.tone,
-        jobId: job?.id,
-        templateId: template?.id,
+        mode,
+        messages: messages.map((msg) => ({
+          text: msg.text,
+          fromMe: !!msg.fromMe,
+          timestampRaw: msg.timestampRaw || new Date().toISOString(),
+        })),
+        context,
+        customInstructions: customInstructions || null,
       };
 
-      if (resolvedMode === "prompt_reply" && trimmedInstructions) {
-        payload.promptReply = trimmedInstructions;
-      }
+      log("PIPELINE api_call: prepared payload", payload);
 
       try {
         const data = await sendApiRequest({
@@ -469,11 +439,9 @@
           body: payload,
         });
 
-        const replyText =
-          data?.reply?.text ||
-          (typeof data?.reply === "string" ? data.reply : null) ||
-          data?.replyText;
+        debugLog("GENERATE_REPLY_RESPONSE", data);
 
+        const replyText = data?.replyText || data?.reply?.text || null;
         const replyPresent = !!replyText;
         log(`PIPELINE api_call: reply present = ${replyPresent}`);
 
@@ -548,7 +516,7 @@
       composer,
       conversationName = "Unknown conversation",
       editorIndex,
-      mode = "auto",
+      generationMode = "auto",
       customInstructions,
     } = {}) => {
       try {
@@ -572,20 +540,78 @@
           return;
         }
 
-        const { settings, activeTemplate, activeJob } = await loadUserPreferences();
-        const language = detectLanguageFromMessages(messages, settings.languageFallback);
+        const { settings, activeJob } = await loadUserPreferences();
+        const tone = settings?.tone || settings?.default_tone || "warm";
+        const language = detectLanguageFromMessages(
+          messages,
+          settings.languageFallback || "fr"
+        );
         const candidateName = detectCandidateName(conversationName, messages);
-        const followUp = buildFollowUpContext(messages, activeJob, settings.followUpPreference);
+        const jobContext = buildJobContext(activeJob);
+        const profileContext = extractCandidateProfileFromPage(conversationRoot);
+
+        const baseContext = {
+          language,
+          tone,
+        };
+
+        if (candidateName) {
+          baseContext.candidateName = candidateName;
+        }
+
+        if (jobContext) {
+          baseContext.job = jobContext;
+        }
+
+        let payloadMode = "auto";
+        let payloadContext = { ...baseContext };
+        let instructionsToSend = null;
+
+        if (generationMode === "followup_classic") {
+          payloadMode = "followup_soft";
+        } else if (generationMode === "followup_profile") {
+          payloadMode = "followup_soft";
+          if (!profileContext.candidateProfileUrl) {
+            alert(
+              "❌ Impossible de trouver l'URL du profil LinkedIn pour personnaliser la relance. Ouvrez le profil ou réessayez depuis la conversation."
+            );
+            return;
+          }
+          payloadContext = {
+            ...baseContext,
+            candidateProfileUrl: profileContext.candidateProfileUrl,
+            candidateProfileSummary: profileContext.candidateProfileSummary || null,
+          };
+          instructionsToSend =
+            "Personnalise la relance en t'appuyant sur le profil LinkedIn fourni dans candidateProfileUrl et candidateProfileSummary, et sur la fiche de poste.";
+        } else if (generationMode === "prompt_custom") {
+          payloadMode = "prompt_reply";
+          const trimmed = (customInstructions || "").trim();
+          if (!trimmed) {
+            alert("❌ Ajoutez des instructions personnalisées avant de générer.");
+            return;
+          }
+          payloadContext = {
+            ...baseContext,
+            candidateProfileUrl: profileContext.candidateProfileUrl || null,
+            candidateProfileSummary: profileContext.candidateProfileSummary || null,
+          };
+          instructionsToSend = trimmed;
+        }
+
+        console.log("[Focals][MSG] generate payload context", {
+          mode: payloadMode,
+          context: payloadContext,
+        });
 
         const reply = await generateReplyFromAPI(messages, {
-          settings: { ...settings, languageFallback: language },
-          template: activeTemplate,
-          job: activeJob,
-          conversationName,
-          candidateName,
-          followUp,
-          customInstructions,
-          mode,
+          mode: payloadMode,
+          context: payloadContext,
+          customInstructions: instructionsToSend,
+        });
+        console.log("[Focals][MSG] Réponse reçue", {
+          hasReply: !!reply,
+          mode: payloadMode,
         });
         if (!reply) {
           warn(`PIPELINE api_call: reply missing, aborting`);
@@ -674,47 +700,59 @@
         const popover = document.createElement("div");
         popover.style.display = "none";
         popover.style.flexDirection = "column";
-        popover.style.gap = "10px";
+        popover.style.gap = "12px";
         popover.style.position = "absolute";
         popover.style.bottom = "48px";
         popover.style.right = "0";
-        popover.style.width = "340px";
+        popover.style.width = "360px";
         popover.style.background = "#ffffff";
         popover.style.border = "1px solid #d0d0d0";
-        popover.style.borderRadius = "8px";
+        popover.style.borderRadius = "10px";
         popover.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.12)";
         popover.style.padding = "14px";
         popover.style.zIndex = "2147483647";
 
+        const closeButton = document.createElement("button");
+        closeButton.textContent = "×";
+        closeButton.setAttribute("aria-label", "Fermer la modale Focals");
+        closeButton.style.position = "absolute";
+        closeButton.style.top = "8px";
+        closeButton.style.right = "8px";
+        closeButton.style.border = "none";
+        closeButton.style.background = "transparent";
+        closeButton.style.fontSize = "18px";
+        closeButton.style.cursor = "pointer";
+
         const replyState = {
-          replyMode: "initial",
+          selectedMode: null,
           promptReply: "",
           isPanelOpen: false,
         };
 
         const popoverTitle = document.createElement("div");
-        popoverTitle.textContent = "Mode de réponse IA";
+        popoverTitle.textContent = "Mode de relance IA";
         popoverTitle.style.fontSize = "14px";
         popoverTitle.style.fontWeight = "600";
         popoverTitle.style.color = "#111827";
 
         const popoverDescription = document.createElement("div");
-        popoverDescription.textContent =
-          "Choisissez le type de réponse à générer puis, si besoin, donnez des instructions à l’IA.";
+        popoverDescription.textContent = "Choisissez le type de relance à générer.";
         popoverDescription.style.fontSize = "12px";
         popoverDescription.style.color = "#4b5563";
         popoverDescription.style.lineHeight = "1.4";
 
         const modesContainer = document.createElement("div");
-        modesContainer.style.display = "grid";
-        modesContainer.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+        modesContainer.style.display = "flex";
+        modesContainer.style.flexDirection = "column";
         modesContainer.style.gap = "8px";
 
         const modes = [
-          { label: "Initial", value: "initial" },
-          { label: "Relance douce", value: "followup_soft" },
-          { label: "Relance forte", value: "followup_strong" },
-          { label: "Prompt personnalisé", value: "prompt_reply" },
+          { label: "Relance classique", value: "followup_classic" },
+          {
+            label: "Relance personnalisée (profil LinkedIn)",
+            value: "followup_profile",
+          },
+          { label: "Prompt personnalisé", value: "prompt_custom" },
         ];
 
         const modeButtons = [];
@@ -723,17 +761,19 @@
           const modeButton = document.createElement("button");
           modeButton.textContent = label;
           modeButton.dataset.value = value;
-          modeButton.style.padding = "8px 10px";
+          modeButton.style.padding = "12px";
           modeButton.style.border = "1px solid #d0d0d0";
-          modeButton.style.borderRadius = "999px";
+          modeButton.style.borderRadius = "12px";
           modeButton.style.background = "#f3f3f3";
           modeButton.style.cursor = "pointer";
           modeButton.style.fontSize = "13px";
-          modeButton.style.color = "#333";
-          modeButton.style.transition = "background 0.15s ease";
+          modeButton.style.color = "#111827";
+          modeButton.style.fontWeight = "700";
+          modeButton.style.textAlign = "left";
 
           modeButton.addEventListener("click", () => {
-            replyState.replyMode = value;
+            replyState.selectedMode = value;
+            console.log("[Focals][MSG] Mode sélectionné", value);
             syncUI();
           });
 
@@ -747,14 +787,12 @@
         instructionsBlock.style.gap = "6px";
 
         const promptLabel = document.createElement("label");
-        promptLabel.textContent =
-          "Instructions personnalisées pour guider la réponse";
+        promptLabel.textContent = "Instructions personnalisées";
         promptLabel.style.fontSize = "12px";
         promptLabel.style.color = "#4b5563";
 
         const promptInput = document.createElement("textarea");
-        promptInput.placeholder =
-          "Ex : réponds en 3 phrases maximum, propose un call cette semaine, garde un ton chaleureux et concret.";
+        promptInput.placeholder = "Donne des instructions précises à l’IA…";
         promptInput.maxLength = 500;
         promptInput.style.width = "100%";
         promptInput.style.minHeight = "96px";
@@ -788,17 +826,19 @@
 
         const syncUI = () => {
           modeButtons.forEach((btn) => {
-            const isActive = btn.dataset.value === replyState.replyMode;
+            const isActive = btn.dataset.value === replyState.selectedMode;
             btn.style.background = isActive ? "#0a66c2" : "#f3f3f3";
-            btn.style.color = isActive ? "#ffffff" : "#333";
+            btn.style.color = isActive ? "#ffffff" : "#111827";
             btn.style.borderColor = isActive ? "#0a66c2" : "#d0d0d0";
           });
 
-          const shouldShowInstructions = replyState.replyMode === "prompt_reply";
+          const shouldShowInstructions = replyState.selectedMode === "prompt_custom";
           instructionsBlock.style.display = shouldShowInstructions ? "flex" : "none";
 
           const hasValidPrompt = (replyState.promptReply || "").trim().length > 0;
-          promptGenerate.disabled = shouldShowInstructions && !hasValidPrompt;
+          const hasSelection = !!replyState.selectedMode;
+          promptGenerate.disabled =
+            !hasSelection || (shouldShowInstructions && !hasValidPrompt);
 
           popover.style.display = replyState.isPanelOpen ? "flex" : "none";
           promptButton.style.background = replyState.isPanelOpen ? "#e5e7eb" : "#f3f3f3";
@@ -813,6 +853,8 @@
           syncUI();
         };
 
+        closeButton.addEventListener("click", closePanel);
+
         promptGenerate.addEventListener("click", async () => {
           const originalText = promptGenerate.textContent;
           const originalDisabled = promptGenerate.disabled;
@@ -823,15 +865,16 @@
           promptGenerate.style.opacity = "0.7";
 
           try {
+            console.log("[Focals][MSG] Début génération via modale", replyState);
             await runSuggestReplyPipeline({
               button: promptGenerate,
               composer,
               conversationRoot,
               conversationName,
               editorIndex: index + 1,
-              mode: replyState.replyMode,
+              generationMode: replyState.selectedMode,
               customInstructions:
-                replyState.replyMode === "prompt_reply"
+                replyState.selectedMode === "prompt_custom"
                   ? (replyState.promptReply || "").trim()
                   : null,
             });
@@ -869,7 +912,7 @@
               conversationRoot,
               conversationName,
               editorIndex: index + 1,
-              mode: "auto",
+              generationMode: "auto",
             });
           } finally {
             suggestButton.disabled = originalDisabled;
@@ -883,6 +926,10 @@
 
         promptButton.addEventListener("click", () => {
           replyState.isPanelOpen = !replyState.isPanelOpen;
+          console.log("[Focals][MSG] Ouverture modale relance", {
+            isOpen: replyState.isPanelOpen,
+            conversation: conversationName,
+          });
           syncUI();
           if (replyState.isPanelOpen) {
             promptInput.focus();
@@ -896,6 +943,7 @@
           closePanel();
         });
 
+        popover.appendChild(closeButton);
         popover.appendChild(popoverTitle);
         popover.appendChild(popoverDescription);
         popover.appendChild(modesContainer);

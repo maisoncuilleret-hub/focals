@@ -81,31 +81,10 @@ let state = {
   profileStatusMessage: "",
   activeTab: "profile",
   supabaseSession: null,
-  followup: {
-    context: "premiere_relance",
-    customContext: "",
-    result: "",
-    error: "",
-    loading: false,
-  },
 };
 
 let editingTemplateId = null;
 let editingJobId = null;
-
-const FOLLOWUP_CONTEXT_LABELS = {
-  premiere_relance: "1ère relance après premier message sans réponse",
-  apres_call: "Relance après un call",
-  sans_reponse: "Relance après absence de réponse",
-  autre: "Autre",
-};
-
-const FOLLOWUP_MODE_MAP = {
-  premiere_relance: "followup_soft",
-  apres_call: "followup_soft",
-  sans_reponse: "followup_strong",
-  autre: "prompt_reply",
-};
 
 function setStatus(message) {
   const el = document.getElementById("status");
@@ -267,187 +246,6 @@ function getActiveJob() {
     if (selected) return selected;
   }
   return Array.isArray(state.jobs) && state.jobs.length > 0 ? state.jobs[0] : null;
-}
-
-function renderFollowupUI() {
-  const contextSelect = document.getElementById("followupContext");
-  const customInput = document.getElementById("followupContextCustom");
-  const resultArea = document.getElementById("followupResult");
-  const errorArea = document.getElementById("followupError");
-  const generateBtn = document.getElementById("generateFollowup");
-  const copyBtn = document.getElementById("copyFollowup");
-
-  if (contextSelect) {
-    contextSelect.value = state.followup.context;
-  }
-  if (customInput) {
-    customInput.style.display = state.followup.context === "autre" ? "block" : "none";
-    customInput.value = state.followup.customContext || "";
-  }
-  if (resultArea) {
-    resultArea.value = state.followup.result || "";
-  }
-  if (errorArea) {
-    errorArea.textContent = state.followup.error || "";
-  }
-  if (generateBtn) {
-    generateBtn.disabled = state.followup.loading;
-    generateBtn.textContent = state.followup.loading ? "Génération..." : "Générer une relance personnalisée";
-  }
-  if (copyBtn) {
-    copyBtn.disabled = !state.followup.result;
-  }
-}
-
-function resolveFollowupContext() {
-  if (state.followup.context === "autre") {
-    return state.followup.customContext?.trim() || FOLLOWUP_CONTEXT_LABELS.autre;
-  }
-  return FOLLOWUP_CONTEXT_LABELS[state.followup.context] || state.followup.context;
-}
-
-function resolveFollowupMode() {
-  return FOLLOWUP_MODE_MAP[state.followup.context] || "followup_soft";
-}
-
-function buildFollowupConversation(contextLabel, job, profile) {
-  const details = [];
-
-  if (contextLabel) details.push(`Contexte: ${contextLabel}`);
-
-  if (profile) {
-    const name = [profile.firstName, profile.lastName].filter(Boolean).join(" ");
-    if (name) details.push(`Candidat: ${name}`);
-    if (profile.headline) details.push(`Profil: ${profile.headline}`);
-    if (profile.company) details.push(`Entreprise actuelle: ${profile.company}`);
-  }
-
-  if (job) {
-    const jobParts = [job.title || "", job.company || ""].filter(Boolean).join(" @ ");
-    if (jobParts) details.push(`Job ciblé: ${jobParts}`);
-  }
-
-  const text = details.filter(Boolean).join(" | ") || contextLabel || "Relance";
-
-  const conversation = {
-    messages: [
-      {
-        text,
-        senderType: "me",
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  };
-
-  if (job?.language) conversation.language = job.language;
-  if (profile?.firstName) conversation.candidateFirstName = profile.firstName;
-
-  return conversation;
-}
-
-async function handleGenerateFollowup() {
-  if (state.followup.loading) return;
-  if (!state.profile) {
-    state.followup.error =
-      "Aucun profil LinkedIn détecté. Ouvrez un profil LinkedIn compatible puis réessayez.";
-    renderFollowupUI();
-    return;
-  }
-
-  const job = getActiveJob();
-  if (!job) {
-    state.followup.error = "Aucun job disponible. Ajoutez ou sélectionnez un job dans les paramètres.";
-    renderFollowupUI();
-    return;
-  }
-
-  const context = resolveFollowupContext();
-  state.followup.loading = true;
-  state.followup.error = "";
-  state.followup.result = "";
-  renderFollowupUI();
-
-  try {
-    const userId = state.userId || (await getOrCreateUserId());
-    const mode = resolveFollowupMode();
-
-    const conversation = buildFollowupConversation(context, job, state.profile);
-    const payload = {
-      userId,
-      mode,
-      conversation,
-      toneOverride: state.tone || DEFAULT_TONE,
-      jobId: job?.id,
-      templateId: state.selectedTemplate || undefined,
-    };
-
-    if (mode === "prompt_reply") {
-      payload.promptReply = context;
-    }
-
-    const response = await apiModule.generateFollowup(payload);
-
-    const replyText =
-      response?.message ||
-      response?.reply?.text ||
-      (typeof response?.reply === "string" ? response.reply : null) ||
-      response?.replyText ||
-      response?.text ||
-      response?.followup ||
-      "";
-
-    state.followup.result = replyText;
-    if (!replyText) {
-      state.followup.error = "Réponse vide renvoyée par le backend.";
-    }
-  } catch (err) {
-    console.error("[FOCALS][POPUP][ERROR] generateFollowup failed", err);
-    const message = err?.message || "Impossible de générer la relance.";
-    state.followup.error = message.startsWith("HTTP 404")
-      ? "HTTP 404 – Fonction backend introuvable"
-      : message;
-  } finally {
-    state.followup.loading = false;
-    renderFollowupUI();
-  }
-}
-
-async function handleCopyFollowup() {
-  if (!state.followup.result) return;
-  try {
-    await navigator.clipboard.writeText(state.followup.result);
-    setStatus("Message copié dans le presse-papiers");
-  } catch (err) {
-    setStatus("Impossible de copier le message");
-  }
-}
-
-function setupFollowup() {
-  const contextSelect = document.getElementById("followupContext");
-  const customInput = document.getElementById("followupContextCustom");
-  const generateBtn = document.getElementById("generateFollowup");
-  const copyBtn = document.getElementById("copyFollowup");
-
-  if (contextSelect) {
-    contextSelect.addEventListener("change", (e) => {
-      state.followup.context = e.target.value;
-      if (state.followup.context !== "autre") {
-        state.followup.customContext = "";
-      }
-      renderFollowupUI();
-    });
-  }
-
-  if (customInput) {
-    customInput.addEventListener("input", (e) => {
-      state.followup.customContext = e.target.value;
-    });
-  }
-
-  if (generateBtn) generateBtn.addEventListener("click", () => handleGenerateFollowup());
-  if (copyBtn) copyBtn.addEventListener("click", () => handleCopyFollowup());
-
-  renderFollowupUI();
 }
 
 function renderTemplates() {
@@ -1000,7 +798,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupApiKey();
   setupTabs();
   setupProfileActions();
-  setupFollowup();
   await refreshProfileFromTab();
   await loadSupabaseSession();
   debugLog("POPUP_READY", state);
