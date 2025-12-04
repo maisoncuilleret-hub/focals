@@ -452,7 +452,6 @@ async function loadState() {
     renderTone();
     renderTemplates();
     renderJobs();
-    renderFollowupUI();
     const apiInput = document.getElementById("apiKey");
     if (apiInput) apiInput.value = state.apiKey || "";
   } catch (err) {

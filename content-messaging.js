@@ -73,6 +73,7 @@
       jobs: "FOCALS_JOBS",
       activeJob: "FOCALS_ACTIVE_JOB",
     };
+    const PROFILE_STORAGE_KEY = "FOCALS_LAST_PROFILE";
 
     const USER_ID_STORAGE_KEY = "focals_user_id";
     let cachedUserId = null;
@@ -209,12 +210,32 @@
       return "";
     };
 
+    const extractKeywordsFromJob = (description = "") => {
+      if (!description) return [];
+      const tokens = description
+        .split(/[^A-Za-zÀ-ÿ0-9+#]+/)
+        .map((word) => word.trim())
+        .filter((word) => word.length >= 3 && word.length <= 30);
+
+      const interesting = tokens.filter((token) => {
+        const hasUpper = /[A-Z]/.test(token.charAt(0));
+        const isTech = /[+#]/.test(token) || /js|dev|tech|data/i.test(token);
+        return hasUpper || isTech;
+      });
+
+      return Array.from(new Set(interesting)).slice(0, 15);
+    };
+
     const buildJobContext = (job) => {
       if (!job) return null;
+      const description = job.raw_description || job.summary || job.description || "";
+      const keywords = Array.isArray(job.keywords) && job.keywords.length
+        ? job.keywords
+        : extractKeywordsFromJob(description);
       return {
         title: job.title || job.label || job.id || "",
-        description: job.raw_description || job.summary || job.description || "",
-        keywords: Array.isArray(job.keywords) ? job.keywords : [],
+        description,
+        keywords,
       };
     };
 
@@ -235,6 +256,64 @@
       debugLog("PROFILE_RESOLVE", { candidateProfileUrl, hasAnchor: !!profileAnchor });
 
       return { candidateProfileUrl, candidateProfileSummary };
+    };
+
+    const getCachedProfileFromStorage = () =>
+      new Promise((resolve) => {
+        try {
+          chrome.storage.local.get([PROFILE_STORAGE_KEY], (result) => {
+            resolve(result?.[PROFILE_STORAGE_KEY] || null);
+          });
+        } catch (err) {
+          warn("PROFILE_CACHE_READ_ERROR", err?.message || err);
+          resolve(null);
+        }
+      });
+
+    const buildLinkedinProfileContext = (profile, fallbackUrl = null) => {
+      if (!profile && !fallbackUrl) return null;
+      const experiences = Array.isArray(profile?.experiences) ? profile.experiences.slice(0, 5) : [];
+      const normalizedExperiences = experiences
+        .filter((exp) => exp && (exp.title || exp.company))
+        .map((exp) => ({
+          title: exp.title || "",
+          company: exp.company || "",
+          start: exp.start || "",
+          end: exp.end || "",
+          location: exp.location || "",
+        }));
+
+      const headline = profile?.headline || profile?.current_title || profile?.title || "";
+      const currentRoleTitle = profile?.current_title || "";
+      const currentRoleCompany = profile?.current_company || "";
+
+      let url = profile?.linkedin_url || profile?.url || fallbackUrl || null;
+      if (!url && profile?.profile_slug) {
+        url = /^https?:/i.test(profile.profile_slug)
+          ? profile.profile_slug
+          : `https://www.linkedin.com/in/${profile.profile_slug}`;
+      }
+
+      return {
+        url,
+        headline,
+        currentRole:
+          currentRoleTitle || currentRoleCompany
+            ? { title: currentRoleTitle || "", company: currentRoleCompany || "" }
+            : undefined,
+        experiences: normalizedExperiences,
+      };
+    };
+
+    const resolveLinkedinProfileContext = async (rootElement = document) => {
+      const pageProfile = extractCandidateProfileFromPage(rootElement);
+      const cachedProfile = await getCachedProfileFromStorage();
+      const linkedinProfile = buildLinkedinProfileContext(
+        cachedProfile,
+        pageProfile?.candidateProfileUrl || null
+      );
+
+      return { linkedinProfile, cachedProfile, candidateProfileUrl: pageProfile?.candidateProfileUrl };
     };
 
     const loadUserPreferences = async () => {
@@ -542,13 +621,15 @@
 
         const { settings, activeJob } = await loadUserPreferences();
         const tone = settings?.tone || settings?.default_tone || "warm";
-        const language = detectLanguageFromMessages(
-          messages,
-          settings.languageFallback || "fr"
-        );
-        const candidateName = detectCandidateName(conversationName, messages);
+        const language =
+          detectLanguageFromMessages(messages, settings.languageFallback || "fr") || "fr";
+        const profileResolution = await resolveLinkedinProfileContext(conversationRoot);
+        const candidateName =
+          profileResolution.cachedProfile?.firstName ||
+          profileResolution.cachedProfile?.name ||
+          detectCandidateName(conversationName, messages);
         const jobContext = buildJobContext(activeJob);
-        const profileContext = extractCandidateProfileFromPage(conversationRoot);
+        const hasOutgoingMessages = messages.some((msg) => msg.fromMe);
 
         const baseContext = {
           language,
@@ -559,31 +640,40 @@
           baseContext.candidateName = candidateName;
         }
 
-        if (jobContext) {
-          baseContext.job = jobContext;
-        }
-
         let payloadMode = "auto";
         let payloadContext = { ...baseContext };
         let instructionsToSend = null;
 
         if (generationMode === "followup_classic") {
+          payloadMode = hasOutgoingMessages ? "followup_soft" : "initial";
+          if (jobContext) {
+            payloadContext.job = jobContext;
+          }
+        } else if (generationMode === "followup_personalized") {
           payloadMode = "followup_soft";
-        } else if (generationMode === "followup_profile") {
-          payloadMode = "followup_soft";
-          if (!profileContext.candidateProfileUrl) {
+          if (!jobContext) {
             alert(
-              "❌ Impossible de trouver l'URL du profil LinkedIn pour personnaliser la relance. Ouvrez le profil ou réessayez depuis la conversation."
+              "❌ Aucune fiche de poste sélectionnée. Choisis un job dans les paramètres Focals."
             );
             return;
           }
+
+          const linkedinProfile =
+            profileResolution.linkedinProfile ||
+            buildLinkedinProfileContext(null, profileResolution.candidateProfileUrl || null);
+
+          if (!linkedinProfile?.url) {
+            alert(
+              "❌ Profil LinkedIn introuvable. Ouvre le profil candidat pour personnaliser la relance."
+            );
+            return;
+          }
+
           payloadContext = {
             ...baseContext,
-            candidateProfileUrl: profileContext.candidateProfileUrl,
-            candidateProfileSummary: profileContext.candidateProfileSummary || null,
+            job: jobContext,
+            linkedinProfile,
           };
-          instructionsToSend =
-            "Personnalise la relance en t'appuyant sur le profil LinkedIn fourni dans candidateProfileUrl et candidateProfileSummary, et sur la fiche de poste.";
         } else if (generationMode === "prompt_custom") {
           payloadMode = "prompt_reply";
           const trimmed = (customInstructions || "").trim();
@@ -591,10 +681,12 @@
             alert("❌ Ajoutez des instructions personnalisées avant de générer.");
             return;
           }
+          if (jobContext) {
+            payloadContext.job = jobContext;
+          }
           payloadContext = {
-            ...baseContext,
-            candidateProfileUrl: profileContext.candidateProfileUrl || null,
-            candidateProfileSummary: profileContext.candidateProfileSummary || null,
+            ...payloadContext,
+            linkedinProfile: profileResolution.linkedinProfile || null,
           };
           instructionsToSend = trimmed;
         }
@@ -615,7 +707,7 @@
         });
         if (!reply) {
           warn(`PIPELINE api_call: reply missing, aborting`);
-          alert("❌ Impossible de générer une réponse pour le moment.");
+          alert("Erreur Focals, réessaie dans quelques secondes.");
           return;
         }
 
@@ -626,7 +718,7 @@
         log(`PIPELINE insert_reply: success = ${inserted}`);
       } catch (err) {
         error(`PIPELINE_ERROR ${err?.message || err}`);
-        alert(`❌ Une erreur est survenue : ${err?.message || err}`);
+        alert(`Erreur Focals, réessaie dans quelques secondes.`);
       }
     };
 
@@ -689,7 +781,7 @@
 
         const promptButton = document.createElement("button");
         promptButton.className = "artdeco-button artdeco-button--1";
-        promptButton.textContent = "Prompt reply ▼";
+        promptButton.textContent = "Prompt reply ▾";
         promptButton.style.padding = "6px 10px";
         promptButton.style.cursor = "pointer";
         promptButton.style.flex = "1";
@@ -730,13 +822,14 @@
         };
 
         const popoverTitle = document.createElement("div");
-        popoverTitle.textContent = "Mode de relance IA";
+        popoverTitle.textContent = "Mode de réponse IA";
         popoverTitle.style.fontSize = "14px";
         popoverTitle.style.fontWeight = "600";
         popoverTitle.style.color = "#111827";
 
         const popoverDescription = document.createElement("div");
-        popoverDescription.textContent = "Choisissez le type de relance à générer.";
+        popoverDescription.textContent =
+          "Sélectionne un mode de génération pour la réponse LinkedIn.";
         popoverDescription.style.fontSize = "12px";
         popoverDescription.style.color = "#4b5563";
         popoverDescription.style.lineHeight = "1.4";
@@ -747,19 +840,29 @@
         modesContainer.style.gap = "8px";
 
         const modes = [
-          { label: "Relance classique", value: "followup_classic" },
           {
-            label: "Relance personnalisée (profil LinkedIn)",
-            value: "followup_profile",
+            label: "Relance classique",
+            value: "followup_classic",
+            description: "Generate a followup based only on the conversation context.",
           },
-          { label: "Prompt personnalisé", value: "prompt_custom" },
+          {
+            label: "Relance personnalisée (profil LinkedIn + job)",
+            value: "followup_personalized",
+            description:
+              "Generate a followup that uses the conversation, LinkedIn profile and selected job description.",
+          },
+          {
+            label: "Prompt personnalisé",
+            value: "prompt_custom",
+            description: "Generate a reply using a custom free-text prompt.",
+          },
         ];
 
         const modeButtons = [];
 
-        modes.forEach(({ label, value }) => {
+        modes.forEach(({ label, value, description }) => {
           const modeButton = document.createElement("button");
-          modeButton.textContent = label;
+          modeButton.innerHTML = `<div style="font-weight:700; font-size:13px; color:#0a2540;">${label}</div><div style="font-size:12px; color:#4b5563; font-weight:500;">${description}</div>`;
           modeButton.dataset.value = value;
           modeButton.style.padding = "12px";
           modeButton.style.border = "1px solid #d0d0d0";
@@ -844,8 +947,8 @@
           promptButton.style.background = replyState.isPanelOpen ? "#e5e7eb" : "#f3f3f3";
           promptButton.style.borderColor = replyState.isPanelOpen ? "#a3a3a3" : "#d0d0d0";
           promptButton.textContent = replyState.isPanelOpen
-            ? "Prompt reply ▲"
-            : "Prompt reply ▼";
+            ? "Prompt reply ▴"
+            : "Prompt reply ▾";
         };
 
         const closePanel = () => {
@@ -861,7 +964,7 @@
           const originalOpacity = promptGenerate.style.opacity;
 
           promptGenerate.disabled = true;
-          promptGenerate.textContent = "⏳ Génération...";
+          promptGenerate.textContent = "⏳ Génération en cours...";
           promptGenerate.style.opacity = "0.7";
 
           try {
