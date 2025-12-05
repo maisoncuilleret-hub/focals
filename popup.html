@@ -71,37 +71,6 @@
 
   <div class="section">
     <div class="row" style="justify-content: space-between; align-items: center;">
-      <h2 style="margin:0">Modèles</h2>
-      <button id="addTemplate" class="secondary">Nouveau modèle</button>
-    </div>
-    <div id="templatesList" class="list"></div>
-    <div id="templateForm" style="margin-top: 12px; display: none;">
-      <label for="templateLabel">Nom du modèle</label>
-      <input id="templateLabel" type="text" placeholder="Ex: Relance chaleureuse" />
-      <div class="grid" style="margin-top:8px;">
-        <div>
-          <label for="templateLanguage">Langue</label>
-          <select id="templateLanguage">
-            <option value="fr">Français</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-        <div>
-          <label for="templateId">Identifiant</label>
-          <input id="templateId" type="text" placeholder="relance_warm" />
-        </div>
-      </div>
-      <label for="templateContent" style="margin-top:8px;">Contenu (placeholders: {firstName}, {company}, {role})</label>
-      <textarea id="templateContent"></textarea>
-      <div class="row" style="justify-content:flex-end; margin-top:8px;">
-        <button id="cancelTemplate" class="secondary">Annuler</button>
-        <button id="saveTemplate">Enregistrer</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="row" style="justify-content: space-between; align-items: center;">
       <h2 style="margin:0">Offres / Jobs</h2>
       <button id="addJob" class="secondary">Ajouter un job</button>
     </div>
@@ -117,36 +86,12 @@
           <input id="jobCompany" type="text" placeholder="Focals" />
         </div>
       </div>
-      <div class="grid" style="margin-top:8px;">
-        <div>
-          <label for="jobLanguage">Langue</label>
-          <select id="jobLanguage">
-            <option value="fr">Français</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-        <div>
-          <label for="jobId">Identifiant</label>
-          <input id="jobId" type="text" placeholder="pm_focals" />
-        </div>
-      </div>
-      <label for="jobDescription" style="margin-top:8px;">Description (brève)</label>
+      <label for="jobDescription" style="margin-top:8px;">Description complète</label>
       <textarea id="jobDescription"></textarea>
-      <label for="jobSummary" style="margin-top:8px;">Résumé (optionnel)</label>
-      <textarea id="jobSummary"></textarea>
       <div class="row" style="justify-content:flex-end; margin-top:8px;">
         <button id="cancelJob" class="secondary">Annuler</button>
         <button id="saveJob">Enregistrer</button>
       </div>
-    </div>
-  </div>
-
-  <div class="section">
-    <h2>Clé OpenAI</h2>
-    <p class="muted">Stockée uniquement en local via chrome.storage.sync</p>
-    <input id="apiKey" type="password" placeholder="sk-..." />
-    <div class="row" style="justify-content:flex-end; margin-top:8px;">
-      <button id="saveApiKey">Enregistrer la clé</button>
     </div>
   </div>
 
