@@ -152,6 +152,14 @@
       console.error("[Focals][MSG][ERROR]", message, ...args);
     };
 
+    const readFileAsText = (file) =>
+      new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => resolve(event.target?.result || "");
+        reader.onerror = () => reject(reader.error || new Error("File read error"));
+        reader.readAsText(file);
+      });
+
     const getFromStorage = (area, defaults = {}) =>
       new Promise((resolve) => {
         try {
@@ -789,11 +797,14 @@
           return;
         }
 
-        const buttonRow = document.createElement("div");
-        buttonRow.className = BUTTON_CLASS;
-        buttonRow.style.display = "flex";
-        buttonRow.style.gap = "6px";
-        buttonRow.style.marginLeft = "8px";
+        const palette = {
+          primary: "#15294b",
+          primaryHover: "#1f3a6b",
+          border: "#1f2a44",
+          text: "#e5e7eb",
+          muted: "#9ca3af",
+          surface: "#0b1220",
+        };
 
         const controlsWrapper = document.createElement("div");
         controlsWrapper.style.position = "relative";
@@ -802,245 +813,225 @@
         controlsWrapper.style.alignItems = "flex-end";
         controlsWrapper.style.flex = "1";
 
-        const suggestButton = document.createElement("button");
-        suggestButton.className = "artdeco-button artdeco-button--1";
-        suggestButton.textContent = "Suggest reply";
-        suggestButton.style.padding = "6px 10px";
-        suggestButton.style.cursor = "pointer";
-        suggestButton.style.flex = "1";
+        const dropdownsRow = document.createElement("div");
+        dropdownsRow.className = BUTTON_CLASS;
+        dropdownsRow.style.display = "flex";
+        dropdownsRow.style.gap = "8px";
+        dropdownsRow.style.marginLeft = "8px";
+        dropdownsRow.style.alignItems = "center";
 
-        const promptButton = document.createElement("button");
-        promptButton.className = "artdeco-button artdeco-button--1";
-        promptButton.textContent = "Prompt reply ▾";
-        promptButton.style.padding = "6px 10px";
-        promptButton.style.cursor = "pointer";
-        promptButton.style.flex = "1";
-        promptButton.style.background = "#f3f3f3";
-        promptButton.style.borderColor = "#d0d0d0";
-        promptButton.style.color = "#333";
-
-        const popover = document.createElement("div");
-        popover.style.display = "none";
-        popover.style.flexDirection = "column";
-        popover.style.gap = "12px";
-        popover.style.position = "absolute";
-        popover.style.bottom = "48px";
-        popover.style.right = "0";
-        popover.style.width = "360px";
-        popover.style.background = "#ffffff";
-        popover.style.border = "1px solid #d0d0d0";
-        popover.style.borderRadius = "10px";
-        popover.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.12)";
-        popover.style.padding = "14px";
-        popover.style.zIndex = "2147483647";
-
-        const closeButton = document.createElement("button");
-        closeButton.textContent = "×";
-        closeButton.setAttribute("aria-label", "Fermer la modale Focals");
-        closeButton.style.position = "absolute";
-        closeButton.style.top = "8px";
-        closeButton.style.right = "8px";
-        closeButton.style.border = "none";
-        closeButton.style.background = "transparent";
-        closeButton.style.fontSize = "18px";
-        closeButton.style.cursor = "pointer";
-
-        const replyState = {
-          selectedMode: null,
-          promptReply: "",
-          isPanelOpen: false,
+        const createMainButton = (label) => {
+          const btn = document.createElement("button");
+          btn.textContent = label;
+          btn.style.padding = "8px 14px";
+          btn.style.cursor = "pointer";
+          btn.style.borderRadius = "999px";
+          btn.style.border = `1px solid ${palette.border}`;
+          btn.style.background = palette.primary;
+          btn.style.color = palette.text;
+          btn.style.fontWeight = "700";
+          btn.style.fontSize = "13px";
+          btn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.25)";
+          btn.style.transition = "all 0.2s ease";
+          return btn;
         };
 
-        const popoverTitle = document.createElement("div");
-        popoverTitle.textContent = "Mode de réponse IA";
-        popoverTitle.style.fontSize = "14px";
-        popoverTitle.style.fontWeight = "600";
-        popoverTitle.style.color = "#111827";
+        const createMenuContainer = () => {
+          const menu = document.createElement("div");
+          menu.style.display = "none";
+          menu.style.flexDirection = "column";
+          menu.style.position = "absolute";
+          menu.style.bottom = "44px";
+          menu.style.right = "0";
+          menu.style.background = palette.surface;
+          menu.style.border = `1px solid ${palette.border}`;
+          menu.style.borderRadius = "12px";
+          menu.style.minWidth = "240px";
+          menu.style.padding = "8px";
+          menu.style.boxShadow = "0 18px 40px rgba(0,0,0,0.35)";
+          menu.style.zIndex = "2147483647";
+          return menu;
+        };
 
-        const popoverDescription = document.createElement("div");
-        popoverDescription.textContent =
-          "Sélectionne un mode de génération pour la réponse LinkedIn.";
-        popoverDescription.style.fontSize = "12px";
-        popoverDescription.style.color = "#4b5563";
-        popoverDescription.style.lineHeight = "1.4";
+        const uiState = {
+          openMenu: null,
+          conversationMode: "conversation_standard",
+          relanceMode: "followup_standard",
+          showCustomCard: false,
+          customUploadText: "",
+          customPasteText: "",
+          customPrompt: "",
+          uploadFilename: "",
+        };
 
-        const modesContainer = document.createElement("div");
-        modesContainer.style.display = "flex";
-        modesContainer.style.flexDirection = "column";
-        modesContainer.style.gap = "8px";
+        const customCard = document.createElement("div");
+        customCard.style.display = "none";
+        customCard.style.background = palette.surface;
+        customCard.style.border = `1px solid ${palette.border}`;
+        customCard.style.borderRadius = "14px";
+        customCard.style.padding = "14px";
+        customCard.style.margin = "8px 0";
+        customCard.style.color = palette.text;
+        customCard.style.boxShadow = "0 14px 30px rgba(0,0,0,0.35)";
+        customCard.style.position = "relative";
 
-        const modes = [
-          {
-            label: "Relance classique",
-            value: "followup_classic",
-            description: "Generate a followup based only on the conversation context.",
-          },
-          {
-            label: "Relance personnalisée (profil LinkedIn + job)",
-            value: "followup_personalized",
-            description:
-              "Generate a followup that uses the conversation, LinkedIn profile and selected job description.",
-          },
-          {
-            label: "Prompt personnalisé",
-            value: "prompt_custom",
-            description: "Generate a reply using a custom free-text prompt.",
-          },
-        ];
+        const customCardHeader = document.createElement("div");
+        customCardHeader.style.display = "flex";
+        customCardHeader.style.justifyContent = "space-between";
+        customCardHeader.style.alignItems = "center";
 
-        const modeButtons = [];
+        const customTitle = document.createElement("div");
+        customTitle.textContent = "Conversation personnalisée";
+        customTitle.style.fontWeight = "700";
+        customTitle.style.fontSize = "14px";
 
-        modes.forEach(({ label, value, description }) => {
-          const modeButton = document.createElement("button");
-          modeButton.innerHTML = `<div style="font-weight:700; font-size:13px; color:#0a2540;">${label}</div><div style="font-size:12px; color:#4b5563; font-weight:500;">${description}</div>`;
-          modeButton.dataset.value = value;
-          modeButton.style.padding = "12px";
-          modeButton.style.border = "1px solid #d0d0d0";
-          modeButton.style.borderRadius = "12px";
-          modeButton.style.background = "#f3f3f3";
-          modeButton.style.cursor = "pointer";
-          modeButton.style.fontSize = "13px";
-          modeButton.style.color = "#111827";
-          modeButton.style.fontWeight = "700";
-          modeButton.style.textAlign = "left";
+        const customClose = document.createElement("button");
+        customClose.textContent = "×";
+        customClose.setAttribute("aria-label", "Fermer la carte personnalisée");
+        customClose.style.background = "transparent";
+        customClose.style.border = "none";
+        customClose.style.color = palette.text;
+        customClose.style.cursor = "pointer";
+        customClose.style.fontSize = "16px";
 
-          modeButton.addEventListener("click", () => {
-            replyState.selectedMode = value;
-            console.log("[Focals][MSG] Mode sélectionné", value);
+        customCardHeader.appendChild(customTitle);
+        customCardHeader.appendChild(customClose);
+
+        const uploadArea = document.createElement("label");
+        uploadArea.textContent = "Glissez un fichier ou cliquez pour importer";
+        uploadArea.style.display = "block";
+        uploadArea.style.border = `1px dashed ${palette.border}`;
+        uploadArea.style.borderRadius = "12px";
+        uploadArea.style.padding = "12px";
+        uploadArea.style.marginTop = "10px";
+        uploadArea.style.cursor = "pointer";
+        uploadArea.style.background = "rgba(255,255,255,0.03)";
+        uploadArea.style.color = palette.muted;
+        uploadArea.style.textAlign = "center";
+
+        const uploadInput = document.createElement("input");
+        uploadInput.type = "file";
+        uploadInput.style.display = "none";
+
+        const uploadMeta = document.createElement("div");
+        uploadMeta.style.fontSize = "12px";
+        uploadMeta.style.color = palette.muted;
+        uploadMeta.style.marginTop = "6px";
+
+        uploadArea.appendChild(uploadInput);
+
+        const pasteLabel = document.createElement("div");
+        pasteLabel.textContent = "Ou collez du contenu ici...";
+        pasteLabel.style.fontSize = "12px";
+        pasteLabel.style.color = palette.muted;
+        pasteLabel.style.marginTop = "12px";
+
+        const pasteArea = document.createElement("textarea");
+        pasteArea.style.width = "100%";
+        pasteArea.style.minHeight = "80px";
+        pasteArea.style.background = "rgba(255,255,255,0.03)";
+        pasteArea.style.color = palette.text;
+        pasteArea.style.border = `1px solid ${palette.border}`;
+        pasteArea.style.borderRadius = "10px";
+        pasteArea.style.padding = "10px";
+        pasteArea.style.resize = "vertical";
+
+        const promptLabel = document.createElement("div");
+        promptLabel.textContent = "Instruction pour l’agent (ex: rédige un feedback structuré)";
+        promptLabel.style.fontSize = "12px";
+        promptLabel.style.color = palette.muted;
+        promptLabel.style.marginTop = "12px";
+
+        const promptInput = document.createElement("textarea");
+        promptInput.placeholder = "Décris le ton, le format ou les attentes…";
+        promptInput.style.width = "100%";
+        promptInput.style.minHeight = "72px";
+        promptInput.style.background = "rgba(255,255,255,0.03)";
+        promptInput.style.color = palette.text;
+        promptInput.style.border = `1px solid ${palette.border}`;
+        promptInput.style.borderRadius = "10px";
+        promptInput.style.padding = "10px";
+        promptInput.style.resize = "vertical";
+
+        const customGenerate = document.createElement("button");
+        customGenerate.textContent = "Générer la réponse";
+        customGenerate.className = "artdeco-button";
+        customGenerate.style.marginTop = "14px";
+        customGenerate.style.width = "100%";
+        customGenerate.style.padding = "10px";
+        customGenerate.style.borderRadius = "999px";
+        customGenerate.style.background = palette.primary;
+        customGenerate.style.border = `1px solid ${palette.border}`;
+        customGenerate.style.color = palette.text;
+        customGenerate.style.cursor = "pointer";
+        customGenerate.style.fontWeight = "700";
+
+        customCard.appendChild(customCardHeader);
+        customCard.appendChild(uploadArea);
+        customCard.appendChild(uploadMeta);
+        customCard.appendChild(pasteLabel);
+        customCard.appendChild(pasteArea);
+        customCard.appendChild(promptLabel);
+        customCard.appendChild(promptInput);
+        customCard.appendChild(customGenerate);
+
+        const conversationButton = createMainButton("Conversation ▾");
+        const relanceButton = createMainButton("Relance ▾");
+
+        const conversationMenu = createMenuContainer();
+        const relanceMenu = createMenuContainer();
+
+        const menuOption = (label, description, value, group) => {
+          const option = document.createElement("button");
+          option.style.background = "transparent";
+          option.style.border = "none";
+          option.style.textAlign = "left";
+          option.style.padding = "10px";
+          option.style.borderRadius = "10px";
+          option.style.cursor = "pointer";
+          option.style.color = palette.text;
+          option.innerHTML = `<div style="font-weight:700; font-size:13px;">${label}</div><div style="font-size:12px; color:${palette.muted};">${description}</div>`;
+
+          option.addEventListener("mouseenter", () => {
+            option.style.background = "rgba(255,255,255,0.05)";
+          });
+          option.addEventListener("mouseleave", () => {
+            option.style.background = "transparent";
+          });
+
+          option.addEventListener("click", async () => {
+            uiState[`${group}Mode`] = value;
+            uiState.openMenu = null;
+            if (group === "conversation") {
+              if (value === "conversation_standard") {
+                uiState.showCustomCard = false;
+                await handleConversationStandard();
+              } else {
+                uiState.showCustomCard = true;
+                pasteArea.focus();
+              }
+            } else if (group === "relance") {
+              if (value === "followup_standard") {
+                uiState.showCustomCard = false;
+                await handleFollowupStandard();
+              } else {
+                await handleFollowupPersonalized();
+              }
+            }
             syncUI();
           });
 
-          modeButtons.push(modeButton);
-          modesContainer.appendChild(modeButton);
-        });
-
-        const instructionsBlock = document.createElement("div");
-        instructionsBlock.style.display = "none";
-        instructionsBlock.style.flexDirection = "column";
-        instructionsBlock.style.gap = "6px";
-
-        const promptLabel = document.createElement("label");
-        promptLabel.textContent = "Instructions personnalisées";
-        promptLabel.style.fontSize = "12px";
-        promptLabel.style.color = "#4b5563";
-
-        const promptInput = document.createElement("textarea");
-        promptInput.placeholder = "Donne des instructions précises à l’IA…";
-        promptInput.maxLength = 500;
-        promptInput.style.width = "100%";
-        promptInput.style.minHeight = "96px";
-        promptInput.style.resize = "vertical";
-        promptInput.style.padding = "10px";
-        promptInput.style.borderRadius = "8px";
-        promptInput.style.border = "1px solid #d1d5db";
-        promptInput.style.fontSize = "13px";
-        promptInput.style.outline = "none";
-        promptInput.addEventListener("focus", () => {
-          promptInput.style.boxShadow = "0 0 0 2px rgba(14,118,168,0.2)";
-        });
-        promptInput.addEventListener("blur", () => {
-          promptInput.style.boxShadow = "none";
-        });
-
-        promptInput.addEventListener("input", () => {
-          replyState.promptReply = promptInput.value;
-          syncUI();
-        });
-
-        instructionsBlock.appendChild(promptLabel);
-        instructionsBlock.appendChild(promptInput);
-
-        const promptGenerate = document.createElement("button");
-        promptGenerate.textContent = "Générer la réponse";
-        promptGenerate.className = "artdeco-button artdeco-button--1";
-        promptGenerate.style.width = "100%";
-        promptGenerate.style.padding = "10px";
-        promptGenerate.style.cursor = "pointer";
-
-        const syncUI = () => {
-          modeButtons.forEach((btn) => {
-            const isActive = btn.dataset.value === replyState.selectedMode;
-            btn.style.background = isActive ? "#0a66c2" : "#f3f3f3";
-            btn.style.color = isActive ? "#ffffff" : "#111827";
-            btn.style.borderColor = isActive ? "#0a66c2" : "#d0d0d0";
-          });
-
-          const shouldShowInstructions = replyState.selectedMode === "prompt_custom";
-          instructionsBlock.style.display = shouldShowInstructions ? "flex" : "none";
-
-          const hasValidPrompt = (replyState.promptReply || "").trim().length > 0;
-          const hasSelection = !!replyState.selectedMode;
-          promptGenerate.disabled =
-            !hasSelection || (shouldShowInstructions && !hasValidPrompt);
-
-          popover.style.display = replyState.isPanelOpen ? "flex" : "none";
-          promptButton.style.background = replyState.isPanelOpen ? "#e5e7eb" : "#f3f3f3";
-          promptButton.style.borderColor = replyState.isPanelOpen ? "#a3a3a3" : "#d0d0d0";
-          promptButton.textContent = replyState.isPanelOpen
-            ? "Prompt reply ▴"
-            : "Prompt reply ▾";
+          return option;
         };
 
-        const closePanel = () => {
-          replyState.isPanelOpen = false;
-          syncUI();
-        };
-
-        closeButton.addEventListener("click", closePanel);
-
-        promptGenerate.addEventListener("click", async () => {
-          const originalText = promptGenerate.textContent;
-          const originalDisabled = promptGenerate.disabled;
-          const originalOpacity = promptGenerate.style.opacity;
-
-          promptGenerate.disabled = true;
-          promptGenerate.textContent = "⏳ Génération en cours...";
-          promptGenerate.style.opacity = "0.7";
-
-          try {
-            console.log("[Focals][MSG] Début génération via modale", replyState);
-            await runSuggestReplyPipeline({
-              button: promptGenerate,
-              composer,
-              conversationRoot,
-              conversationName,
-              editorIndex: index + 1,
-              generationMode: replyState.selectedMode,
-              customInstructions:
-                replyState.selectedMode === "prompt_custom"
-                  ? (replyState.promptReply || "").trim()
-                  : null,
-            });
-          } finally {
-            promptGenerate.disabled = originalDisabled;
-            promptGenerate.textContent = originalText;
-            promptGenerate.style.opacity = originalOpacity;
-            closePanel();
-          }
-        });
-
-        log("[MSG] BUTTON_BIND", {
-          conversation: conversationName,
-          composerId: composer.id || null,
-          editorIndex: index + 1,
-        });
-
-        suggestButton.addEventListener("click", async () => {
-          const originalText = suggestButton.textContent;
-          const originalDisabled = suggestButton.disabled;
-          const originalOpacity = suggestButton.style.opacity;
-
-          suggestButton.disabled = true;
-          suggestButton.textContent = "⏳ Génération...";
-          suggestButton.style.opacity = "0.7";
-          closePanel();
-          log(
-            `[MSG][UI] Button set to loading (conversation: "${conversationName}")`
-          );
-
+        const handleConversationStandard = async () => {
+          const originalText = conversationButton.textContent;
+          conversationButton.textContent = "⏳ Conversation…";
+          conversationButton.disabled = true;
+          conversationButton.style.opacity = "0.7";
           try {
             await runSuggestReplyPipeline({
-              button: suggestButton,
+              button: conversationButton,
               composer,
               conversationRoot,
               conversationName,
@@ -1048,53 +1039,271 @@
               generationMode: "auto",
             });
           } finally {
-            suggestButton.disabled = originalDisabled;
-            suggestButton.textContent = originalText;
-            suggestButton.style.opacity = originalOpacity;
-            log(
-              `[MSG][UI] Button restored to idle (conversation: "${conversationName}")`
-            );
+            conversationButton.textContent = originalText;
+            conversationButton.disabled = false;
+            conversationButton.style.opacity = "1";
           }
+        };
+
+        const handleFollowupStandard = async () => {
+          const originalText = relanceButton.textContent;
+          relanceButton.textContent = "⏳ Relance…";
+          relanceButton.disabled = true;
+          relanceButton.style.opacity = "0.7";
+          try {
+            await runSuggestReplyPipeline({
+              button: relanceButton,
+              composer,
+              conversationRoot,
+              conversationName,
+              editorIndex: index + 1,
+              generationMode: "followup_classic",
+            });
+          } finally {
+            relanceButton.textContent = originalText;
+            relanceButton.disabled = false;
+            relanceButton.style.opacity = "1";
+          }
+        };
+
+        const triggerAssociationModal = () => {
+          try {
+            chrome.runtime.sendMessage({ type: "FOCALS_OPEN_PROFILE_ASSOCIATION_MODAL" });
+          } catch (err) {
+            warn("ASSOCIATION_MODAL_ERROR", err?.message || err);
+          }
+          alert("Associe un profil LinkedIn via la modale Focals pour continuer la relance personnalisée.");
+        };
+
+        const handleFollowupPersonalized = async () => {
+          const profileContext = await resolveLinkedinProfileContext(conversationRoot);
+          const hasValidProfile = !!(
+            profileContext.cachedProfile &&
+            ((Array.isArray(profileContext.cachedProfile.experiences) &&
+              profileContext.cachedProfile.experiences.length > 0) ||
+              profileContext.cachedProfile.current_title ||
+              profileContext.cachedProfile.current_company ||
+              profileContext.cachedProfile.headline)
+          );
+
+          if (!hasValidProfile) {
+            triggerAssociationModal();
+            return;
+          }
+
+          const originalText = relanceButton.textContent;
+          relanceButton.textContent = "⏳ Relance…";
+          relanceButton.disabled = true;
+          relanceButton.style.opacity = "0.7";
+          try {
+            await runSuggestReplyPipeline({
+              button: relanceButton,
+              composer,
+              conversationRoot,
+              conversationName,
+              editorIndex: index + 1,
+              generationMode: "followup_personalized",
+            });
+          } finally {
+            relanceButton.textContent = originalText;
+            relanceButton.disabled = false;
+            relanceButton.style.opacity = "1";
+          }
+        };
+
+        const syncMenuOptions = () => {
+          conversationMenu.innerHTML = "";
+          conversationMenu.append(
+            menuOption(
+              "Standard",
+              "Génère une réponse contextuelle à partir du thread.",
+              "conversation_standard",
+              "conversation"
+            ),
+            menuOption(
+              "Personnalisé",
+              "Ajoute un fichier, du texte ou un prompt pour guider la réponse.",
+              "conversation_custom",
+              "conversation"
+            )
+          );
+
+          relanceMenu.innerHTML = "";
+          relanceMenu.append(
+            menuOption(
+              "Relance standard",
+              "Relance courte basée sur le thread et le prénom.",
+              "followup_standard",
+              "relance"
+            ),
+            menuOption(
+              "Relance personnalisée",
+              "Utilise le profil associé Focals pour une relance sur-mesure.",
+              "followup_personalized",
+              "relance"
+            )
+          );
+        };
+
+        const syncUI = () => {
+          conversationMenu.style.display =
+            uiState.openMenu === "conversation" ? "flex" : "none";
+          relanceMenu.style.display = uiState.openMenu === "relance" ? "flex" : "none";
+
+          conversationButton.textContent =
+            uiState.openMenu === "conversation" ? "Conversation ▴" : "Conversation ▾";
+          relanceButton.textContent =
+            uiState.openMenu === "relance" ? "Relance ▴" : "Relance ▾";
+
+          conversationButton.style.background =
+            uiState.openMenu === "conversation" ? palette.primaryHover : palette.primary;
+          relanceButton.style.background =
+            uiState.openMenu === "relance" ? palette.primaryHover : palette.primary;
+
+          customCard.style.display = uiState.showCustomCard ? "block" : "none";
+
+          const uploadInfo = [];
+          if (uiState.uploadFilename) uploadInfo.push(`Fichier: ${uiState.uploadFilename}`);
+          if (uiState.customUploadText) uploadInfo.push("Contenu du fichier chargé");
+          uploadMeta.textContent = uploadInfo.join(" – ");
+
+          const hasContent =
+            (uiState.customUploadText || "").trim().length > 0 ||
+            (uiState.customPasteText || "").trim().length > 0;
+          const hasPrompt = (uiState.customPrompt || "").trim().length > 0;
+          customGenerate.disabled = !hasContent && !hasPrompt;
+          customGenerate.style.opacity = customGenerate.disabled ? "0.6" : "1";
+        };
+
+        conversationButton.addEventListener("click", () => {
+          uiState.openMenu = uiState.openMenu === "conversation" ? null : "conversation";
+          uiState.showCustomCard = uiState.showCustomCard && uiState.openMenu === "conversation";
+          syncUI();
         });
 
-        promptButton.addEventListener("click", () => {
-          replyState.isPanelOpen = !replyState.isPanelOpen;
-          console.log("[Focals][MSG] Ouverture modale relance", {
-            isOpen: replyState.isPanelOpen,
-            conversation: conversationName,
-          });
+        relanceButton.addEventListener("click", () => {
+          uiState.openMenu = uiState.openMenu === "relance" ? null : "relance";
           syncUI();
-          if (replyState.isPanelOpen) {
-            promptInput.focus();
-          }
         });
 
         document.addEventListener("click", (event) => {
           const target = event.target;
-          if (!replyState.isPanelOpen) return;
-          if (popover.contains(target) || promptButton.contains(target)) return;
-          closePanel();
+          if (
+            conversationMenu.contains(target) ||
+            relanceMenu.contains(target) ||
+            conversationButton.contains(target) ||
+            relanceButton.contains(target) ||
+            customCard.contains(target)
+          ) {
+            return;
+          }
+          if (uiState.openMenu || uiState.showCustomCard) {
+            uiState.openMenu = null;
+            syncUI();
+          }
         });
 
-        popover.appendChild(closeButton);
-        popover.appendChild(popoverTitle);
-        popover.appendChild(popoverDescription);
-        popover.appendChild(modesContainer);
-        popover.appendChild(instructionsBlock);
-        popover.appendChild(promptGenerate);
+        uploadArea.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          uploadArea.style.background = "rgba(255,255,255,0.06)";
+        });
+        uploadArea.addEventListener("dragleave", () => {
+          uploadArea.style.background = "rgba(255,255,255,0.03)";
+        });
+        uploadArea.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          const file = event.dataTransfer?.files?.[0];
+          if (!file) return;
+          uiState.uploadFilename = file.name;
+          uiState.customUploadText = await readFileAsText(file);
+          uploadArea.style.background = "rgba(255,255,255,0.03)";
+          syncUI();
+        });
 
-        buttonRow.appendChild(suggestButton);
-        buttonRow.appendChild(promptButton);
+        uploadArea.addEventListener("click", () => uploadInput.click());
+        uploadInput.addEventListener("change", async (event) => {
+          const file = event.target?.files?.[0];
+          if (!file) return;
+          uiState.uploadFilename = file.name;
+          uiState.customUploadText = await readFileAsText(file);
+          syncUI();
+        });
 
-        controlsWrapper.appendChild(buttonRow);
-        controlsWrapper.appendChild(popover);
+        pasteArea.addEventListener("input", () => {
+          uiState.customPasteText = pasteArea.value;
+          syncUI();
+        });
 
+        promptInput.addEventListener("input", () => {
+          uiState.customPrompt = promptInput.value;
+          syncUI();
+        });
+
+        customClose.addEventListener("click", () => {
+          uiState.showCustomCard = false;
+          syncUI();
+        });
+
+        const buildCustomInstructions = () => {
+          const segments = [];
+          if ((uiState.customUploadText || "").trim()) {
+            segments.push(`Contenu importé:\n${uiState.customUploadText.trim()}`);
+          }
+          if ((uiState.customPasteText || "").trim()) {
+            segments.push(`Contenu collé:\n${uiState.customPasteText.trim()}`);
+          }
+          if ((uiState.customPrompt || "").trim()) {
+            segments.push(`Instruction: ${uiState.customPrompt.trim()}`);
+          }
+          return segments.join("\n\n");
+        };
+
+        customGenerate.addEventListener("click", async () => {
+          const instructions = buildCustomInstructions();
+          const originalText = customGenerate.textContent;
+          customGenerate.textContent = "⏳ Génération…";
+          customGenerate.disabled = true;
+          customGenerate.style.opacity = "0.7";
+          try {
+            await runSuggestReplyPipeline({
+              button: customGenerate,
+              composer,
+              conversationRoot,
+              conversationName,
+              editorIndex: index + 1,
+              generationMode: "prompt_custom",
+              customInstructions: instructions,
+            });
+          } finally {
+            customGenerate.textContent = originalText;
+            customGenerate.disabled = false;
+            customGenerate.style.opacity = "1";
+          }
+        });
+
+        syncMenuOptions();
+        syncUI();
+
+        const conversationWrapper = document.createElement("div");
+        conversationWrapper.style.position = "relative";
+        conversationWrapper.appendChild(conversationButton);
+        conversationWrapper.appendChild(conversationMenu);
+
+        const relanceWrapper = document.createElement("div");
+        relanceWrapper.style.position = "relative";
+        relanceWrapper.appendChild(relanceButton);
+        relanceWrapper.appendChild(relanceMenu);
+
+        dropdownsRow.appendChild(conversationWrapper);
+        dropdownsRow.appendChild(relanceWrapper);
+
+        controlsWrapper.appendChild(dropdownsRow);
+        composer.insertBefore(customCard, footer);
         rightActions.appendChild(controlsWrapper);
 
-        syncUI();
         composer.dataset.focalsBound = "true";
 
-        log("[MSG] Suggest and prompt reply buttons injected", {
+        log("[MSG] Conversational controls injected", {
           conversation: conversationName,
           editorIndex: index + 1,
         });
