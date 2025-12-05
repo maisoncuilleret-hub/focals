@@ -17,9 +17,8 @@ function debugLog(stage, details) {
 }
 
   const STORAGE_KEYS = {
-    selectedTemplate: "focals_selectedTemplate",
+    tone: "focals_defaultTone",
     selectedJob: "focals_selectedJob",
-    apiKey: "focals_openai_apiKey",
   };
 
   const DEFAULT_TONE = "professional";
@@ -70,11 +69,8 @@ const syncStore = withStorage("sync");
 let state = {
   userId: null,
   tone: DEFAULT_TONE,
-  templates: [],
   jobs: [],
-  selectedTemplate: null,
   selectedJob: null,
-  apiKey: "",
   loading: false,
   profile: null,
   profileStatus: "idle",
@@ -83,7 +79,6 @@ let state = {
   supabaseSession: null,
 };
 
-let editingTemplateId = null;
 let editingJobId = null;
 
 function setStatus(message) {
@@ -274,98 +269,12 @@ function getActiveJob() {
   return Array.isArray(state.jobs) && state.jobs.length > 0 ? state.jobs[0] : null;
 }
 
-function renderTemplates() {
-  const list = document.getElementById("templatesList");
-  const form = document.getElementById("templateForm");
-  const labelInput = document.getElementById("templateLabel");
-  const idInput = document.getElementById("templateId");
-  const langSelect = document.getElementById("templateLanguage");
-  const contentInput = document.getElementById("templateContent");
-  if (!list) return;
-
-  list.innerHTML = "";
-  const templates = Array.isArray(state.templates) ? state.templates : [];
-  templates.forEach((tpl) => {
-    const item = document.createElement("div");
-    item.className = "list-item";
-    const info = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = tpl.label || tpl.id;
-    const meta = document.createElement("small");
-    meta.textContent = tpl.content ? tpl.content.slice(0, 80) : "";
-    const pill = document.createElement("span");
-    pill.className = "pill";
-    pill.textContent = tpl.language || "—";
-    info.appendChild(strong);
-    info.appendChild(meta);
-    info.appendChild(pill);
-
-    const actions = document.createElement("div");
-    actions.className = "row";
-
-    const selectBtn = document.createElement("button");
-    selectBtn.className = "secondary";
-    selectBtn.textContent = tpl.id === state.selectedTemplate ? "Par défaut" : "Définir";
-    selectBtn.onclick = async () => {
-      await syncStore.set({ [STORAGE_KEYS.selectedTemplate]: tpl.id });
-      state.selectedTemplate = tpl.id;
-      renderTemplates();
-      setStatus("Modèle par défaut mis à jour");
-    };
-
-    const editBtn = document.createElement("button");
-    editBtn.className = "secondary";
-    editBtn.textContent = "Éditer";
-    editBtn.onclick = () => {
-      editingTemplateId = tpl.id;
-      if (form) form.style.display = "block";
-      if (labelInput) labelInput.value = tpl.label || "";
-      if (idInput) idInput.value = tpl.id || "";
-      if (langSelect) langSelect.value = tpl.language || "fr";
-      if (contentInput) contentInput.value = tpl.content || "";
-    };
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "danger";
-    deleteBtn.textContent = "Supprimer";
-    deleteBtn.onclick = async () => {
-      if (!state.userId) return;
-      try {
-        setLoading(true, "Suppression du modèle...");
-        await apiModule.deleteTemplate(state.userId, tpl.id);
-        state.templates = templates.filter((t) => t.id !== tpl.id);
-        if (state.selectedTemplate === tpl.id) {
-          state.selectedTemplate = null;
-          await syncStore.set({ [STORAGE_KEYS.selectedTemplate]: null });
-        }
-        renderTemplates();
-        setStatus("Modèle supprimé");
-      } catch (err) {
-        console.error(err);
-        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    actions.appendChild(selectBtn);
-    actions.appendChild(editBtn);
-    actions.appendChild(deleteBtn);
-    item.appendChild(info);
-    item.appendChild(actions);
-    list.appendChild(item);
-  });
-}
-
 function renderJobs() {
   const list = document.getElementById("jobsList");
   const form = document.getElementById("jobForm");
   const titleInput = document.getElementById("jobTitle");
-  const idInput = document.getElementById("jobId");
   const companyInput = document.getElementById("jobCompany");
-  const langSelect = document.getElementById("jobLanguage");
   const descInput = document.getElementById("jobDescription");
-  const summaryInput = document.getElementById("jobSummary");
   if (!list) return;
 
   list.innerHTML = "";
@@ -377,13 +286,9 @@ function renderJobs() {
     const strong = document.createElement("strong");
     strong.textContent = `${job.title || "Job"} @ ${job.company || "—"}`;
     const meta = document.createElement("small");
-    meta.textContent = job.summary ? job.summary.slice(0, 80) : job.raw_description?.slice(0, 80) || "";
-    const pill = document.createElement("span");
-    pill.className = "pill";
-    pill.textContent = job.language || "—";
+    meta.textContent = job.raw_description?.slice(0, 80) || "";
     info.appendChild(strong);
     info.appendChild(meta);
-    info.appendChild(pill);
 
     const actions = document.createElement("div");
     actions.className = "row";
@@ -416,11 +321,8 @@ function renderJobs() {
       editingJobId = job.id;
       if (form) form.style.display = "block";
       if (titleInput) titleInput.value = job.title || "";
-      if (idInput) idInput.value = job.id || "";
       if (companyInput) companyInput.value = job.company || "";
-      if (langSelect) langSelect.value = job.language || "fr";
       if (descInput) descInput.value = job.raw_description || "";
-      if (summaryInput) summaryInput.value = job.summary || "";
     };
 
     const deleteBtn = document.createElement("button");
@@ -460,26 +362,16 @@ function renderJobs() {
 async function loadState() {
   try {
     setLoading(true, "Chargement...");
-    const apiKeyValues = await syncStore.get([
-      STORAGE_KEYS.selectedTemplate,
-      STORAGE_KEYS.selectedJob,
-      STORAGE_KEYS.apiKey,
-    ]);
+    const storedValues = await syncStore.get([STORAGE_KEYS.selectedJob]);
     const userId = await getOrCreateUserId();
     state.userId = userId;
     const data = await apiModule.bootstrapUser(userId);
     state.tone = data.settings?.default_tone || DEFAULT_TONE;
-    state.templates = data.templates || [];
     state.jobs = data.jobs || [];
     state.settings = data.settings;
-    state.selectedJob = data.settings?.default_job_id || apiKeyValues[STORAGE_KEYS.selectedJob] || null;
-    state.selectedTemplate = apiKeyValues[STORAGE_KEYS.selectedTemplate] || null;
-    state.apiKey = apiKeyValues[STORAGE_KEYS.apiKey] || "";
+    state.selectedJob = data.settings?.default_job_id || storedValues[STORAGE_KEYS.selectedJob] || null;
     renderTone();
-    renderTemplates();
     renderJobs();
-    const apiInput = document.getElementById("apiKey");
-    if (apiInput) apiInput.value = state.apiKey || "";
   } catch (err) {
     console.error(err);
     alert(`Erreur Focals : ${err?.message || "Impossible de charger les données."}`);
@@ -657,103 +549,20 @@ function setupTone() {
   });
 }
 
-function setupTemplateForm() {
-  const addBtn = document.getElementById("addTemplate");
-  const form = document.getElementById("templateForm");
-  const cancelBtn = document.getElementById("cancelTemplate");
-  const saveBtn = document.getElementById("saveTemplate");
-  const labelInput = document.getElementById("templateLabel");
-  const idInput = document.getElementById("templateId");
-  const langSelect = document.getElementById("templateLanguage");
-  const contentInput = document.getElementById("templateContent");
-
-  const resetForm = () => {
-    editingTemplateId = null;
-    if (labelInput) labelInput.value = "";
-    if (idInput) idInput.value = "";
-    if (langSelect) langSelect.value = "fr";
-    if (contentInput) contentInput.value = "";
-  };
-
-  if (addBtn && form) {
-    addBtn.addEventListener("click", () => {
-      form.style.display = "block";
-      resetForm();
-    });
-  }
-
-  if (cancelBtn && form) {
-    cancelBtn.addEventListener("click", () => {
-      form.style.display = "none";
-      resetForm();
-    });
-  }
-
-  if (saveBtn) {
-    saveBtn.addEventListener("click", async () => {
-      if (!state.userId) return;
-      const label = labelInput?.value.trim();
-      const id = idInput?.value.trim();
-      const language = langSelect?.value || "fr";
-      const content = contentInput?.value.trim();
-      if (!label || !content) {
-        setStatus("Veuillez remplir tous les champs du modèle");
-        return;
-      }
-      try {
-        setLoading(true, "Enregistrement du modèle...");
-        const template = await apiModule.upsertTemplate(state.userId, {
-          id: editingTemplateId || id || undefined,
-          label,
-          language,
-          content,
-        });
-        const templates = Array.isArray(state.templates) ? [...state.templates] : [];
-        const existingIdx = templates.findIndex((t) => t.id === template.id);
-        if (existingIdx >= 0) {
-          templates[existingIdx] = template;
-        } else {
-          templates.push(template);
-        }
-        state.templates = templates;
-        state.selectedTemplate = template.id;
-        await syncStore.set({
-          [STORAGE_KEYS.selectedTemplate]: template.id,
-        });
-        renderTemplates();
-        if (form) form.style.display = "none";
-        resetForm();
-        setStatus("Modèle enregistré");
-      } catch (err) {
-        console.error(err);
-        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
-      } finally {
-        setLoading(false);
-      }
-    });
-  }
-}
-
 function setupJobForm() {
   const addBtn = document.getElementById("addJob");
   const form = document.getElementById("jobForm");
   const cancelBtn = document.getElementById("cancelJob");
   const saveBtn = document.getElementById("saveJob");
   const titleInput = document.getElementById("jobTitle");
-  const idInput = document.getElementById("jobId");
   const companyInput = document.getElementById("jobCompany");
-  const langSelect = document.getElementById("jobLanguage");
   const descInput = document.getElementById("jobDescription");
-  const summaryInput = document.getElementById("jobSummary");
 
   const resetForm = () => {
     editingJobId = null;
     if (titleInput) titleInput.value = "";
-    if (idInput) idInput.value = "";
     if (companyInput) companyInput.value = "";
-    if (langSelect) langSelect.value = "fr";
     if (descInput) descInput.value = "";
-    if (summaryInput) summaryInput.value = "";
   };
 
   if (addBtn && form) {
@@ -774,11 +583,10 @@ function setupJobForm() {
     saveBtn.addEventListener("click", async () => {
       if (!state.userId) return;
       const title = titleInput?.value.trim();
-      const id = idInput?.value.trim();
       const company = companyInput?.value.trim();
-      const language = langSelect?.value || "fr";
       const rawDescription = descInput?.value.trim();
-      const summary = summaryInput?.value.trim() || null;
+      const existingJob = editingJobId ? state.jobs.find((j) => j.id === editingJobId) : null;
+      const language = existingJob?.language || "fr";
       if (!title || !company || !rawDescription) {
         setStatus("Veuillez remplir tous les champs obligatoires du job");
         return;
@@ -786,13 +594,12 @@ function setupJobForm() {
       try {
         setLoading(true, "Enregistrement du job...");
         const job = await apiModule.upsertJob(state.userId, {
-          id: editingJobId || id || undefined,
+          id: editingJobId || undefined,
           title,
           company,
           language,
           raw_description: rawDescription,
-          summary,
-          is_default: state.selectedJob === (editingJobId || id),
+          is_default: state.selectedJob === editingJobId,
         });
         const jobs = Array.isArray(state.jobs) ? [...state.jobs] : [];
         const existingIdx = jobs.findIndex((j) => j.id === job.id);
@@ -816,24 +623,10 @@ function setupJobForm() {
   }
 }
 
-function setupApiKey() {
-  const saveBtn = document.getElementById("saveApiKey");
-  const input = document.getElementById("apiKey");
-  if (!saveBtn || !input) return;
-  saveBtn.addEventListener("click", async () => {
-    const value = input.value.trim();
-    await syncStore.set({ [STORAGE_KEYS.apiKey]: value });
-    state.apiKey = value;
-    setStatus("Clé OpenAI sauvegardée");
-  });
-}
-
 window.addEventListener("DOMContentLoaded", async () => {
   await loadState();
   setupTone();
-  setupTemplateForm();
   setupJobForm();
-  setupApiKey();
   setupTabs();
   setupProfileActions();
   await refreshProfileFromTab();
