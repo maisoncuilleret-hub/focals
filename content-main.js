@@ -1753,15 +1753,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
   async function initConversationFlow() {
     debugLog("MODE", "conversation");
-    const { templates, jobs, selectedTemplate, selectedJob } = await loadTemplatesAndJobs();
-    const toneData = await loadTone();
-    buildControlPanel({
-      templates,
-      jobs,
-      selectedTemplate,
-      selectedJob,
-      tone: toneData.tone,
-    });
   }
 
   async function initProfileFlow() {
