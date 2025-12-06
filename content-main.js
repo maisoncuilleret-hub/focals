@@ -439,9 +439,25 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     inputContainer.parentNode?.insertBefore(buttonContainer, inputContainer);
   }
 
+  let conversationInitialized = false;
+  const hasMessagingUi = () =>
+    /\/messaging\//.test(window.location.pathname) ||
+    !!document.querySelector(
+      [".msg-overlay-list-bubble", ".msg-overlay-conversation-bubble", ".msg-overlay-container"].join(", ")
+    );
+
+  const maybeInitConversationFlow = async () => {
+    if (conversationInitialized) return;
+    conversationInitialized = true;
+    await initConversationFlow();
+  };
+
   const messagingObserver = new MutationObserver(() => {
-    if (window.location.href.includes("/messaging/")) {
-      setTimeout(injectGenerationButtons, 500);
+    if (hasMessagingUi()) {
+      setTimeout(() => {
+        maybeInitConversationFlow();
+        injectGenerationButtons();
+      }, 500);
     }
   });
 
@@ -531,7 +547,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     return markers.some((regex) => regex.test(normalized));
   };
 
-  const isMessagingPage = () => /\/messaging\//.test(window.location.pathname);
   const linkedinScraper = window.__FocalsLinkedinScraper || {};
 
   function hasInlineRecruiterProfileCard() {
@@ -1761,8 +1776,8 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   async function init() {
-    if (isMessagingPage()) {
-      await initConversationFlow();
+    if (hasMessagingUi()) {
+      await maybeInitConversationFlow();
       return;
     }
 
