@@ -8,7 +8,7 @@ export type SenderType = 'candidate' | 'me' | 'other';
 export interface FocalsSettings {
   user_id: string;
   default_tone: ToneType;
-  default_job_id: string | null;
+  system_prompt_override?: string | null;
 }
 
 export interface FocalsJob {
@@ -40,14 +40,12 @@ export interface ConversationMessage {
 export interface FocalsBootstrapResponse {
   userId: string;
   settings: FocalsSettings;
-  jobs: FocalsJob[];
   templates: FocalsTemplate[];
 }
 
 export interface FocalsGetDataResponse {
   userId: string;
   settings: FocalsSettings;
-  jobs: FocalsJob[];
   templates: FocalsTemplate[];
 }
 
@@ -63,6 +61,7 @@ export interface GenerateReplyRequest {
   jobId?: string;
   templateId?: string | null;
   templateContentOverride?: string | null;
+  systemPromptOverride?: string | null;
 }
 
 export interface GenerateReplyResponse {
@@ -124,35 +123,16 @@ export async function getAllData(userId: string): Promise<FocalsGetDataResponse>
 
 export async function upsertSettings(
   userId: string,
-  partial: Partial<Pick<FocalsSettings, 'default_tone' | 'default_job_id'>>
+  partial: Partial<Pick<FocalsSettings, 'default_tone' | 'system_prompt_override'>>
 ): Promise<FocalsSettings> {
   const payload: Record<string, unknown> = { userId };
   if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_tone')) {
     payload.default_tone = partial.default_tone;
   }
-  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_job_id')) {
-    payload.default_job_id = partial.default_job_id;
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'system_prompt_override')) {
+    payload.system_prompt_override = partial.system_prompt_override;
   }
   return postJson('focals-upsert-settings', payload);
-}
-
-export async function upsertJob(
-  userId: string,
-  jobInput: {
-    id?: string;
-    title: string;
-    company: string;
-    language: LanguageType;
-    raw_description: string;
-    summary?: string | null;
-    is_default?: boolean;
-  }
-): Promise<FocalsJob> {
-  return postJson('focals-upsert-job', { userId, job: jobInput });
-}
-
-export async function deleteJob(userId: string, jobId: string): Promise<{ success: true }> {
-  return postJson('focals-delete-job', { userId, jobId });
 }
 
 export async function upsertTemplate(

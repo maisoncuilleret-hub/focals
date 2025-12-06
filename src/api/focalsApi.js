@@ -53,18 +53,10 @@ async function upsertSettings(userId, partial) {
   if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_tone')) {
     payload.default_tone = partial.default_tone;
   }
-  if (partial && Object.prototype.hasOwnProperty.call(partial, 'default_job_id')) {
-    payload.default_job_id = partial.default_job_id;
+  if (partial && Object.prototype.hasOwnProperty.call(partial, 'system_prompt_override')) {
+    payload.system_prompt_override = partial.system_prompt_override;
   }
   return postJson('focals-upsert-settings', payload);
-}
-
-async function upsertJob(userId, jobInput) {
-  return postJson('focals-upsert-job', { userId, job: jobInput });
-}
-
-async function deleteJob(userId, jobId) {
-  return postJson('focals-delete-job', { userId, jobId });
 }
 
 async function upsertTemplate(userId, templateInput) {
@@ -105,8 +97,6 @@ export {
   bootstrapUser,
   getAllData,
   upsertSettings,
-  upsertJob,
-  deleteJob,
   upsertTemplate,
   deleteTemplate,
   generateReply,
