@@ -18,7 +18,7 @@ function debugLog(stage, details) {
 
   const STORAGE_KEYS = {
     tone: "focals_defaultTone",
-    selectedJob: "focals_selectedJob",
+    systemPromptOverride: "focals_systemPromptOverride",
   };
 
   const DEFAULT_TONE = "professional";
@@ -69,8 +69,7 @@ const syncStore = withStorage("sync");
 let state = {
   userId: null,
   tone: DEFAULT_TONE,
-  jobs: [],
-  selectedJob: null,
+  systemPromptOverride: "",
   loading: false,
   profile: null,
   profileStatus: "idle",
@@ -78,8 +77,6 @@ let state = {
   activeTab: "profile",
   supabaseSession: null,
 };
-
-let editingJobId = null;
 
 function setStatus(message) {
   const el = document.getElementById("status");
@@ -260,118 +257,32 @@ function renderProfileCard(profile) {
   info.appendChild(chips);
 }
 
-function getActiveJob() {
-  const selectedId = state.selectedJob || state.settings?.default_job_id || null;
-  if (selectedId) {
-    const selected = (state.jobs || []).find((job) => job.id === selectedId);
-    if (selected) return selected;
-  }
-  return Array.isArray(state.jobs) && state.jobs.length > 0 ? state.jobs[0] : null;
-}
-
-function renderJobs() {
-  const list = document.getElementById("jobsList");
-  const form = document.getElementById("jobForm");
-  const titleInput = document.getElementById("jobTitle");
-  const companyInput = document.getElementById("jobCompany");
-  const descInput = document.getElementById("jobDescription");
-  if (!list) return;
-
-  list.innerHTML = "";
-  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
-  jobs.forEach((job) => {
-    const item = document.createElement("div");
-    item.className = "list-item";
-    const info = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = `${job.title || "Job"} @ ${job.company || "—"}`;
-    const meta = document.createElement("small");
-    meta.textContent = job.raw_description?.slice(0, 80) || "";
-    info.appendChild(strong);
-    info.appendChild(meta);
-
-    const actions = document.createElement("div");
-    actions.className = "row";
-
-    const selectBtn = document.createElement("button");
-    selectBtn.className = "secondary";
-    selectBtn.textContent = job.id === state.selectedJob ? "Par défaut" : "Définir";
-    selectBtn.onclick = async () => {
-      if (!state.userId) return;
-      try {
-        setLoading(true, "Mise à jour du job par défaut...");
-        const settings = await apiModule.upsertSettings(state.userId, { default_job_id: job.id });
-        state.selectedJob = settings.default_job_id;
-        state.settings = settings;
-        await syncStore.set({ [STORAGE_KEYS.selectedJob]: job.id });
-        renderJobs();
-        setStatus("Job par défaut mis à jour");
-      } catch (err) {
-        console.error(err);
-        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const editBtn = document.createElement("button");
-    editBtn.className = "secondary";
-    editBtn.textContent = "Éditer";
-    editBtn.onclick = () => {
-      editingJobId = job.id;
-      if (form) form.style.display = "block";
-      if (titleInput) titleInput.value = job.title || "";
-      if (companyInput) companyInput.value = job.company || "";
-      if (descInput) descInput.value = job.raw_description || "";
-    };
-
-    const deleteBtn = document.createElement("button");
-    deleteBtn.className = "danger";
-    deleteBtn.textContent = "Supprimer";
-    deleteBtn.onclick = async () => {
-      if (!state.userId) return;
-      try {
-        setLoading(true, "Suppression du job...");
-        await apiModule.deleteJob(state.userId, job.id);
-        const filtered = jobs.filter((j) => j.id !== job.id);
-        state.jobs = filtered;
-        if (state.selectedJob === job.id) {
-          state.selectedJob = null;
-          await syncStore.set({ [STORAGE_KEYS.selectedJob]: null });
-          state.settings = { ...state.settings, default_job_id: null };
-        }
-        renderJobs();
-        setStatus("Job supprimé");
-      } catch (err) {
-        console.error(err);
-        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    actions.appendChild(selectBtn);
-    actions.appendChild(editBtn);
-    actions.appendChild(deleteBtn);
-    item.appendChild(info);
-    item.appendChild(actions);
-    list.appendChild(item);
-  });
+function renderSystemPrompt() {
+  const textarea = document.getElementById("systemPrompt");
+  if (!textarea) return;
+  textarea.value = state.systemPromptOverride || "";
 }
 
 async function loadState() {
   try {
     setLoading(true, "Chargement...");
-    const storedValues = await syncStore.get([STORAGE_KEYS.selectedJob]);
+    const storedValues = await syncStore.get([
+      STORAGE_KEYS.systemPromptOverride,
+      STORAGE_KEYS.tone,
+    ]);
     const userId = await getOrCreateUserId();
     state.userId = userId;
     const data = await apiModule.bootstrapUser(userId);
-    state.tone = data.settings?.default_tone || DEFAULT_TONE;
-    state.jobs = data.jobs || [];
+    state.tone = data.settings?.default_tone || storedValues[STORAGE_KEYS.tone] || DEFAULT_TONE;
     state.settings = data.settings;
-    state.selectedJob = data.settings?.default_job_id || storedValues[STORAGE_KEYS.selectedJob] || null;
+    state.systemPromptOverride =
+      data.settings?.system_prompt_override || storedValues[STORAGE_KEYS.systemPromptOverride] || "";
     renderTone();
-    renderJobs();
+    renderSystemPrompt();
+    await syncStore.set({
+      [STORAGE_KEYS.tone]: state.tone,
+      [STORAGE_KEYS.systemPromptOverride]: state.systemPromptOverride,
+    });
   } catch (err) {
     console.error(err);
     alert(`Erreur Focals : ${err?.message || "Impossible de charger les données."}`);
@@ -549,84 +460,40 @@ function setupTone() {
   });
 }
 
-function setupJobForm() {
-  const addBtn = document.getElementById("addJob");
-  const form = document.getElementById("jobForm");
-  const cancelBtn = document.getElementById("cancelJob");
-  const saveBtn = document.getElementById("saveJob");
-  const titleInput = document.getElementById("jobTitle");
-  const companyInput = document.getElementById("jobCompany");
-  const descInput = document.getElementById("jobDescription");
+function setupSystemPrompt() {
+  const textarea = document.getElementById("systemPrompt");
+  const saveBtn = document.getElementById("saveSystemPrompt");
+  if (!textarea || !saveBtn) return;
 
-  const resetForm = () => {
-    editingJobId = null;
-    if (titleInput) titleInput.value = "";
-    if (companyInput) companyInput.value = "";
-    if (descInput) descInput.value = "";
-  };
+  textarea.addEventListener("input", () => {
+    state.systemPromptOverride = textarea.value || "";
+  });
 
-  if (addBtn && form) {
-    addBtn.addEventListener("click", () => {
-      form.style.display = "block";
-      resetForm();
-    });
-  }
-
-  if (cancelBtn && form) {
-    cancelBtn.addEventListener("click", () => {
-      form.style.display = "none";
-      resetForm();
-    });
-  }
-
-  if (saveBtn) {
-    saveBtn.addEventListener("click", async () => {
-      if (!state.userId) return;
-      const title = titleInput?.value.trim();
-      const company = companyInput?.value.trim();
-      const rawDescription = descInput?.value.trim();
-      const existingJob = editingJobId ? state.jobs.find((j) => j.id === editingJobId) : null;
-      const language = existingJob?.language || "fr";
-      if (!title || !company || !rawDescription) {
-        setStatus("Veuillez remplir tous les champs obligatoires du job");
-        return;
-      }
-      try {
-        setLoading(true, "Enregistrement du job...");
-        const job = await apiModule.upsertJob(state.userId, {
-          id: editingJobId || undefined,
-          title,
-          company,
-          language,
-          raw_description: rawDescription,
-          is_default: state.selectedJob === editingJobId,
-        });
-        const jobs = Array.isArray(state.jobs) ? [...state.jobs] : [];
-        const existingIdx = jobs.findIndex((j) => j.id === job.id);
-        if (existingIdx >= 0) {
-          jobs[existingIdx] = job;
-        } else {
-          jobs.push(job);
-        }
-        state.jobs = jobs;
-        renderJobs();
-        if (form) form.style.display = "none";
-        resetForm();
-        setStatus("Job enregistré");
-      } catch (err) {
-        console.error(err);
-        alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
-      } finally {
-        setLoading(false);
-      }
-    });
-  }
+  saveBtn.addEventListener("click", async () => {
+    if (!state.userId) return;
+    const value = (textarea.value || "").trim();
+    try {
+      setLoading(true, "Enregistrement des règles...");
+      const settings = await apiModule.upsertSettings(state.userId, {
+        system_prompt_override: value,
+      });
+      state.systemPromptOverride = settings.system_prompt_override || value;
+      state.settings = settings;
+      await syncStore.set({ [STORAGE_KEYS.systemPromptOverride]: value });
+      setStatus("Règles personnalisées enregistrées");
+    } catch (err) {
+      console.error(err);
+      alert(`Erreur Focals : ${err?.message || "Impossible d'enregistrer."}`);
+    } finally {
+      setLoading(false);
+    }
+  });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
   await loadState();
   setupTone();
-  setupJobForm();
+  setupSystemPrompt();
   setupTabs();
   setupProfileActions();
   await refreshProfileFromTab();

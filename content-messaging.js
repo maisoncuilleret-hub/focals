@@ -70,8 +70,7 @@
       settings: "FOCALS_SETTINGS",
       templates: "FOCALS_TEMPLATES",
       activeTemplate: "FOCALS_ACTIVE_TEMPLATE",
-      jobs: "FOCALS_JOBS",
-      activeJob: "FOCALS_ACTIVE_JOB",
+      systemPromptOverride: "focals_systemPromptOverride",
     };
     const PROFILE_STORAGE_KEY = "FOCALS_LAST_PROFILE";
 
@@ -105,6 +104,7 @@
       tone: "friendly",
       languageFallback: "en",
       followUpPreference: "next_steps",
+      system_prompt_override: "",
     };
 
     const DEFAULT_TEMPLATES = [
@@ -119,16 +119,6 @@
         title: "Concise acknowledgement",
         content:
           "Accuse réception, reprends un élément clé du message précédent et propose une action claire en deux phrases maximum.",
-      },
-    ];
-
-    const DEFAULT_JOBS = [
-      {
-        id: "default_job",
-        title: "Full-Stack Engineer",
-        description:
-          "We are hiring a pragmatic full-stack engineer who can ship end-to-end features with React/TypeScript and Node. Emphasis on ownership, clean communication, and shipping reliable customer-facing features.",
-        keywords: ["React", "TypeScript", "Node", "shipping", "customer focus"],
       },
     ];
 
@@ -235,35 +225,6 @@
       }
 
       return "";
-    };
-
-    const extractKeywordsFromJob = (description = "") => {
-      if (!description) return [];
-      const tokens = description
-        .split(/[^A-Za-zÀ-ÿ0-9+#]+/)
-        .map((word) => word.trim())
-        .filter((word) => word.length >= 3 && word.length <= 30);
-
-      const interesting = tokens.filter((token) => {
-        const hasUpper = /[A-Z]/.test(token.charAt(0));
-        const isTech = /[+#]/.test(token) || /js|dev|tech|data/i.test(token);
-        return hasUpper || isTech;
-      });
-
-      return Array.from(new Set(interesting)).slice(0, 15);
-    };
-
-    const buildJobContext = (job) => {
-      if (!job) return null;
-      const description = job.raw_description || job.summary || job.description || "";
-      const keywords = Array.isArray(job.keywords) && job.keywords.length
-        ? job.keywords
-        : extractKeywordsFromJob(description);
-      return {
-        title: job.title || job.label || job.id || "",
-        description,
-        keywords,
-      };
     };
 
     const extractCandidateProfileFromPage = (rootElement = document) => {
@@ -526,19 +487,16 @@
       });
 
     const loadUserPreferences = async () => {
-      const [syncData, localData] = await Promise.all([
-        getFromStorage("sync", {
-          [STORAGE_KEYS.settings]: DEFAULT_SETTINGS,
-          [STORAGE_KEYS.templates]: DEFAULT_TEMPLATES,
-          [STORAGE_KEYS.activeTemplate]: DEFAULT_TEMPLATES[0].id,
-        }),
-        getFromStorage("local", {
-          [STORAGE_KEYS.jobs]: DEFAULT_JOBS,
-          [STORAGE_KEYS.activeJob]: DEFAULT_JOBS[0].id,
-        }),
-      ]);
+      const syncData = await getFromStorage("sync", {
+        [STORAGE_KEYS.settings]: DEFAULT_SETTINGS,
+        [STORAGE_KEYS.templates]: DEFAULT_TEMPLATES,
+        [STORAGE_KEYS.activeTemplate]: DEFAULT_TEMPLATES[0].id,
+        [STORAGE_KEYS.systemPromptOverride]: DEFAULT_SETTINGS.system_prompt_override,
+      });
 
       const settings = { ...DEFAULT_SETTINGS, ...(syncData?.[STORAGE_KEYS.settings] || {}) };
+      settings.system_prompt_override =
+        syncData?.[STORAGE_KEYS.systemPromptOverride] || settings.system_prompt_override || "";
 
       const templates = Array.isArray(syncData?.[STORAGE_KEYS.templates])
         ? syncData[STORAGE_KEYS.templates]
@@ -554,18 +512,7 @@
         });
       }
 
-      const jobs = Array.isArray(localData?.[STORAGE_KEYS.jobs]) ? localData[STORAGE_KEYS.jobs] : DEFAULT_JOBS;
-      const activeJobId = localData?.[STORAGE_KEYS.activeJob] || jobs?.[0]?.id;
-      const activeJob = jobs.find((job) => job.id === activeJobId) || jobs[0];
-
-      if (!localData?.[STORAGE_KEYS.jobs]) {
-        await setInStorage("local", {
-          [STORAGE_KEYS.jobs]: jobs,
-          [STORAGE_KEYS.activeJob]: activeJob?.id,
-        });
-      }
-
-      return { settings, templates, activeTemplate, jobs, activeJob };
+      return { settings, templates, activeTemplate };
     };
 
     const resolveConversationRoot = (composer) => {
@@ -700,14 +647,17 @@
 
     const generateReplyFromAPI = async (
       messages,
-      { mode = "auto", context = {}, customInstructions = null } = {}
+      { mode = "auto", context = {}, customInstructions = null, systemPromptOverride = null } = {}
     ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
         return null;
       }
 
+      const userId = await getOrCreateUserId();
+
       const payload = {
+        userId,
         mode,
         messages: messages.map((msg) => ({
           text: msg.text,
@@ -716,6 +666,7 @@
         })),
         context,
         customInstructions: customInstructions || null,
+        systemPromptOverride: systemPromptOverride || null,
       };
 
       log("PIPELINE api_call: prepared payload", payload);
@@ -831,10 +782,11 @@
           return;
         }
 
-        const { settings, activeJob } = await loadUserPreferences();
+        const { settings } = await loadUserPreferences();
         const tone = settings?.tone || settings?.default_tone || "warm";
         const language =
           detectLanguageFromMessages(messages, settings.languageFallback || "fr") || "fr";
+        const systemPromptOverride = (settings.system_prompt_override || "").trim();
         const profileResolution = await resolveLinkedinProfileContext(conversationRoot, {
           candidateProfileUrl,
           freshProfile: freshLinkedinProfile || null,
@@ -845,7 +797,6 @@
           profileResolution.cachedProfile?.firstName ||
           profileResolution.cachedProfile?.name ||
           detectCandidateName(conversationName, messages);
-        const jobContext = buildJobContext(activeJob);
         const hasOutgoingMessages = messages.some((msg) => msg.fromMe);
 
         const baseContext = {
@@ -861,65 +812,20 @@
         let payloadContext = { ...baseContext };
         let instructionsToSend = null;
 
-        if (generationMode === "followup_classic") {
-          payloadMode = hasOutgoingMessages ? "followup_soft" : "initial";
-          if (jobContext) {
-            payloadContext.job = jobContext;
-          }
-        } else if (generationMode === "followup_personalized") {
-          payloadMode = "followup_soft";
-
-          const linkedinProfileCandidate = profileResolution.cachedProfile || null;
-          const hasValidProfile = !!(
-            linkedinProfileCandidate &&
-            (
-              (Array.isArray(linkedinProfileCandidate.experiences) &&
-                linkedinProfileCandidate.experiences.length > 0) ||
-              linkedinProfileCandidate.current_title ||
-              linkedinProfileCandidate.current_company ||
-              linkedinProfileCandidate.headline
-            )
-          );
-
-          payloadContext = {
-            ...baseContext,
-          };
-          if (jobContext) {
-            payloadContext.job = jobContext;
-          }
-
-          if (hasValidProfile) {
-            if (!linkedinProfileCandidate.linkedin_url && profileResolution.candidateProfileUrl) {
-              linkedinProfileCandidate.linkedin_url = profileResolution.candidateProfileUrl;
-            }
-            payloadContext.linkedinProfile = linkedinProfileCandidate;
-            console.log("[Focals][MSG] Attaching linkedinProfile to context", {
-              url: linkedinProfileCandidate.linkedin_url,
-              name: linkedinProfileCandidate.name,
-              currentTitle: linkedinProfileCandidate.current_title,
-              currentCompany: linkedinProfileCandidate.current_company,
-              experiencesCount: linkedinProfileCandidate.experiences?.length || 0,
-            });
-          } else {
-            console.warn(
-              "[Focals][MSG] No usable linkedinProfile found, personalized mode will fall back to classic follow-up"
-            );
-          }
-        } else if (generationMode === "prompt_custom") {
+        if (generationMode === "prompt_custom") {
           payloadMode = "prompt_reply";
           const trimmed = (customInstructions || "").trim();
           if (!trimmed) {
             alert("❌ Ajoutez des instructions personnalisées avant de générer.");
             return;
           }
-          if (jobContext) {
-            payloadContext.job = jobContext;
-          }
           payloadContext = {
             ...payloadContext,
             linkedinProfile: profileResolution.linkedinProfile || null,
           };
           instructionsToSend = trimmed;
+        } else {
+          payloadMode = hasOutgoingMessages ? "followup_soft" : "initial";
         }
 
         console.log("[Focals][MSG] generate payload context", {
@@ -931,6 +837,7 @@
           mode: payloadMode,
           context: payloadContext,
           customInstructions: instructionsToSend,
+          systemPromptOverride,
         });
         console.log("[Focals][MSG] Réponse reçue", {
           hasReply: !!reply,
@@ -1066,12 +973,8 @@
         const uiState = {
           openMenu: null,
           smartMode: "standard",
-          customUploadText: "",
-          customPasteText: "",
           customPrompt: "",
-          uploadFilename: "",
           showCustomModal: false,
-          showAssociationModal: false,
         };
 
         const autoResize = (textarea, minHeight = 48) => {
@@ -1124,66 +1027,27 @@
         customHeader.appendChild(customClose);
 
         const promptLabel = document.createElement("div");
-        promptLabel.textContent = "Instruction for the agent (prompt)";
+        promptLabel.textContent = "Instructions pour la réponse";
         promptLabel.style.fontSize = "12px";
         promptLabel.style.color = palette.muted;
         promptLabel.style.marginTop = "12px";
 
         const promptInput = document.createElement("textarea");
-        promptInput.placeholder = "Ex: write structured feedback";
+        promptInput.placeholder =
+          "Exemple : réponds en vouvoiement, fais une réponse courte qui remercie la personne et propose un call la semaine prochaine...";
         promptInput.style.width = "100%";
-        promptInput.style.minHeight = "52px";
+        promptInput.style.minHeight = "140px";
+        promptInput.style.maxHeight = "260px";
         promptInput.style.background = "rgba(255,255,255,0.03)";
         promptInput.style.color = palette.text;
         promptInput.style.border = `1px solid ${palette.border}`;
         promptInput.style.borderRadius = "10px";
         promptInput.style.padding = "10px";
         promptInput.style.resize = "vertical";
-
-        const pasteLabel = document.createElement("div");
-        pasteLabel.textContent = "Paste content here";
-        pasteLabel.style.fontSize = "12px";
-        pasteLabel.style.color = palette.muted;
-        pasteLabel.style.marginTop = "12px";
-
-        const pasteArea = document.createElement("textarea");
-        pasteArea.placeholder = "Paste any content here…";
-        pasteArea.style.width = "100%";
-        pasteArea.style.minHeight = "96px";
-        pasteArea.style.maxHeight = "240px";
-        pasteArea.style.background = "rgba(255,255,255,0.03)";
-        pasteArea.style.color = palette.text;
-        pasteArea.style.border = `1px solid ${palette.border}`;
-        pasteArea.style.borderRadius = "10px";
-        pasteArea.style.padding = "10px";
-        pasteArea.style.resize = "vertical";
-        pasteArea.style.overflowY = "auto";
-
-        const uploadArea = document.createElement("label");
-        uploadArea.textContent = "Upload or drag-and-drop files";
-        uploadArea.style.display = "block";
-        uploadArea.style.border = `1px dashed ${palette.border}`;
-        uploadArea.style.borderRadius = "12px";
-        uploadArea.style.padding = "12px";
-        uploadArea.style.marginTop = "12px";
-        uploadArea.style.cursor = "pointer";
-        uploadArea.style.background = "rgba(255,255,255,0.03)";
-        uploadArea.style.color = palette.muted;
-        uploadArea.style.textAlign = "center";
-
-        const uploadInput = document.createElement("input");
-        uploadInput.type = "file";
-        uploadInput.style.display = "none";
-
-        const uploadMeta = document.createElement("div");
-        uploadMeta.style.fontSize = "12px";
-        uploadMeta.style.color = palette.muted;
-        uploadMeta.style.marginTop = "6px";
-
-        uploadArea.appendChild(uploadInput);
+        promptInput.style.overflowY = "auto";
 
         const customGenerate = document.createElement("button");
-        customGenerate.textContent = "Generate reply";
+        customGenerate.textContent = "Générer la réponse";
         customGenerate.className = "artdeco-button";
         customGenerate.style.marginTop = "16px";
         customGenerate.style.width = "100%";
@@ -1198,74 +1062,8 @@
         customModalCard.appendChild(customHeader);
         customModalCard.appendChild(promptLabel);
         customModalCard.appendChild(promptInput);
-        customModalCard.appendChild(pasteLabel);
-        customModalCard.appendChild(pasteArea);
-        customModalCard.appendChild(uploadArea);
-        customModalCard.appendChild(uploadMeta);
         customModalCard.appendChild(customGenerate);
         customModal.appendChild(customModalCard);
-
-        let associationResolver = null;
-        const associationModal = document.createElement("div");
-        associationModal.style.position = "fixed";
-        associationModal.style.inset = "0";
-        associationModal.style.display = "none";
-        associationModal.style.alignItems = "center";
-        associationModal.style.justifyContent = "center";
-        associationModal.style.background = palette.overlay;
-        associationModal.style.zIndex = "2147483647";
-
-        const associationCard = document.createElement("div");
-        associationCard.style.background = palette.surface;
-        associationCard.style.border = `1px solid ${palette.border}`;
-        associationCard.style.borderRadius = "16px";
-        associationCard.style.padding = "18px";
-        associationCard.style.width = "420px";
-        associationCard.style.maxWidth = "calc(100% - 32px)";
-        associationCard.style.boxShadow = "0 24px 60px rgba(0,0,0,0.45)";
-        associationCard.style.color = palette.text;
-
-        const associationTitle = document.createElement("div");
-        associationTitle.textContent = "Link this candidate in Focals";
-        associationTitle.style.fontWeight = "700";
-        associationTitle.style.fontSize = "15px";
-
-        const associationBody = document.createElement("div");
-        associationBody.style.marginTop = "10px";
-        associationBody.style.fontSize = "13px";
-        associationBody.style.lineHeight = "1.5";
-
-        const associationActions = document.createElement("div");
-        associationActions.style.display = "flex";
-        associationActions.style.justifyContent = "flex-end";
-        associationActions.style.gap = "8px";
-        associationActions.style.marginTop = "14px";
-
-        const associationCancel = document.createElement("button");
-        associationCancel.textContent = "Cancel";
-        associationCancel.style.border = `1px solid ${palette.border}`;
-        associationCancel.style.background = "transparent";
-        associationCancel.style.color = palette.text;
-        associationCancel.style.borderRadius = "10px";
-        associationCancel.style.padding = "10px 14px";
-        associationCancel.style.cursor = "pointer";
-
-        const associationConfirm = document.createElement("button");
-        associationConfirm.textContent = "Associate";
-        associationConfirm.style.border = "none";
-        associationConfirm.style.background = palette.primary;
-        associationConfirm.style.color = "#ffffff";
-        associationConfirm.style.borderRadius = "10px";
-        associationConfirm.style.padding = "10px 16px";
-        associationConfirm.style.cursor = "pointer";
-        associationConfirm.style.fontWeight = "700";
-
-        associationActions.appendChild(associationCancel);
-        associationActions.appendChild(associationConfirm);
-        associationCard.appendChild(associationTitle);
-        associationCard.appendChild(associationBody);
-        associationCard.appendChild(associationActions);
-        associationModal.appendChild(associationCard);
 
         const closeCustomModal = () => {
           uiState.showCustomModal = false;
@@ -1279,26 +1077,6 @@
           setTimeout(() => promptInput.focus(), 50);
         };
 
-        const closeAssociationModal = (confirmed = false) => {
-          uiState.showAssociationModal = false;
-          associationModal.style.display = "none";
-          if (associationResolver) {
-            associationResolver(confirmed);
-            associationResolver = null;
-          }
-        };
-
-        const openAssociationModal = ({ candidateName, candidateUrl }) => {
-          associationBody.innerHTML = `Smart Reply needs to connect this LinkedIn thread to a Focals profile.<br/><br/><strong>${candidateName || "Candidate"}</strong><br/>${
-            candidateUrl || ""
-          }<br/><br/>We will sync the candidate and job data, then craft a personalized follow-up.`;
-          uiState.showAssociationModal = true;
-          associationModal.style.display = "flex";
-          return new Promise((resolve) => {
-            associationResolver = resolve;
-          });
-        };
-
         customModal.addEventListener("click", (event) => {
           if (event.target === customModal) {
             closeCustomModal();
@@ -1306,25 +1084,7 @@
         });
         customClose.addEventListener("click", closeCustomModal);
 
-        associationModal.addEventListener("click", (event) => {
-          if (event.target === associationModal) {
-            closeAssociationModal(false);
-          }
-        });
-
-        associationCancel.addEventListener("click", () => closeAssociationModal(false));
-        associationConfirm.addEventListener("click", async () => {
-          associationConfirm.disabled = true;
-          associationConfirm.textContent = "Associating…";
-          try {
-            closeAssociationModal(true);
-          } finally {
-            associationConfirm.disabled = false;
-            associationConfirm.textContent = "Associate";
-          }
-        });
-
-        const smartButton = createMainButton("Smart Reply ▾");
+const smartButton = createMainButton("Smart Reply ▾");
         const smartMenu = createMenuContainer();
 
         const menuOption = (label, action) => {
@@ -1376,72 +1136,11 @@
           }
         };
 
-        const handlePersonalizedFollowUp = async () => {
-          smartButton.textContent = "⏳ Smart Reply…";
-          smartButton.disabled = true;
-          smartButton.style.opacity = "0.7";
-          try {
-            const headerProfile = findConversationProfileLink(conversationRoot);
-            if (!headerProfile) {
-              console.error(
-                "[Focals][MSG] No LinkedIn profile link found in conversation header"
-              );
-            }
-
-            const scrapedProfile = headerProfile?.profileUrl
-              ? await scrapeProfileFromLink(headerProfile.profileUrl)
-              : null;
-
-            const profileContext = await resolveLinkedinProfileContext(conversationRoot, {
-              candidateProfileUrl: headerProfile?.profileUrl || null,
-              freshProfile: scrapedProfile || null,
-            });
-
-            const linkedinProfileCandidate = profileContext?.cachedProfile || null;
-            const hasLinkedProfile = !!(
-              linkedinProfileCandidate?.linkedin_url ||
-              (linkedinProfileCandidate?.experiences || []).length > 0 ||
-              linkedinProfileCandidate?.current_title ||
-              linkedinProfileCandidate?.current_company ||
-              linkedinProfileCandidate?.headline ||
-              (profileContext?.linkedinProfile?.experiences || []).length > 0
-            );
-
-            if (!hasLinkedProfile && !headerProfile) {
-              const proceed = await openAssociationModal({
-                candidateName: conversationName || "Candidate",
-                candidateUrl:
-                  profileContext?.candidateProfileUrl ||
-                  profileContext?.cachedProfile?.linkedin_url ||
-                  "",
-              });
-              if (!proceed) return;
-            }
-
-            await runSuggestReplyPipeline({
-              button: smartButton,
-              composer,
-              conversationRoot,
-              conversationName,
-              editorIndex: index + 1,
-              generationMode: "followup_personalized",
-              candidateProfileUrl: headerProfile?.profileUrl || profileContext?.candidateProfileUrl || null,
-              freshLinkedinProfile: scrapedProfile || profileContext?.cachedProfile || null,
-              candidateName: headerProfile?.candidateName || null,
-            });
-          } finally {
-            smartButton.textContent = "Smart Reply ▾";
-            smartButton.disabled = false;
-            smartButton.style.opacity = "1";
-          }
-        };
-
         const syncMenuOptions = () => {
           smartMenu.innerHTML = "";
           [
             { label: "Standard reply", action: handleStandardReply },
             { label: "Custom reply", action: openCustomModal },
-            { label: "Personalized follow-up", action: handlePersonalizedFollowUp },
           ].forEach(({ label, action }) => smartMenu.appendChild(menuOption(label, action)));
         };
 
@@ -1452,18 +1151,8 @@
           smartButton.style.background = uiState.openMenu ? palette.primaryHover : palette.primary;
 
           customModal.style.display = uiState.showCustomModal ? "flex" : "none";
-          associationModal.style.display = uiState.showAssociationModal ? "flex" : "none";
-
-          const uploadInfo = [];
-          if (uiState.uploadFilename) uploadInfo.push(`File: ${uiState.uploadFilename}`);
-          if (uiState.customUploadText) uploadInfo.push("File content ready");
-          uploadMeta.textContent = uploadInfo.join(" – ");
-
-          const hasContent =
-            (uiState.customUploadText || "").trim().length > 0 ||
-            (uiState.customPasteText || "").trim().length > 0;
           const hasPrompt = (uiState.customPrompt || "").trim().length > 0;
-          customGenerate.disabled = !hasContent && !hasPrompt;
+          customGenerate.disabled = !hasPrompt;
           customGenerate.style.opacity = customGenerate.disabled ? "0.6" : "1";
         };
 
@@ -1477,8 +1166,7 @@
           if (
             smartMenu.contains(target) ||
             smartButton.contains(target) ||
-            customModal.contains(target) ||
-            associationModal.contains(target)
+            customModal.contains(target)
           ) {
             return;
           }
@@ -1488,69 +1176,23 @@
           }
         });
 
-        uploadArea.addEventListener("dragover", (event) => {
-          event.preventDefault();
-          uploadArea.style.background = "rgba(255,255,255,0.06)";
-        });
-        uploadArea.addEventListener("dragleave", () => {
-          uploadArea.style.background = "rgba(255,255,255,0.03)";
-        });
-        uploadArea.addEventListener("drop", async (event) => {
-          event.preventDefault();
-          const file = event.dataTransfer?.files?.[0];
-          if (!file) return;
-          uiState.uploadFilename = file.name;
-          uiState.customUploadText = await readFileAsText(file);
-          uploadArea.style.background = "rgba(255,255,255,0.03)";
-          syncUI();
-        });
-
-        uploadArea.addEventListener("click", () => uploadInput.click());
-        uploadInput.addEventListener("change", async (event) => {
-          const file = event.target?.files?.[0];
-          if (!file) return;
-          uiState.uploadFilename = file.name;
-          uiState.customUploadText = await readFileAsText(file);
-          syncUI();
-        });
-
-        pasteArea.addEventListener("input", () => {
-          uiState.customPasteText = pasteArea.value;
-          autoResize(pasteArea, 96);
-          syncUI();
-        });
-
         promptInput.addEventListener("input", () => {
           uiState.customPrompt = promptInput.value;
-          autoResize(promptInput, 52);
+          autoResize(promptInput, 120);
           syncUI();
         });
 
-        autoResize(promptInput, 52);
-        autoResize(pasteArea, 96);
+        autoResize(promptInput, 120);
 
-        const buildCustomInstructions = () => {
-          const segments = [];
-          if ((uiState.customUploadText || "").trim()) {
-            segments.push(`Uploaded content:\n${uiState.customUploadText.trim()}`);
-          }
-          if ((uiState.customPasteText || "").trim()) {
-            segments.push(`Pasted content:\n${uiState.customPasteText.trim()}`);
-          }
-          if ((uiState.customPrompt || "").trim()) {
-            segments.push(`Instruction: ${uiState.customPrompt.trim()}`);
-          }
-          return segments.join("\n\n");
-        };
+        const buildCustomInstructions = () => (uiState.customPrompt || "").trim();
 
         customGenerate.addEventListener("click", async () => {
           const instructions = buildCustomInstructions();
           if (!instructions.trim()) {
-            alert("Add a prompt, content, or an upload before generating.");
+            alert("Ajoutez des instructions avant de générer la réponse.");
             return;
           }
-          const originalText = customGenerate.textContent;
-          customGenerate.textContent = "⏳ Generating…";
+          customGenerate.textContent = "⏳ Génération…";
           customGenerate.disabled = true;
           customGenerate.style.opacity = "0.7";
           try {
@@ -1565,7 +1207,7 @@
             });
             closeCustomModal();
           } finally {
-            customGenerate.textContent = "Generate reply";
+            customGenerate.textContent = "Générer la réponse";
             customGenerate.disabled = false;
             customGenerate.style.opacity = "1";
           }
@@ -1585,7 +1227,6 @@
         rightActions.appendChild(controlsWrapper);
 
         document.body.appendChild(customModal);
-        document.body.appendChild(associationModal);
 
         composer.dataset.focalsBound = "true";
 

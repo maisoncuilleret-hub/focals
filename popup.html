@@ -70,28 +70,16 @@
   </div>
 
   <div class="section">
-    <div class="row" style="justify-content: space-between; align-items: center;">
-      <h2 style="margin:0">Offres / Jobs</h2>
-      <button id="addJob" class="secondary">Ajouter un job</button>
-    </div>
-    <div id="jobsList" class="list"></div>
-    <div id="jobForm" style="margin-top: 12px; display: none;">
-      <div class="grid">
-        <div>
-          <label for="jobTitle">Titre</label>
-          <input id="jobTitle" type="text" placeholder="Product Manager" />
-        </div>
-        <div>
-          <label for="jobCompany">Entreprise</label>
-          <input id="jobCompany" type="text" placeholder="Focals" />
-        </div>
-      </div>
-      <label for="jobDescription" style="margin-top:8px;">Description complète</label>
-      <textarea id="jobDescription"></textarea>
-      <div class="row" style="justify-content:flex-end; margin-top:8px;">
-        <button id="cancelJob" class="secondary">Annuler</button>
-        <button id="saveJob">Enregistrer</button>
-      </div>
+    <h2 style="margin:0">Personnalisation avancée</h2>
+    <div class="muted" style="margin-bottom:8px;">Personnalisez le comportement de l’assistant pour toutes vos réponses.</div>
+    <label for="systemPrompt">Règles personnalisées</label>
+    <textarea id="systemPrompt" placeholder="Exemples :
+
+Utilise toujours le vouvoiement.
+Fais des réponses plutôt longues (4–5 phrases).
+Garde un ton très professionnel et évite le langage familier."></textarea>
+    <div class="row" style="justify-content:flex-end; margin-top:8px;">
+      <button id="saveSystemPrompt">Enregistrer</button>
     </div>
   </div>
 
