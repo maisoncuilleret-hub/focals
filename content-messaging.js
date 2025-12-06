@@ -798,8 +798,9 @@
         }
 
         const palette = {
-          primary: "#15294b",
-          primaryHover: "#1f3a6b",
+          primary: "#2563eb",
+          primaryHover: "#3b82f6",
+          primaryActive: "#60a5fa",
           border: "#1f2a44",
           text: "#e5e7eb",
           muted: "#9ca3af",
@@ -823,16 +824,28 @@
         const createMainButton = (label) => {
           const btn = document.createElement("button");
           btn.textContent = label;
-          btn.style.padding = "8px 14px";
+          btn.style.padding = "10px 16px";
           btn.style.cursor = "pointer";
           btn.style.borderRadius = "999px";
-          btn.style.border = `1px solid ${palette.border}`;
+          btn.style.border = "none";
           btn.style.background = palette.primary;
-          btn.style.color = palette.text;
+          btn.style.color = "#ffffff";
           btn.style.fontWeight = "700";
           btn.style.fontSize = "13px";
           btn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.25)";
-          btn.style.transition = "all 0.2s ease";
+          btn.style.transition = "all 0.15s ease";
+          btn.addEventListener("mouseenter", () => {
+            btn.style.background = palette.primaryHover;
+          });
+          btn.addEventListener("mouseleave", () => {
+            btn.style.background = uiState?.openMenu ? palette.primaryHover : palette.primary;
+          });
+          btn.addEventListener("mousedown", () => {
+            btn.style.background = palette.primaryActive;
+          });
+          btn.addEventListener("mouseup", () => {
+            btn.style.background = uiState?.openMenu ? palette.primaryHover : palette.primary;
+          });
           return btn;
         };
 
@@ -847,7 +860,7 @@
           menu.style.border = `1px solid ${palette.border}`;
           menu.style.borderRadius = "12px";
           menu.style.minWidth = "240px";
-          menu.style.padding = "8px";
+          menu.style.padding = "6px 0";
           menu.style.boxShadow = "0 18px 40px rgba(0,0,0,0.35)";
           menu.style.zIndex = "2147483647";
           return menu;
@@ -855,8 +868,7 @@
 
         const uiState = {
           openMenu: null,
-          conversationMode: "conversation_standard",
-          relanceMode: "followup_standard",
+          smartMode: "standard",
           showCustomCard: false,
           customUploadText: "",
           customPasteText: "",
@@ -881,7 +893,7 @@
         customCardHeader.style.alignItems = "center";
 
         const customTitle = document.createElement("div");
-        customTitle.textContent = "Conversation personnalisée";
+        customTitle.textContent = "Créer une réponse personnalisée";
         customTitle.style.fontWeight = "700";
         customTitle.style.fontSize = "14px";
 
@@ -898,7 +910,7 @@
         customCardHeader.appendChild(customClose);
 
         const uploadArea = document.createElement("label");
-        uploadArea.textContent = "Glissez un fichier ou cliquez pour importer";
+        uploadArea.textContent = "Uploader un fichier ou glisser-déposer.";
         uploadArea.style.display = "block";
         uploadArea.style.border = `1px dashed ${palette.border}`;
         uploadArea.style.borderRadius = "12px";
@@ -921,7 +933,7 @@
         uploadArea.appendChild(uploadInput);
 
         const pasteLabel = document.createElement("div");
-        pasteLabel.textContent = "Ou collez du contenu ici...";
+        pasteLabel.textContent = "Ou collez ici du contenu...";
         pasteLabel.style.fontSize = "12px";
         pasteLabel.style.color = palette.muted;
         pasteLabel.style.marginTop = "12px";
@@ -937,13 +949,13 @@
         pasteArea.style.resize = "vertical";
 
         const promptLabel = document.createElement("div");
-        promptLabel.textContent = "Instruction pour l’agent (ex: rédige un feedback structuré)";
+        promptLabel.textContent = "Instruction pour l'agent (prompt)";
         promptLabel.style.fontSize = "12px";
         promptLabel.style.color = palette.muted;
         promptLabel.style.marginTop = "12px";
 
         const promptInput = document.createElement("textarea");
-        promptInput.placeholder = "Décris le ton, le format ou les attentes…";
+        promptInput.placeholder = "Ex: fais un feedback structuré";
         promptInput.style.width = "100%";
         promptInput.style.minHeight = "72px";
         promptInput.style.background = "rgba(255,255,255,0.03)";
@@ -962,7 +974,7 @@
         customGenerate.style.borderRadius = "999px";
         customGenerate.style.background = palette.primary;
         customGenerate.style.border = `1px solid ${palette.border}`;
-        customGenerate.style.color = palette.text;
+        customGenerate.style.color = "#ffffff";
         customGenerate.style.cursor = "pointer";
         customGenerate.style.fontWeight = "700";
 
@@ -975,18 +987,15 @@
         customCard.appendChild(promptInput);
         customCard.appendChild(customGenerate);
 
-        const conversationButton = createMainButton("Conversation ▾");
-        const relanceButton = createMainButton("Relance ▾");
+        const smartButton = createMainButton("Smart Reply ▾");
+        const smartMenu = createMenuContainer();
 
-        const conversationMenu = createMenuContainer();
-        const relanceMenu = createMenuContainer();
-
-        const menuOption = (label, description, value, group) => {
+        const menuOption = (label, description, value) => {
           const option = document.createElement("button");
           option.style.background = "transparent";
           option.style.border = "none";
           option.style.textAlign = "left";
-          option.style.padding = "10px";
+          option.style.padding = "10px 14px";
           option.style.borderRadius = "10px";
           option.style.cursor = "pointer";
           option.style.color = palette.text;
@@ -1000,23 +1009,14 @@
           });
 
           option.addEventListener("click", async () => {
-            uiState[`${group}Mode`] = value;
+            uiState.smartMode = value;
             uiState.openMenu = null;
-            if (group === "conversation") {
-              if (value === "conversation_standard") {
-                uiState.showCustomCard = false;
-                await handleConversationStandard();
-              } else {
-                uiState.showCustomCard = true;
-                pasteArea.focus();
-              }
-            } else if (group === "relance") {
-              if (value === "followup_standard") {
-                uiState.showCustomCard = false;
-                await handleFollowupStandard();
-              } else {
-                await handleFollowupPersonalized();
-              }
+            if (value === "standard") {
+              uiState.showCustomCard = false;
+              await handleStandardReply();
+            } else {
+              uiState.showCustomCard = true;
+              pasteArea.focus();
             }
             syncUI();
           });
@@ -1024,14 +1024,14 @@
           return option;
         };
 
-        const handleConversationStandard = async () => {
-          const originalText = conversationButton.textContent;
-          conversationButton.textContent = "⏳ Conversation…";
-          conversationButton.disabled = true;
-          conversationButton.style.opacity = "0.7";
+        const handleStandardReply = async () => {
+          const originalText = smartButton.textContent;
+          smartButton.textContent = "⏳ Smart Reply…";
+          smartButton.disabled = true;
+          smartButton.style.opacity = "0.7";
           try {
             await runSuggestReplyPipeline({
-              button: conversationButton,
+              button: smartButton,
               composer,
               conversationRoot,
               conversationName,
@@ -1039,126 +1039,44 @@
               generationMode: "auto",
             });
           } finally {
-            conversationButton.textContent = originalText;
-            conversationButton.disabled = false;
-            conversationButton.style.opacity = "1";
+            smartButton.textContent = originalText;
+            smartButton.disabled = false;
+            smartButton.style.opacity = "1";
           }
         };
 
-        const handleFollowupStandard = async () => {
-          const originalText = relanceButton.textContent;
-          relanceButton.textContent = "⏳ Relance…";
-          relanceButton.disabled = true;
-          relanceButton.style.opacity = "0.7";
-          try {
-            await runSuggestReplyPipeline({
-              button: relanceButton,
-              composer,
-              conversationRoot,
-              conversationName,
-              editorIndex: index + 1,
-              generationMode: "followup_classic",
-            });
-          } finally {
-            relanceButton.textContent = originalText;
-            relanceButton.disabled = false;
-            relanceButton.style.opacity = "1";
-          }
-        };
-
-        const triggerAssociationModal = () => {
-          try {
-            chrome.runtime.sendMessage({ type: "FOCALS_OPEN_PROFILE_ASSOCIATION_MODAL" });
-          } catch (err) {
-            warn("ASSOCIATION_MODAL_ERROR", err?.message || err);
-          }
-          alert("Associe un profil LinkedIn via la modale Focals pour continuer la relance personnalisée.");
-        };
-
-        const handleFollowupPersonalized = async () => {
-          const profileContext = await resolveLinkedinProfileContext(conversationRoot);
-          const hasValidProfile = !!(
-            profileContext.cachedProfile &&
-            ((Array.isArray(profileContext.cachedProfile.experiences) &&
-              profileContext.cachedProfile.experiences.length > 0) ||
-              profileContext.cachedProfile.current_title ||
-              profileContext.cachedProfile.current_company ||
-              profileContext.cachedProfile.headline)
-          );
-
-          if (!hasValidProfile) {
-            triggerAssociationModal();
-            return;
-          }
-
-          const originalText = relanceButton.textContent;
-          relanceButton.textContent = "⏳ Relance…";
-          relanceButton.disabled = true;
-          relanceButton.style.opacity = "0.7";
-          try {
-            await runSuggestReplyPipeline({
-              button: relanceButton,
-              composer,
-              conversationRoot,
-              conversationName,
-              editorIndex: index + 1,
-              generationMode: "followup_personalized",
-            });
-          } finally {
-            relanceButton.textContent = originalText;
-            relanceButton.disabled = false;
-            relanceButton.style.opacity = "1";
-          }
+        const menuDivider = () => {
+          const divider = document.createElement("div");
+          divider.style.height = "1px";
+          divider.style.margin = "6px 0";
+          divider.style.background = "rgba(255,255,255,0.08)";
+          divider.style.width = "100%";
+          return divider;
         };
 
         const syncMenuOptions = () => {
-          conversationMenu.innerHTML = "";
-          conversationMenu.append(
+          smartMenu.innerHTML = "";
+          smartMenu.append(
+            menuDivider(),
             menuOption(
-              "Standard",
-              "Génère une réponse contextuelle à partir du thread.",
-              "conversation_standard",
-              "conversation"
+              "Réponse standard",
+              "Analyse le dernier message et propose une réponse.",
+              "standard"
             ),
             menuOption(
-              "Personnalisé",
-              "Ajoute un fichier, du texte ou un prompt pour guider la réponse.",
-              "conversation_custom",
-              "conversation"
-            )
-          );
-
-          relanceMenu.innerHTML = "";
-          relanceMenu.append(
-            menuOption(
-              "Relance standard",
-              "Relance courte basée sur le thread et le prénom.",
-              "followup_standard",
-              "relance"
+              "Réponse personnalisée",
+              "Ajoute un fichier, du texte ou un prompt avant génération.",
+              "custom"
             ),
-            menuOption(
-              "Relance personnalisée",
-              "Utilise le profil associé Focals pour une relance sur-mesure.",
-              "followup_personalized",
-              "relance"
-            )
+            menuDivider()
           );
         };
 
         const syncUI = () => {
-          conversationMenu.style.display =
-            uiState.openMenu === "conversation" ? "flex" : "none";
-          relanceMenu.style.display = uiState.openMenu === "relance" ? "flex" : "none";
+          smartMenu.style.display = uiState.openMenu ? "flex" : "none";
 
-          conversationButton.textContent =
-            uiState.openMenu === "conversation" ? "Conversation ▴" : "Conversation ▾";
-          relanceButton.textContent =
-            uiState.openMenu === "relance" ? "Relance ▴" : "Relance ▾";
-
-          conversationButton.style.background =
-            uiState.openMenu === "conversation" ? palette.primaryHover : palette.primary;
-          relanceButton.style.background =
-            uiState.openMenu === "relance" ? palette.primaryHover : palette.primary;
+          smartButton.textContent = uiState.openMenu ? "Smart Reply ▴" : "Smart Reply ▾";
+          smartButton.style.background = uiState.openMenu ? palette.primaryHover : palette.primary;
 
           customCard.style.display = uiState.showCustomCard ? "block" : "none";
 
@@ -1175,24 +1093,16 @@
           customGenerate.style.opacity = customGenerate.disabled ? "0.6" : "1";
         };
 
-        conversationButton.addEventListener("click", () => {
-          uiState.openMenu = uiState.openMenu === "conversation" ? null : "conversation";
-          uiState.showCustomCard = uiState.showCustomCard && uiState.openMenu === "conversation";
-          syncUI();
-        });
-
-        relanceButton.addEventListener("click", () => {
-          uiState.openMenu = uiState.openMenu === "relance" ? null : "relance";
+        smartButton.addEventListener("click", () => {
+          uiState.openMenu = uiState.openMenu ? null : "menu";
           syncUI();
         });
 
         document.addEventListener("click", (event) => {
           const target = event.target;
           if (
-            conversationMenu.contains(target) ||
-            relanceMenu.contains(target) ||
-            conversationButton.contains(target) ||
-            relanceButton.contains(target) ||
+            smartMenu.contains(target) ||
+            smartButton.contains(target) ||
             customCard.contains(target)
           ) {
             return;
@@ -1284,18 +1194,12 @@
         syncMenuOptions();
         syncUI();
 
-        const conversationWrapper = document.createElement("div");
-        conversationWrapper.style.position = "relative";
-        conversationWrapper.appendChild(conversationButton);
-        conversationWrapper.appendChild(conversationMenu);
+        const smartWrapper = document.createElement("div");
+        smartWrapper.style.position = "relative";
+        smartWrapper.appendChild(smartButton);
+        smartWrapper.appendChild(smartMenu);
 
-        const relanceWrapper = document.createElement("div");
-        relanceWrapper.style.position = "relative";
-        relanceWrapper.appendChild(relanceButton);
-        relanceWrapper.appendChild(relanceMenu);
-
-        dropdownsRow.appendChild(conversationWrapper);
-        dropdownsRow.appendChild(relanceWrapper);
+        dropdownsRow.appendChild(smartWrapper);
 
         controlsWrapper.appendChild(dropdownsRow);
         composer.insertBefore(customCard, footer);
