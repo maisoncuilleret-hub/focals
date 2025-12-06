@@ -222,6 +222,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((error) => sendResponse({ ok: false, error: error?.message || "Local request failed" }));
       return true;
     }
+    case "FOCALS_SCRAPE_PROFILE_URL": {
+      const { url } = message || {};
+      if (!url) {
+        sendResponse({ ok: false, error: "Missing URL" });
+        return false;
+      }
+
+      chrome.tabs.create({ url, active: false }, (tab) => {
+        if (chrome.runtime.lastError || !tab?.id) {
+          sendResponse({
+            ok: false,
+            error: chrome.runtime.lastError?.message || "Failed to open tab",
+          });
+          return;
+        }
+        sendResponse({ ok: true, tabId: tab.id });
+      });
+      return true;
+    }
+    case "FOCALS_CLOSE_TAB": {
+      const { tabId } = message || {};
+      if (!tabId) {
+        sendResponse({ ok: false, error: "Missing tabId" });
+        return false;
+      }
+
+      chrome.tabs.remove(tabId, () => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        sendResponse({ ok: true });
+      });
+
+      return true;
+    }
     case "SUPABASE_SESSION": {
       const session = message.session;
       debugLog("BG_SUPABASE_SESSION", {

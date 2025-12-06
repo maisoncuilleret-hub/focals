@@ -134,6 +134,23 @@
 
     const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
 
+    const normalizeLinkedinUrl = (url) => {
+      if (!url) return null;
+      try {
+        const prefixed = url.startsWith("http")
+          ? url
+          : url.startsWith("/")
+            ? `https://www.linkedin.com${url}`
+            : `https://www.linkedin.com/${url}`;
+        const parsed = new URL(prefixed);
+        const pathname = parsed.pathname.replace(/\/+$/, "");
+        return `https://www.linkedin.com${pathname}/`;
+      } catch (err) {
+        warn("LINKEDIN_URL_NORMALIZE_ERROR", err?.message || err);
+        return null;
+      }
+    };
+
     const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
     const log = (message, ...args) => {
@@ -315,15 +332,187 @@
       };
     };
 
-    const resolveLinkedinProfileContext = async (rootElement = document) => {
+    const resolveLinkedinProfileContext = async (
+      rootElement = document,
+      { candidateProfileUrl = null, freshProfile = null } = {}
+    ) => {
       const pageProfile = extractCandidateProfileFromPage(rootElement);
-      const cachedProfile = await getLastScrapedProfile();
-      const linkedinProfile = buildLinkedinProfileContext(
-        cachedProfile,
-        pageProfile?.candidateProfileUrl || null
+      const targetUrl = candidateProfileUrl || pageProfile?.candidateProfileUrl || null;
+      const normalizedTarget = normalizeLinkedinUrl(targetUrl);
+
+      const cachedProfile = freshProfile || (await getLastScrapedProfile());
+      const cachedProfileUrl = normalizeLinkedinUrl(
+        cachedProfile?.linkedin_url ||
+          cachedProfile?.url ||
+          (cachedProfile?.profile_slug
+            ? `https://www.linkedin.com/in/${cachedProfile.profile_slug}`
+            : null)
       );
 
-      return { linkedinProfile, cachedProfile, candidateProfileUrl: pageProfile?.candidateProfileUrl };
+      const profileMatchesTarget = normalizedTarget
+        ? cachedProfileUrl === normalizedTarget
+        : !!cachedProfile;
+
+      const usableProfile = profileMatchesTarget ? cachedProfile : null;
+
+      const linkedinProfile = buildLinkedinProfileContext(
+        usableProfile,
+        targetUrl || null
+      );
+
+      return { linkedinProfile, cachedProfile: usableProfile, candidateProfileUrl: targetUrl };
+    };
+
+    const findConversationProfileLink = (conversationRoot = document) => {
+      const headerSelectors = [
+        ".msg-overlay-bubble-header",
+        ".msg-thread__top-card",
+        "header.msg-thread__top-card",
+        ".msg-thread__link-to-profile",
+      ];
+
+      const anchorSelectors = [
+        "a[href*='/in/']",
+        ".msg-thread__link[href*='/in/']",
+        ".msg-overlay-bubble-header__title a[href*='/in/']",
+      ];
+
+      let header = null;
+      for (const selector of headerSelectors) {
+        const node = conversationRoot.querySelector(selector);
+        if (node) {
+          header = node;
+          break;
+        }
+      }
+
+      const scopes = header ? [header] : [conversationRoot];
+
+      for (const scope of scopes) {
+        for (const selector of anchorSelectors) {
+          const anchor = scope.querySelector(selector);
+          if (!anchor) continue;
+          const href = anchor.getAttribute("href") || "";
+          if (!/\/in\//.test(href)) continue;
+          if (anchor.closest("div.msg-s-event-listitem")) continue;
+
+          const rawHref = href.split(/[?#]/)[0];
+          const profileUrl = rawHref.startsWith("/in/")
+            ? `https://www.linkedin.com${rawHref}`
+            : rawHref;
+
+          const nameNode =
+            anchor.querySelector(".hoverable-link-text") || anchor.querySelector("span");
+          const candidateName = normalizeText(
+            nameNode?.textContent || anchor.textContent || ""
+          );
+
+          return { anchor, profileUrl, candidateName: candidateName || null };
+        }
+      }
+
+      return null;
+    };
+
+    const openProfileTabInBackground = (profileUrl) =>
+      new Promise((resolve, reject) => {
+        try {
+          chrome.runtime.sendMessage(
+            { type: "FOCALS_SCRAPE_PROFILE_URL", url: profileUrl },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                reject(new Error(chrome.runtime.lastError.message));
+                return;
+              }
+              if (!response?.ok) {
+                reject(new Error(response?.error || "Unable to open profile tab"));
+                return;
+              }
+              resolve(response.tabId || null);
+            }
+          );
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+    const closeTabById = (tabId) =>
+      new Promise((resolve) => {
+        if (!tabId) return resolve(false);
+        try {
+          chrome.runtime.sendMessage({ type: "FOCALS_CLOSE_TAB", tabId }, () => resolve(true));
+        } catch (err) {
+          resolve(false);
+        }
+      });
+
+    const waitForProfileScrape = async (profileUrl, { timeoutMs = 12000 } = {}) =>
+      new Promise((resolve) => {
+        const normalizedTarget = normalizeLinkedinUrl(profileUrl);
+        if (!normalizedTarget) {
+          resolve(null);
+          return;
+        }
+
+        const matchesTarget = (profile) => {
+          if (!profile) return false;
+          const profileUrlCandidate = normalizeLinkedinUrl(
+            profile.linkedin_url ||
+              profile.url ||
+              (profile.profile_slug ? `https://www.linkedin.com/in/${profile.profile_slug}` : null)
+          );
+          return profileUrlCandidate && profileUrlCandidate === normalizedTarget;
+        };
+
+        const cleanupAndResolve = (value) => {
+          chrome.storage.onChanged.removeListener(onChange);
+          clearTimeout(timeoutId);
+          resolve(value);
+        };
+
+        const onChange = (changes, area) => {
+          if (area !== "local") return;
+          if (!changes?.[PROFILE_STORAGE_KEY]) return;
+          const profile = changes[PROFILE_STORAGE_KEY].newValue;
+          if (matchesTarget(profile)) {
+            cleanupAndResolve(profile);
+          }
+        };
+
+        chrome.storage.onChanged.addListener(onChange);
+
+        const timeoutId = setTimeout(async () => {
+          const latest = await getLastScrapedProfile();
+          if (matchesTarget(latest)) {
+            cleanupAndResolve(latest);
+          } else {
+            cleanupAndResolve(null);
+          }
+        }, timeoutMs);
+
+      });
+
+    const scrapeProfileFromLink = async (profileUrl) => {
+      const normalizedTarget = normalizeLinkedinUrl(profileUrl);
+      if (!normalizedTarget) {
+        warn("PROFILE_LINK_INVALID", profileUrl);
+        return null;
+      }
+
+      let tabId = null;
+      try {
+        tabId = await openProfileTabInBackground(normalizedTarget);
+      } catch (err) {
+        warn("PROFILE_TAB_OPEN_ERROR", err?.message || err);
+      }
+
+      const scrapedProfile = await waitForProfileScrape(normalizedTarget);
+
+      if (tabId) {
+        await closeTabById(tabId);
+      }
+
+      return scrapedProfile;
     };
 
     const forceProfileRescrape = () =>
@@ -617,6 +806,9 @@
       editorIndex,
       generationMode = "auto",
       customInstructions,
+      candidateProfileUrl = null,
+      freshLinkedinProfile = null,
+      candidateName: candidateNameOverride = null,
     } = {}) => {
       try {
         log("Suggest reply button clicked");
@@ -643,12 +835,13 @@
         const tone = settings?.tone || settings?.default_tone || "warm";
         const language =
           detectLanguageFromMessages(messages, settings.languageFallback || "fr") || "fr";
-        if (generationMode === "followup_personalized") {
-          await forceProfileRescrape();
-          await wait(400);
-        }
-        const profileResolution = await resolveLinkedinProfileContext(conversationRoot);
+        const profileResolution = await resolveLinkedinProfileContext(conversationRoot, {
+          candidateProfileUrl,
+          freshProfile: freshLinkedinProfile || null,
+        });
+
         const candidateName =
+          candidateNameOverride ||
           profileResolution.cachedProfile?.firstName ||
           profileResolution.cachedProfile?.name ||
           detectCandidateName(conversationName, messages);
@@ -1124,8 +1317,6 @@
           associationConfirm.disabled = true;
           associationConfirm.textContent = "Associating…";
           try {
-            await forceProfileRescrape();
-            await wait(400);
             closeAssociationModal(true);
           } finally {
             associationConfirm.disabled = false;
@@ -1190,19 +1381,39 @@
           smartButton.disabled = true;
           smartButton.style.opacity = "0.7";
           try {
-            const profileContext = await resolveLinkedinProfileContext(conversationRoot);
+            const headerProfile = findConversationProfileLink(conversationRoot);
+            if (!headerProfile) {
+              console.error(
+                "[Focals][MSG] No LinkedIn profile link found in conversation header"
+              );
+            }
+
+            const scrapedProfile = headerProfile?.profileUrl
+              ? await scrapeProfileFromLink(headerProfile.profileUrl)
+              : null;
+
+            const profileContext = await resolveLinkedinProfileContext(conversationRoot, {
+              candidateProfileUrl: headerProfile?.profileUrl || null,
+              freshProfile: scrapedProfile || null,
+            });
+
+            const linkedinProfileCandidate = profileContext?.cachedProfile || null;
             const hasLinkedProfile = !!(
-              profileContext?.cachedProfile?.id ||
-              profileContext?.cachedProfile?.linkedin_url ||
-              (profileContext?.cachedProfile?.experiences || []).length > 0 ||
+              linkedinProfileCandidate?.linkedin_url ||
+              (linkedinProfileCandidate?.experiences || []).length > 0 ||
+              linkedinProfileCandidate?.current_title ||
+              linkedinProfileCandidate?.current_company ||
+              linkedinProfileCandidate?.headline ||
               (profileContext?.linkedinProfile?.experiences || []).length > 0
             );
 
-            if (!hasLinkedProfile) {
+            if (!hasLinkedProfile && !headerProfile) {
               const proceed = await openAssociationModal({
                 candidateName: conversationName || "Candidate",
                 candidateUrl:
-                  profileContext?.candidateProfileUrl || profileContext?.cachedProfile?.linkedin_url || "",
+                  profileContext?.candidateProfileUrl ||
+                  profileContext?.cachedProfile?.linkedin_url ||
+                  "",
               });
               if (!proceed) return;
             }
@@ -1214,6 +1425,9 @@
               conversationName,
               editorIndex: index + 1,
               generationMode: "followup_personalized",
+              candidateProfileUrl: headerProfile?.profileUrl || profileContext?.candidateProfileUrl || null,
+              freshLinkedinProfile: scrapedProfile || profileContext?.cachedProfile || null,
+              candidateName: headerProfile?.candidateName || null,
             });
           } finally {
             smartButton.textContent = "Smart Reply ▾";
