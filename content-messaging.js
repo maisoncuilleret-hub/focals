@@ -206,6 +206,12 @@
     };
 
     const detectCandidateName = (conversationName = "", messages = []) => {
+      const firstIncomingWithName = messages.find(
+        (m) => !m.fromMe && m.senderName
+      );
+      if (firstIncomingWithName?.senderName)
+        return firstIncomingWithName.senderName;
+
       const cleaned = normalizeText(conversationName).replace(/\s*\([^)]*\)/g, "");
       const delimiters = ["|", "·", "•", "-", "—", " avec ", " with "];
       for (const delimiter of delimiters) {
@@ -599,6 +605,10 @@
         const fromMe = !container.classList.contains("msg-s-event-listitem--other");
         log(`[SCRAPE] Message role resolved: fromMe = ${fromMe}`);
 
+        const senderName = normalizeText(
+          container.querySelector(".msg-s-message-group__name")?.textContent || ""
+        );
+
         let timestampRaw = "";
         const titleNode = container.querySelector(
           "span.msg-s-event-with-indicator__sending-indicator[title]"
@@ -622,6 +632,10 @@
           fromMe,
           timestampRaw,
         };
+
+        if (senderName) {
+          message.senderName = senderName;
+        }
 
         log("[SCRAPE] Built message object:", {
           fromMe,
