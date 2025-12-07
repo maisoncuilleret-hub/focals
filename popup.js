@@ -325,6 +325,28 @@ async function refreshProfileFromTab() {
       }
     }
 
+    const isPublicProfileUrl = /linkedin\.com\/in\//i.test(activeTab.url || "");
+
+    if (!requestError && response?.status === "unsupported" && isPublicProfileUrl) {
+      debugLog("POPUP_PROFILE_UNSUPPORTED_FALLBACK", { tabId: activeTab.id, url: activeTab.url });
+      const rescrapeTriggered = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(activeTab.id, { type: "FOCALS_FORCE_RESCRAPE" }, () => {
+          if (chrome.runtime.lastError) {
+            resolve(false);
+            return;
+          }
+          resolve(true);
+        });
+      });
+
+      if (rescrapeTriggered) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const retry = await requestProfileFromTab(activeTab.id);
+        response = retry.response;
+        requestError = retry.error;
+      }
+    }
+
     if (requestError) {
       console.warn("[Focals][POPUP] No profile data:", requestError.message || String(requestError));
       state.profile = null;
