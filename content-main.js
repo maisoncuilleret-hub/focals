@@ -328,117 +328,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     });
   }
 
-  /**
-   * Injecte les boutons de génération dans l'UI LinkedIn Messaging
-   */
-  function injectGenerationButtons() {
-    if (document.querySelector("#focals-generate-buttons")) return;
-
-    const inputContainer = document.querySelector(
-      ".msg-form__contenteditable, " +
-        ".msg-form__msg-content-container, " +
-        "[data-test-message-input-container]"
-    );
-    if (!inputContainer) return;
-
-    const buttonContainer = document.createElement("div");
-    buttonContainer.id = "focals-generate-buttons";
-    buttonContainer.style.cssText = `
-      display: flex;
-      gap: 8px;
-      padding: 8px;
-      background: #f3f6f8;
-      border-radius: 8px;
-      margin-bottom: 8px;
-    `;
-
-    const modes = [
-      { mode: "initial", label: "✨ Réponse initiale", tone: "professional" },
-      { mode: "followup_soft", label: "🔔 Relance douce", tone: "warm" },
-      { mode: "followup_strong", label: "⚡ Relance ferme", tone: "direct" },
-    ];
-
-    modes.forEach(({ mode, label, tone }) => {
-      const btn = document.createElement("button");
-      btn.textContent = label;
-      btn.style.cssText = `
-        padding: 6px 12px;
-        background: #0073b1;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 12px;
-      `;
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        btn.textContent = "⏳ Génération...";
-
-        const result = await generateReply({ mode, toneOverride: tone });
-
-        const replyText = extractReplyText(result);
-
-        if (result.success && replyText) {
-          const input = document.querySelector(".msg-form__contenteditable");
-          if (input) {
-            input.innerHTML = `<p>${replyText}</p>`;
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-        } else {
-          alert("Erreur: " + result.error);
-        }
-
-        btn.disabled = false;
-        btn.textContent = label;
-      });
-      buttonContainer.appendChild(btn);
-    });
-
-    const promptBtn = document.createElement("button");
-    promptBtn.textContent = "🎯 Instructions custom";
-    promptBtn.style.cssText = `
-      padding: 6px 12px;
-      background: #5c3d2e;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-    `;
-    promptBtn.addEventListener("click", async () => {
-      const instructions = prompt(
-        "Instructions pour la réponse (ex: 'Propose un call mardi ou mercredi')"
-      );
-      if (!instructions?.trim()) return;
-
-      promptBtn.disabled = true;
-      promptBtn.textContent = "⏳ Génération...";
-
-      const result = await generateReply({
-        mode: "prompt_reply",
-        promptReply: instructions.trim(),
-      });
-
-      const replyText = extractReplyText(result);
-
-      if (result.success && replyText) {
-        const input = document.querySelector(".msg-form__contenteditable");
-        if (input) {
-          input.innerHTML = `<p>${replyText}</p>`;
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-      } else {
-        alert("Erreur: " + result.error);
-      }
-
-      promptBtn.disabled = false;
-      promptBtn.textContent = "🎯 Instructions custom";
-    });
-    buttonContainer.appendChild(promptBtn);
-
-    inputContainer.parentNode?.insertBefore(buttonContainer, inputContainer);
-  }
-
   let conversationInitialized = false;
   const hasMessagingUi = () =>
     /\/messaging\//.test(window.location.pathname) ||
@@ -456,7 +345,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     if (hasMessagingUi()) {
       setTimeout(() => {
         maybeInitConversationFlow();
-        injectGenerationButtons();
       }, 500);
     }
   });
