@@ -259,15 +259,14 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   /**
    * Envoie une requête de génération de réponse au background script
    * @param {Object} options
-   * @param {string} options.mode - "initial" | "followup_soft" | "followup_strong" | "prompt_reply"
    * @param {string} [options.toneOverride] - "professional" | "warm" | "direct" | "very_formal"
    * @param {string} [options.jobId] - UUID du job
    * @param {string} [options.templateId] - UUID du template
-   * @param {string} [options.promptReply] - Instructions custom (requis si mode === "prompt_reply")
+   * @param {string} [options.promptReply] - Instructions custom pour le backend
    * @returns {Promise<{success: boolean, replyText?: string, error?: string}>}
    */
   async function generateReply(options) {
-    const { mode, toneOverride, jobId, templateId, promptReply } = options;
+    const { toneOverride, jobId, templateId, promptReply } = options;
 
     const storage = await chrome.storage.local.get([USER_ID_STORAGE_KEY]);
     let userId = storage[USER_ID_STORAGE_KEY];
@@ -292,24 +291,32 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       return { success: false, error: "Aucun message trouvé" };
     }
 
-    const normalizedPromptReply =
-      mode === "prompt_reply" && promptReply ? promptReply.trim() : null;
+    const normalizedPromptReply = promptReply ? promptReply.trim() : null;
+
+    const lastMessages = getLastMessagesForBackend(conversation.messages, 3).map((msg) => ({
+      text: msg.text,
+      fromMe: msg.senderType === "me",
+      timestampRaw: msg.createdAt || msg.timestamp || msg.timestampRaw || new Date().toISOString(),
+    }));
 
     const messagePayload = {
       type: "GENERATE_REPLY",
       userId,
-      mode,
-      conversation,
+      messages: lastMessages,
+      context: {
+        language: conversation.language,
+        tone: toneOverride || undefined,
+        candidateName: conversation.candidateFirstName || null,
+        systemPromptOverride: normalizedPromptReply,
+      },
       toneOverride,
       jobId,
       templateId,
-      promptReply: normalizedPromptReply,
     };
 
     console.log("[Focals][CONTENT] GENERATE_REPLY payload", {
       userId,
-      mode,
-      conversationLength: conversation?.messages?.length,
+      conversationLength: lastMessages?.length,
       hasPromptReply: !!normalizedPromptReply,
       toneOverride,
       jobId,
@@ -385,6 +392,21 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
   function normalizeSpace(text) {
     return (text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function getLastMessagesForBackend(allMessages, limit = 3) {
+    if (!Array.isArray(allMessages)) return [];
+
+    const sorted = [...allMessages].sort((a, b) => {
+      const aDate = a.timestampRaw || a.timestamp;
+      const bDate = b.timestampRaw || b.timestamp;
+      if (aDate && bDate) {
+        return new Date(aDate) - new Date(bDate);
+      }
+      return 0;
+    });
+
+    return sorted.slice(-limit);
   }
 
   const q = (selector) => document.querySelector(selector);
@@ -1177,7 +1199,13 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       const timestamp = timeEl ? new Date(timeEl.getAttribute("datetime") || timeEl.innerText).getTime() : Date.now();
       messages.push({ text, fromMe: isFromMe, timestamp });
     });
-    const recent = messages.slice(-limit);
+    const sorted = messages.sort((a, b) => {
+      if (a.timestamp && b.timestamp) {
+        return a.timestamp - b.timestamp;
+      }
+      return 0;
+    });
+    const recent = typeof limit === "number" ? sorted.slice(-limit) : sorted;
     debugLog("MESSAGES", { total: messages.length, recent: recent.length });
     return recent;
   }
@@ -1233,21 +1261,15 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
   function setButtonsLoading(isLoading, label = "") {
     const replyBtn = document.getElementById("focals-reply-btn");
-    const promptModeBtn = document.getElementById("focals-prompt-btn");
     const generatePromptBtn = document.getElementById("focals-generate-prompt-btn");
-    const softBtn = document.getElementById("focals-soft-btn");
-    const strongBtn = document.getElementById("focals-strong-btn");
     const toggleButton = (btn, baseLabel) => {
       if (!btn) return;
       btn.disabled = isLoading;
       btn.textContent = isLoading && label ? label : baseLabel;
       btn.style.opacity = isLoading ? "0.7" : "1";
     };
-    toggleButton(replyBtn, "Suggest reply");
-    toggleButton(promptModeBtn, "Prompt reply");
-    toggleButton(generatePromptBtn, "Generate reply");
-    toggleButton(softBtn, "Relance douce");
-    toggleButton(strongBtn, "Relance forte");
+    toggleButton(replyBtn, "Standard reply");
+    toggleButton(generatePromptBtn, "Custom reply");
   }
 
   function applyTemplate(templateContent, { firstNameInfo, job }) {
@@ -1271,12 +1293,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     return summary.join("\n");
   }
 
-  async function generateReplyLegacy({
-    templateId,
-    jobId,
-    mode = "auto",
-    customInstructions,
-  }) {
+  async function generateReplyLegacy({ templateId, jobId, customInstructions }) {
     const allMessages = extractLinkedInMessages(10);
     if (!allMessages.length) {
       alert("Aucun message détecté dans la conversation.");
@@ -1308,20 +1325,26 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       };
     });
 
+    const lastMessages = getLastMessagesForBackend(messagesPayload, 3).map((m) => ({
+      text: m.text,
+      fromMe: m.senderType === "me",
+      timestampRaw: m.timestamp || m.createdAt,
+    }));
+
     const trimmedInstructions = (customInstructions || "").trim();
     const request = {
       userId: await getUserId(),
-      mode: trimmedInstructions ? "prompt" : mode,
-      conversation: {
-        messages: messagesPayload,
-        candidateFirstName: firstNameInfo.firstName || null,
+      messages: lastMessages,
+      context: {
         language: languageFinal,
+        tone,
+        candidateName: firstNameInfo.firstName || null,
+        systemPromptOverride: trimmedInstructions || null,
       },
       toneOverride: tone,
       jobId: selectedJob?.id || undefined,
       templateId: selectedTemplate?.id || null,
       templateContentOverride: templateText,
-      customInstructions: trimmedInstructions || undefined,
     };
 
     try {
@@ -1335,64 +1358,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       insertReplyIntoMessageInput(replyText);
     } catch (error) {
       console.error("[Focals] generate-reply error", error);
-      alert(`Erreur Focals : ${error?.message || "Une erreur est survenue."}`);
-    } finally {
-      setButtonsLoading(false);
-    }
-  }
-
-  async function generateFollowUp({ strength, templateId, jobId }) {
-    const allMessages = extractLinkedInMessages(10);
-    const candidateMessages = allMessages.filter((m) => !m.fromMe);
-    const snippet = candidateMessages.map((m) => m.text).slice(-3).join("\n");
-    const language = (await detectLanguage(snippet)) || "unknown";
-    const languageFinal = language === "unknown" ? "fr" : language;
-    const firstNameInfo = detectCandidateFirstNameFromDom();
-
-    const { tone } = await loadTone();
-    const { templates, jobs } = await loadTemplatesAndJobs();
-    const selectedTemplate = templates.find((t) => t.id === templateId) || null;
-    const selectedJob = jobs.find((j) => j.id === jobId) || null;
-
-    const templateText = selectedTemplate
-      ? applyTemplate(selectedTemplate.content, { firstNameInfo, job: selectedJob })
-      : null;
-
-    const messagesPayload = allMessages.map((m) => {
-      const timestamp = new Date(m.timestamp || Date.now()).toISOString();
-      return {
-        senderType: m.fromMe ? "me" : "candidate",
-        text: m.text,
-        createdAt: timestamp,
-        timestamp,
-      };
-    });
-
-    const request = {
-      userId: await getUserId(),
-      mode: strength === "strong" ? "followup_strong" : "followup_soft",
-      conversation: {
-        messages: messagesPayload,
-        candidateFirstName: firstNameInfo.firstName || null,
-        language: languageFinal,
-      },
-      toneOverride: tone,
-      jobId: selectedJob?.id || undefined,
-      templateId: selectedTemplate?.id || null,
-      templateContentOverride: templateText,
-    };
-
-    try {
-      setButtonsLoading(true, "Génération...");
-      const response = await generateReplyApi(request);
-      const replyText = extractReplyText(response);
-      if (!replyText) {
-        alert("Impossible de générer la relance.");
-        return;
-      }
-      insertReplyIntoMessageInput(replyText);
-    } catch (error) {
-      console.error("[Focals] generate-followup error", error);
       alert(`Erreur Focals : ${error?.message || "Une erreur est survenue."}`);
     } finally {
       setButtonsLoading(false);
@@ -1459,7 +1424,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
     const replyBtn = document.createElement("button");
     replyBtn.id = "focals-reply-btn";
-    replyBtn.textContent = "Suggest reply";
+    replyBtn.textContent = "Standard reply";
     replyBtn.style.flex = "1";
     replyBtn.style.padding = "10px";
     replyBtn.style.background = "#22c55e";
@@ -1469,22 +1434,9 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     replyBtn.style.fontWeight = "700";
     replyBtn.style.cursor = "pointer";
 
-    const promptBtn = document.createElement("button");
-    promptBtn.id = "focals-prompt-btn";
-    promptBtn.textContent = "Prompt reply";
-    promptBtn.style.flex = "1";
-    promptBtn.style.padding = "10px";
-    promptBtn.style.background = "#fbbf24";
-    promptBtn.style.border = "none";
-    promptBtn.style.borderRadius = "10px";
-    promptBtn.style.color = "#0f172a";
-    promptBtn.style.fontWeight = "700";
-    promptBtn.style.cursor = "pointer";
-    promptBtn.style.transition = "all 0.2s ease";
-
     const promptContainer = document.createElement("div");
     promptContainer.id = "focals-prompt-container";
-    promptContainer.style.display = "none";
+    promptContainer.style.display = "flex";
     promptContainer.style.flexDirection = "column";
     promptContainer.style.gap = "6px";
     promptContainer.style.marginTop = "8px";
@@ -1509,7 +1461,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
     const promptGenerateBtn = document.createElement("button");
     promptGenerateBtn.id = "focals-generate-prompt-btn";
-    promptGenerateBtn.textContent = "Generate reply";
+    promptGenerateBtn.textContent = "Custom reply";
     promptGenerateBtn.style.padding = "10px";
     promptGenerateBtn.style.background = "#0ea5e9";
     promptGenerateBtn.style.border = "none";
@@ -1520,31 +1472,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     promptGenerateBtn.style.alignSelf = "flex-start";
     promptGenerateBtn.disabled = true;
     promptGenerateBtn.style.opacity = "0.7";
-
-    const followRow = document.createElement("div");
-    followRow.style.display = "flex";
-    followRow.style.gap = "6px";
-    followRow.style.marginTop = "6px";
-
-    const softBtn = document.createElement("button");
-    softBtn.id = "focals-soft-btn";
-    softBtn.textContent = "Relance douce";
-    softBtn.style.flex = "1";
-    softBtn.style.background = "#3b82f6";
-    softBtn.style.border = "none";
-    softBtn.style.borderRadius = "10px";
-    softBtn.style.color = "#fff";
-    softBtn.style.cursor = "pointer";
-
-    const strongBtn = document.createElement("button");
-    strongBtn.id = "focals-strong-btn";
-    strongBtn.textContent = "Relance forte";
-    strongBtn.style.flex = "1";
-    strongBtn.style.background = "#ef4444";
-    strongBtn.style.border = "none";
-    strongBtn.style.borderRadius = "10px";
-    strongBtn.style.color = "#fff";
-    strongBtn.style.cursor = "pointer";
 
     const info = document.createElement("div");
     info.style.fontSize = "12px";
@@ -1572,17 +1499,6 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       }
     });
 
-    let replyMode = "auto";
-
-    const setReplyMode = (mode) => {
-      replyMode = mode;
-      const isPrompt = mode === "prompt";
-      promptContainer.style.display = isPrompt ? "flex" : "none";
-      promptBtn.style.boxShadow = isPrompt ? "0 0 0 2px #fbbf24" : "none";
-      promptBtn.style.opacity = isPrompt ? "1" : "0.9";
-      replyBtn.style.boxShadow = !isPrompt ? "0 0 0 2px #22c55e" : "none";
-    };
-
     const updatePromptButtonState = () => {
       const hasText = (promptInput.value || "").trim().length > 0;
       promptGenerateBtn.disabled = !hasText;
@@ -1590,49 +1506,35 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     };
 
     replyBtn.onclick = () => {
-      setReplyMode("auto");
       generateReplyLegacy({
         templateId: templateSelect.value || null,
         jobId: jobSelect.value || null,
-        mode: "auto",
+        customInstructions: null,
       });
-    };
-    promptBtn.onclick = () => {
-      setReplyMode("prompt");
-      promptInput.focus();
     };
     promptInput.addEventListener("input", updatePromptButtonState);
     promptGenerateBtn.onclick = () => {
       const instructions = (promptInput.value || "").trim();
+      if (!instructions) {
+        alert("Ajoutez des instructions avant de générer une réponse.");
+        return;
+      }
       generateReplyLegacy({
         templateId: templateSelect.value || null,
         jobId: jobSelect.value || null,
-        mode: "prompt",
         customInstructions: instructions,
       });
     };
-    softBtn.onclick = () => {
-      generateFollowUp({ strength: "soft", templateId: templateSelect.value || null, jobId: jobSelect.value || null });
-    };
-    strongBtn.onclick = () => {
-      generateFollowUp({ strength: "strong", templateId: templateSelect.value || null, jobId: jobSelect.value || null });
-    };
-
-    setReplyMode("auto");
     updatePromptButtonState();
 
     container.appendChild(templateSelect);
     container.appendChild(jobSelect);
     actionRow.appendChild(replyBtn);
-    actionRow.appendChild(promptBtn);
     container.appendChild(actionRow);
     promptContainer.appendChild(promptLabel);
     promptContainer.appendChild(promptInput);
     promptContainer.appendChild(promptGenerateBtn);
     container.appendChild(promptContainer);
-    followRow.appendChild(softBtn);
-    followRow.appendChild(strongBtn);
-    container.appendChild(followRow);
     container.appendChild(info);
 
     document.body.appendChild(container);
