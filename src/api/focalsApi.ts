@@ -2,7 +2,6 @@ import { API_BASE_URL, IS_DEV } from './config';
 
 export type ToneType = 'very_formal' | 'professional' | 'warm' | 'direct';
 export type LanguageType = 'fr' | 'en';
-export type ReplyMode = 'initial' | 'followup_soft' | 'followup_strong' | 'prompt_reply';
 export type SenderType = 'candidate' | 'me' | 'other';
 
 export interface FocalsSettings {
@@ -51,17 +50,18 @@ export interface FocalsGetDataResponse {
 
 export interface GenerateReplyRequest {
   userId: string;
-  mode: ReplyMode;
-  conversation: {
-    messages: ConversationMessage[];
-    candidateFirstName?: string | null;
+  messages: ConversationMessage[];
+  context?: {
     language?: LanguageType;
+    tone?: ToneType;
+    candidateName?: string | null;
+    linkedinProfile?: Record<string, unknown> | null;
+    systemPromptOverride?: string | null;
   };
   toneOverride?: ToneType;
   jobId?: string;
   templateId?: string | null;
   templateContentOverride?: string | null;
-  systemPromptOverride?: string | null;
 }
 
 export interface GenerateReplyResponse {

@@ -124,6 +124,23 @@
 
     const normalizeText = (text = "") => text.replace(/\s+/g, " ").trim();
 
+    const getLastMessagesForBackend = (allMessages, limit = 3) => {
+      if (!Array.isArray(allMessages)) return [];
+
+      const sorted = [...allMessages].sort((a, b) => {
+        const aDate = a.timestampRaw || a.timestamp;
+        const bDate = b.timestampRaw || b.timestamp;
+
+        if (aDate && bDate) {
+          return new Date(aDate) - new Date(bDate);
+        }
+
+        return 0;
+      });
+
+      return sorted.slice(-limit);
+    };
+
     const normalizeLinkedinUrl = (url) => {
       if (!url) return null;
       try {
@@ -651,17 +668,12 @@
         return [];
       }
 
-      const recentMessages = allMessages.slice(-3);
-      if (allMessages.length > 3) {
-        log(`[SCRAPE] Using last 3 messages out of ${allMessages.length}`);
-      }
-
-      return recentMessages;
+      return allMessages;
     };
 
     const generateReplyFromAPI = async (
       messages,
-      { mode = "auto", context = {}, customInstructions = null, systemPromptOverride = null } = {}
+      { context = {}, systemPromptOverride = null } = {}
     ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
@@ -670,17 +682,24 @@
 
       const userId = await getOrCreateUserId();
 
+      const lastMessages = getLastMessagesForBackend(messages, 3);
+
+      const finalSystemPrompt =
+        (context?.systemPromptOverride && context.systemPromptOverride.trim()) ||
+        (systemPromptOverride && systemPromptOverride.trim()) ||
+        null;
+
       const payload = {
         userId,
-        mode,
-        messages: messages.map((msg) => ({
+        messages: lastMessages.map((msg) => ({
           text: msg.text,
           fromMe: !!msg.fromMe,
-          timestampRaw: msg.timestampRaw || new Date().toISOString(),
+          timestampRaw: msg.timestampRaw || msg.timestamp || new Date().toISOString(),
         })),
-        context,
-        customInstructions: customInstructions || null,
-        systemPromptOverride: systemPromptOverride || null,
+        context: {
+          ...context,
+          systemPromptOverride: finalSystemPrompt,
+        },
       };
 
       log("PIPELINE api_call: prepared payload", payload);
@@ -769,7 +788,6 @@
       composer,
       conversationName = "Unknown conversation",
       editorIndex,
-      generationMode = "auto",
       customInstructions,
       candidateProfileUrl = null,
       freshLinkedinProfile = null,
@@ -811,51 +829,23 @@
           profileResolution.cachedProfile?.firstName ||
           profileResolution.cachedProfile?.name ||
           detectCandidateName(conversationName, messages);
-        const hasOutgoingMessages = messages.some((msg) => msg.fromMe);
-
-        const baseContext = {
+        const trimmedCustomInstructions = (customInstructions || "").trim();
+        const payloadContext = {
           language,
           tone,
+          candidateName: candidateName || undefined,
+          linkedinProfile: profileResolution.linkedinProfile || null,
+          systemPromptOverride: trimmedCustomInstructions || null,
         };
 
-        if (candidateName) {
-          baseContext.candidateName = candidateName;
-        }
-
-        let payloadMode = "auto";
-        let payloadContext = { ...baseContext };
-        let instructionsToSend = null;
-
-        if (generationMode === "prompt_custom") {
-          payloadMode = "prompt_reply";
-          const trimmed = (customInstructions || "").trim();
-          if (!trimmed) {
-            alert("❌ Ajoutez des instructions personnalisées avant de générer.");
-            return;
-          }
-          payloadContext = {
-            ...payloadContext,
-            linkedinProfile: profileResolution.linkedinProfile || null,
-          };
-          instructionsToSend = trimmed;
-        } else {
-          payloadMode = hasOutgoingMessages ? "followup_soft" : "initial";
-        }
-
-        console.log("[Focals][MSG] generate payload context", {
-          mode: payloadMode,
-          context: payloadContext,
-        });
+        console.log("[Focals][MSG] generate payload context", payloadContext);
 
         const reply = await generateReplyFromAPI(messages, {
-          mode: payloadMode,
           context: payloadContext,
-          customInstructions: instructionsToSend,
           systemPromptOverride,
         });
         console.log("[Focals][MSG] Réponse reçue", {
           hasReply: !!reply,
-          mode: payloadMode,
         });
         if (!reply) {
           warn(`PIPELINE api_call: reply missing, aborting`);
@@ -1141,7 +1131,6 @@ const smartButton = createMainButton("Smart Reply ▾");
               conversationRoot,
               conversationName,
               editorIndex: index + 1,
-              generationMode: "auto",
             });
           } finally {
             smartButton.textContent = "Smart Reply ▾";
@@ -1216,7 +1205,6 @@ const smartButton = createMainButton("Smart Reply ▾");
               conversationRoot,
               conversationName,
               editorIndex: index + 1,
-              generationMode: "prompt_custom",
               customInstructions: instructions,
             });
             closeCustomModal();

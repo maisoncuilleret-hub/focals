@@ -69,6 +69,28 @@ const STORAGE_KEYS = {
 
 const DEFAULT_TONE = "professional";
 
+const toBackendMessage = (msg = {}) => ({
+  text: msg.text || "",
+  fromMe: msg.fromMe ?? msg.senderType === "me",
+  timestampRaw: msg.timestampRaw || msg.timestamp || msg.createdAt || undefined,
+});
+
+const getLastMessagesForBackend = (messages, limit = 3) => {
+  if (!Array.isArray(messages)) return [];
+
+  const sorted = [...messages]
+    .map(toBackendMessage)
+    .filter((m) => m.text)
+    .sort((a, b) => {
+      if (a.timestampRaw && b.timestampRaw) {
+        return new Date(a.timestampRaw) - new Date(b.timestampRaw);
+      }
+      return 0;
+    });
+
+  return sorted.slice(-limit);
+};
+
 function withStorage(area = "sync") {
   return {
     async get(keys) {
@@ -396,12 +418,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           const {
             userId: userIdFromMessage,
-            mode,
             conversation,
             toneOverride,
             promptReply,
             jobId,
             templateId,
+            messages: directMessages,
+            context = {},
+            customInstructions,
+            systemPromptOverride,
           } = message;
 
           const stored = await chrome.storage.local.get(["focals_user_id"]);
@@ -413,60 +438,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: false, error: "Missing userId" });
             return;
           }
-          if (!mode) {
-            sendResponse({ success: false, error: "mode manquant" });
-            return;
-          }
-          const normalizeMessage = (msg = {}) => ({
-            text: msg.text || "",
-            senderType: msg.senderType || (msg.fromMe ? "me" : "candidate"),
-            timestamp: msg.timestamp || msg.createdAt || msg.timestampRaw || new Date().toISOString(),
-          });
 
-          const rawMessages = Array.isArray(conversation?.messages)
-            ? conversation.messages
-            : Array.isArray(conversation)
-            ? conversation
-            : [];
+          const rawMessages = Array.isArray(directMessages)
+            ? directMessages
+            : Array.isArray(conversation?.messages)
+              ? conversation.messages
+              : Array.isArray(conversation)
+                ? conversation
+                : [];
 
-          const conversationMessages = rawMessages.map(normalizeMessage).filter((m) => m.text);
+          const conversationMessages = getLastMessagesForBackend(rawMessages);
 
           if (!conversationMessages.length) {
-            console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY", { mode });
+            console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY");
             sendResponse({ success: false, error: "Empty conversation" });
             return;
           }
 
-          if (mode === "prompt_reply" && (!promptReply || promptReply.trim() === "")) {
-            sendResponse({ success: false, error: "promptReply requis pour mode prompt_reply" });
-            return;
+          const normalizedSystemPrompt =
+            (context?.systemPromptOverride && context.systemPromptOverride.trim()) ||
+            (systemPromptOverride && systemPromptOverride.trim()) ||
+            (customInstructions && customInstructions.trim()) ||
+            (promptReply && promptReply.trim()) ||
+            null;
+
+          const payloadContext = { ...context };
+
+          if (conversation?.language && !payloadContext.language) {
+            payloadContext.language = conversation.language;
           }
+          if (toneOverride && !payloadContext.tone) {
+            payloadContext.tone = toneOverride;
+          }
+          const candidateName =
+            payloadContext.candidateName ||
+            conversation?.candidateFirstName ||
+            conversation?.candidateName ||
+            null;
+          payloadContext.candidateName = candidateName;
 
-          const conversationPayload = {
-            messages: conversationMessages,
-          };
-
-          if (conversation?.language) conversationPayload.language = conversation.language;
-          if (conversation?.candidateFirstName)
-            conversationPayload.candidateFirstName = conversation.candidateFirstName;
+          if (normalizedSystemPrompt !== null) {
+            payloadContext.systemPromptOverride = normalizedSystemPrompt;
+          }
 
           const payload = {
             userId,
-            mode,
-            conversation: conversationPayload,
+            messages: conversationMessages,
+            context: payloadContext,
             toneOverride,
             jobId,
             templateId,
           };
 
-          if (mode === "prompt_reply" && promptReply && promptReply.trim().length > 0) {
-            payload.promptReply = promptReply.trim();
-          }
-
           console.log("[Focals][BG] Calling focals-generate-reply with payload", {
             ...payload,
             conversationLength: conversationMessages.length,
-            hasPromptReply: !!payload.promptReply,
+            hasSystemPromptOverride: !!payloadContext.systemPromptOverride,
           });
 
           const apiResponse = await fetchApi({
