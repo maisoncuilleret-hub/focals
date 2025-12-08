@@ -25,6 +25,18 @@ console.log(
     }
   }
 
+  function getLinkedinMessagingRoot() {
+    // Sur certaines sessions, LinkedIn met la messagerie dans un Shadow DOM
+    const outlet = document.getElementById("interop-outlet");
+    if (outlet && outlet.shadowRoot) {
+      console.log("[FOCALS][SHADOW] using interop-outlet.shadowRoot as messaging root");
+      return outlet.shadowRoot;
+    }
+
+    // Fallback : comportement classique (pas de Shadow DOM)
+    return document;
+  }
+
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(
@@ -1116,66 +1128,15 @@ console.log(
     };
 
     // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
-    function getRoots() {
-      const roots = [document];
-
-      const outlet = document.getElementById("interop-outlet");
-      if (outlet && outlet.shadowRoot) {
-        console.log("[FOCALS][SHADOW] interop-outlet.shadowRoot detected");
-        roots.push(outlet.shadowRoot);
-      }
-
-      return roots;
-    }
-
-    const findCandidateForms = () => {
-      const roots = getRoots();
-      const msgForms = [];
-
-      roots.forEach((root) => {
-        root.querySelectorAll(".msg-form").forEach((form) => {
-          msgForms.push(form);
-        });
-      });
-
-      if (msgForms.length > 0) return msgForms;
-
-      const editors = [];
-      roots.forEach((root) => {
-        root
-          .querySelectorAll(
-            '[contenteditable="true"][aria-label], [contenteditable="true"][data-placeholder]'
-          )
-          .forEach((editor) => editors.push(editor));
-      });
-
-      const messageEditors = editors.filter((editor) => {
-        const label = (editor.getAttribute("aria-label") || "").toLowerCase();
-        const placeholder =
-          (editor.getAttribute("data-placeholder") || "").toLowerCase();
-        return label.includes("message") || placeholder.includes("message");
-      });
-
-      if (messageEditors.length === 0) return [];
-
-      const uniqueForms = new Set();
-      messageEditors.forEach((editor) => {
-        const form = editor.closest("form, .msg-form");
-        if (form) {
-          uniqueForms.add(form);
-        }
-      });
-
-      if (uniqueForms.size > 0) {
-        return Array.from(uniqueForms);
-      }
-
-      return messageEditors;
-    };
-
     const injectSmartReplyButtons = () => {
-      const forms = findCandidateForms();
-      console.log("[FOCALS DEBUG] injectSmartReplyButtons – forms:", forms.length);
+      const root = getLinkedinMessagingRoot();
+      const forms = root.querySelectorAll("form.msg-form");
+
+      console.log(
+        "[FOCALS DEBUG] injectSmartReplyButtons – root =",
+        root === document ? "document" : "interop-shadow-root"
+      );
+      console.log("[FOCALS DEBUG] injectSmartReplyButtons – forms:", forms.length, forms);
 
       forms.forEach((form, i) => {
         console.log(`[FOCALS DEBUG] form[${i}] classes:`, form.className);
@@ -1231,22 +1192,18 @@ console.log(
     };
 
     const setupMessagingObserver = () => {
-      console.log("[FOCALS DEBUG] setupMessagingObserver init");
+      const root = getLinkedinMessagingRoot();
+
+      console.log(
+        "[FOCALS DEBUG] setupMessagingObserver on root =",
+        root === document ? "document" : "interop-shadow-root"
+      );
 
       const observer = new MutationObserver(() => {
         injectSmartReplyButtons();
       });
 
-      observer.observe(document.body, { childList: true, subtree: true });
-
-      const outlet = document.getElementById("interop-outlet");
-      if (outlet && outlet.shadowRoot) {
-        const shadowObs = new MutationObserver(() => {
-          injectSmartReplyButtons();
-        });
-        shadowObs.observe(outlet.shadowRoot, { childList: true, subtree: true });
-        console.log("[FOCALS] ShadowRoot observer attached");
-      }
+      observer.observe(root, { childList: true, subtree: true });
 
       injectSmartReplyButtons();
     };
