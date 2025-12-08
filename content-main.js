@@ -123,6 +123,35 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   window.__FOCALS_CONTENT_MAIN_LOADED__ = true;
   debugLog("INIT", "Safe content-main.js loaded");
 
+  let shadowRoot = null;
+  let shadowMount = null;
+
+  function ensureShadowHost() {
+    if (shadowMount && shadowRoot) return shadowMount;
+
+    const host = document.createElement("div");
+    host.id = "focals-root";
+    host.style.position = "fixed";
+    host.style.inset = "0";
+    host.style.zIndex = "2147483647";
+    host.style.pointerEvents = "none";
+    document.body.appendChild(host);
+
+    shadowRoot = host.attachShadow({ mode: "open" });
+    shadowMount = document.createElement("div");
+    shadowMount.id = "focals-shadow-mount";
+    shadowMount.style.position = "absolute";
+    shadowMount.style.inset = "0";
+    shadowMount.style.pointerEvents = "none";
+    shadowRoot.appendChild(shadowMount);
+
+    return shadowMount;
+  }
+
+  function getShadowElementById(id) {
+    return shadowRoot?.getElementById ? shadowRoot.getElementById(id) : null;
+  }
+
   const STORAGE_KEYS = {
     tone: "focals_userTone",
     templates: "focals_templates",
@@ -1280,8 +1309,8 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   function setButtonsLoading(isLoading, label = "") {
-    const replyBtn = document.getElementById("focals-reply-btn");
-    const generatePromptBtn = document.getElementById("focals-generate-prompt-btn");
+    const replyBtn = getShadowElementById("focals-reply-btn");
+    const generatePromptBtn = getShadowElementById("focals-generate-prompt-btn");
     const toggleButton = (btn, baseLabel) => {
       if (!btn) return;
       btn.disabled = isLoading;
@@ -1385,7 +1414,8 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   function buildControlPanel(state) {
-    if (document.getElementById("focals-controls")) return;
+    const mount = ensureShadowHost();
+    if (shadowRoot?.getElementById("focals-controls")) return;
     const container = document.createElement("div");
     container.id = "focals-controls";
     container.style.position = "fixed";
@@ -1400,6 +1430,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     container.style.boxShadow = "0 10px 30px rgba(0,0,0,0.3)";
     container.style.width = "280px";
     container.style.fontFamily = "system-ui, sans-serif";
+    container.style.pointerEvents = "auto";
 
     const title = document.createElement("div");
     title.textContent = "Focals";
@@ -1557,7 +1588,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     container.appendChild(promptContainer);
     container.appendChild(info);
 
-    document.body.appendChild(container);
+    mount.appendChild(container);
     console.log("[FOCALS] React portal mounted successfully");
   }
 
@@ -1590,15 +1621,23 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     debugLog("MODE", "unsupported-context");
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
+  const runInit = () => {
+    setTimeout(() => {
       init().catch((err) => {
         console.error("[FOCALS] Failed to initialize content script", err);
       });
-    });
+    }, 300);
+  };
+
+  if (document.readyState === "complete") {
+    runInit();
   } else {
-    init().catch((err) => {
-      console.error("[FOCALS] Failed to initialize content script", err);
-    });
+    window.addEventListener(
+      "load",
+      () => {
+        runInit();
+      },
+      { once: true }
+    );
   }
 })();
