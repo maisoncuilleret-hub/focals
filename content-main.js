@@ -1732,6 +1732,11 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     triggerProfileScrape(true);
   }
 
+  async function injectProfileUi() {
+    console.log("[FOCALS] Injection UI profil");
+    await initProfileFlow();
+  }
+
   console.log("[FOCALS] initAppsInjections start");
   const memberId = extractMemberIdFromProfile();
   if (!memberId) {
@@ -1760,11 +1765,11 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     console.log("[FOCALS] Début injection UI Focals");
 
     if (isProfileDetected) {
-      await initProfileFlow();
+      await injectProfileUi();
     }
 
     if (messagingDetected) {
-      console.log("[FOCALS] Mode messagerie détecté, activation du flux conversation");
+      console.log("[FOCALS] Mode messagerie détecté, activation des features messaging");
       await maybeInitConversationFlow();
     }
   }
