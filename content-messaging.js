@@ -1115,15 +1115,39 @@ console.log(
       }
     };
 
+    // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
+    function getRoots() {
+      const roots = [document];
+
+      const outlet = document.getElementById("interop-outlet");
+      if (outlet && outlet.shadowRoot) {
+        console.log("[FOCALS][SHADOW] interop-outlet.shadowRoot detected");
+        roots.push(outlet.shadowRoot);
+      }
+
+      return roots;
+    }
+
     const findCandidateForms = () => {
-      const msgForms = Array.from(document.querySelectorAll(".msg-form"));
+      const roots = getRoots();
+      const msgForms = [];
+
+      roots.forEach((root) => {
+        root.querySelectorAll(".msg-form").forEach((form) => {
+          msgForms.push(form);
+        });
+      });
+
       if (msgForms.length > 0) return msgForms;
 
-      const editors = Array.from(
-        document.querySelectorAll(
-          '[contenteditable="true"][aria-label], [contenteditable="true"][data-placeholder]'
-        )
-      );
+      const editors = [];
+      roots.forEach((root) => {
+        root
+          .querySelectorAll(
+            '[contenteditable="true"][aria-label], [contenteditable="true"][data-placeholder]'
+          )
+          .forEach((editor) => editors.push(editor));
+      });
 
       const messageEditors = editors.filter((editor) => {
         const label = (editor.getAttribute("aria-label") || "").toLowerCase();
@@ -1214,6 +1238,15 @@ console.log(
       });
 
       observer.observe(document.body, { childList: true, subtree: true });
+
+      const outlet = document.getElementById("interop-outlet");
+      if (outlet && outlet.shadowRoot) {
+        const shadowObs = new MutationObserver(() => {
+          injectSmartReplyButtons();
+        });
+        shadowObs.observe(outlet.shadowRoot, { childList: true, subtree: true });
+        console.log("[FOCALS] ShadowRoot observer attached");
+      }
 
       injectSmartReplyButtons();
     };
