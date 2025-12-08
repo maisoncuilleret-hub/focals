@@ -1183,43 +1183,75 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   async function ensureConfigAvailable() {
-    return new Promise((resolve) => {
+    const readStorage = () =>
+      new Promise((resolve, reject) => {
+        try {
+          chrome.storage.local.get(null, (data) => resolve(data || {}));
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+    let data = {};
+    try {
+      data = await readStorage();
+    } catch (err) {
+      console.warn("[FOCALS] Impossible de lire le storage", err);
+      return { ok: true, missing: ["storage_read_error"] };
+    }
+
+    let jobs = Array.isArray(data.focals_jobs) ? data.focals_jobs : [];
+    let templates = Array.isArray(data.focals_templates) ? data.focals_templates : [];
+    let selectedJob = data.focals_selectedJob || null;
+
+    const needsHydration = !jobs.length || !templates.length || !selectedJob;
+    if (needsHydration) {
       try {
-        chrome.storage.local.get(null, (data) => {
-          const missing = [];
-
-          if (!Array.isArray(data.focals_jobs) || data.focals_jobs.length === 0) {
-            missing.push("focals_jobs");
-          }
-          if (!data.focals_selectedJob) {
-            missing.push("focals_selectedJob");
-          }
-          if (!Array.isArray(data.focals_templates) || data.focals_templates.length === 0) {
-            missing.push("focals_templates");
-          }
-
-          if (missing.length) {
-            logStorageSnapshot();
-            console.warn("[FOCALS] Config incomplète, initAppsInjections stoppé", {
-              missing,
-              snapshot: {
-                focals_user_id: data.focals_user_id,
-                focals_jobs: data.focals_jobs?.length || 0,
-                focals_selectedJob: data.focals_selectedJob || null,
-                focals_templates: data.focals_templates?.length || 0,
-              },
-            });
-            resolve({ ok: false, missing });
-            return;
-          }
-
-          resolve({ ok: true });
+        const bootstrap = await loadBootstrapData();
+        if (!jobs.length && Array.isArray(bootstrap?.jobs)) {
+          jobs = bootstrap.jobs;
+        }
+        if (!templates.length && Array.isArray(bootstrap?.templates)) {
+          templates = bootstrap.templates;
+        }
+        if (!selectedJob) {
+          selectedJob = bootstrap?.settings?.default_job_id || null;
+        }
+        chrome.storage.local.set({
+          focals_jobs: jobs,
+          focals_templates: templates,
+          focals_selectedJob: selectedJob,
         });
       } catch (err) {
-        console.warn("[FOCALS] Impossible de lire le storage", err);
-        resolve({ ok: false, missing: ["storage_read_error"] });
+        debugLog("CONFIG_HYDRATION_ERROR", err?.message || String(err));
       }
-    });
+    }
+
+    const missing = [];
+    if (!Array.isArray(jobs) || jobs.length === 0) {
+      missing.push("focals_jobs");
+    }
+    if (!selectedJob) {
+      missing.push("focals_selectedJob");
+    }
+    if (!Array.isArray(templates) || templates.length === 0) {
+      missing.push("focals_templates");
+    }
+
+    if (missing.length) {
+      logStorageSnapshot();
+      console.warn("[FOCALS] Config partielle détectée, poursuite avec valeurs par défaut", {
+        missing,
+        snapshot: {
+          focals_user_id: data.focals_user_id,
+          focals_jobs: jobs.length || 0,
+          focals_selectedJob: selectedJob,
+          focals_templates: templates.length || 0,
+        },
+      });
+    }
+
+    return { ok: true, missing };
   }
 
   function buildGreeting(firstNameInfo, language) {
