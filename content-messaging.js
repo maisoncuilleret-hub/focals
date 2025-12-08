@@ -1,4 +1,13 @@
-console.log('[FOCALS DEBUG] messaging content script loaded – v2');
+console.log('[FOCALS DEBUG] messaging content script loaded – v3');
+console.log(
+  '[FOCALS DEBUG] messaging content script context:',
+  'href=',
+  window.location.href,
+  'isTop=',
+  window.top === window,
+  'frameElement=',
+  window.frameElement
+);
 
 (() => {
   const FOCALS_DEBUG = false;
@@ -45,10 +54,6 @@ console.log('[FOCALS DEBUG] messaging content script loaded – v2');
       !!window.frameElement?.hasAttribute("sandbox"),
   };
 
-  if (!env.isTop) {
-    debugLog("EXIT", "Not in top window, exiting messaging script");
-    return;
-  }
   if (env.isSandbox) {
     debugLog("EXIT", "Sandboxed document, skipping messaging script");
     return;
@@ -1110,8 +1115,42 @@ console.log('[FOCALS DEBUG] messaging content script loaded – v2');
       }
     };
 
+    const findCandidateForms = () => {
+      const msgForms = Array.from(document.querySelectorAll(".msg-form"));
+      if (msgForms.length > 0) return msgForms;
+
+      const editors = Array.from(
+        document.querySelectorAll(
+          '[contenteditable="true"][aria-label], [contenteditable="true"][data-placeholder]'
+        )
+      );
+
+      const messageEditors = editors.filter((editor) => {
+        const label = (editor.getAttribute("aria-label") || "").toLowerCase();
+        const placeholder =
+          (editor.getAttribute("data-placeholder") || "").toLowerCase();
+        return label.includes("message") || placeholder.includes("message");
+      });
+
+      if (messageEditors.length === 0) return [];
+
+      const uniqueForms = new Set();
+      messageEditors.forEach((editor) => {
+        const form = editor.closest("form, .msg-form");
+        if (form) {
+          uniqueForms.add(form);
+        }
+      });
+
+      if (uniqueForms.size > 0) {
+        return Array.from(uniqueForms);
+      }
+
+      return messageEditors;
+    };
+
     const injectSmartReplyButtons = () => {
-      const forms = document.querySelectorAll(".msg-form");
+      const forms = findCandidateForms();
       console.log("[FOCALS DEBUG] injectSmartReplyButtons – forms:", forms.length);
 
       forms.forEach((form, i) => {

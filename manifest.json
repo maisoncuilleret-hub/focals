@@ -48,7 +48,8 @@
         "https://*.linkedin.com/*"
       ],
       "js": ["src/content/linkedinScraper.js", "content-main.js", "content-messaging.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }
