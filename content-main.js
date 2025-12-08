@@ -1687,6 +1687,9 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
   async function initProfileFlow() {
     debugLog("MODE", "profile");
+    console.log("[FOCALS] Étape 1 – récupération des infos profil de base");
+    console.log("[FOCALS] Étape 2 – récupération de l’URL / ID");
+    console.log("[FOCALS] Étape 3 – lancement du scraping et de l'injection UI");
     triggerProfileScrape(true);
   }
 
@@ -1697,18 +1700,31 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   async function init() {
+    console.log("[FOCALS] Init – URL détectée :", window.location.href);
     const configCheck = await ensureConfigAvailable();
+    console.log("[FOCALS] Config ready – clés :", Object.keys(configCheck || {}), "missing:", configCheck?.missing || []);
     if (!configCheck.ok) {
       debugLog("CONFIG_GUARD", configCheck);
       return;
     }
 
+    const isProfileDetected = isProfilePage() || hasInlineRecruiterProfileCard();
+    console.log("[FOCALS] detectIsProfilePage =", isProfileDetected);
+
+    if (!isProfileDetected && !hasMessagingUi()) {
+      console.warn("[FOCALS] Page non reconnue comme profil, arrêt du script");
+      return;
+    }
+
+    console.log("[FOCALS] Début injection UI Focals");
+
     if (hasMessagingUi()) {
+      console.log("[FOCALS] Mode messagerie détecté, activation du flux conversation");
       await maybeInitConversationFlow();
       return;
     }
 
-    if (isProfilePage()) {
+    if (isProfileDetected) {
       await initProfileFlow();
       return;
     }
