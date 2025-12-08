@@ -1,3 +1,5 @@
+console.log('[FOCALS DEBUG] messaging content script loaded – v2');
+
 (() => {
   const FOCALS_DEBUG = false;
 
@@ -1110,13 +1112,22 @@
 
     const injectSmartReplyButtons = () => {
       const forms = document.querySelectorAll(".msg-form");
+      console.log("[FOCALS DEBUG] injectSmartReplyButtons – forms:", forms.length);
 
-      forms.forEach((form) => {
+      forms.forEach((form, i) => {
+        console.log(`[FOCALS DEBUG] form[${i}] classes:`, form.className);
+
         if (form.querySelector(`.${BUTTON_CLASS}`)) {
+          console.log(`[FOCALS DEBUG] form[${i}] already has button, skip`);
           return;
         }
 
         const footerRightActions = form.querySelector(".msg-form__right-actions");
+        console.log(
+          `[FOCALS DEBUG] form[${i}] footerRightActions:`,
+          !!footerRightActions
+        );
+
         if (!footerRightActions) return;
 
         const host = document.createElement("div");
@@ -1157,6 +1168,8 @@
     };
 
     const setupMessagingObserver = () => {
+      console.log("[FOCALS DEBUG] setupMessagingObserver init");
+
       const observer = new MutationObserver(() => {
         injectSmartReplyButtons();
       });
@@ -1167,6 +1180,7 @@
     };
 
     const initMessagingWatcher = () => {
+      console.log("[FOCALS DEBUG] messaging script bootstrap");
       setupMessagingObserver();
     };
 
