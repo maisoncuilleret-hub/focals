@@ -724,6 +724,42 @@
       }
     };
 
+    const backendGeneratePersonalizedFollowup = async ({
+      profileUrl,
+      threadText,
+    }) => {
+      if (!profileUrl) {
+        warn("[FOLLOWUP] Missing profile URL for personalized follow-up");
+        return null;
+      }
+
+      try {
+        const userId = await getOrCreateUserId();
+        const payload = {
+          userId,
+          mode: "personalized_followup",
+          profileUrl,
+          threadText,
+        };
+
+        const data = await sendApiRequest({
+          endpoint: FOCALS_GENERATE_REPLY_ENDPOINT,
+          method: "POST",
+          body: payload,
+        });
+
+        const replyText = data?.replyText || data?.reply?.text || null;
+        if (!replyText) {
+          warn("[FOLLOWUP] backendGeneratePersonalizedFollowup empty reply");
+        }
+
+        return replyText;
+      } catch (err) {
+        error("[FOLLOWUP] backendGeneratePersonalizedFollowup failed", err);
+        return null;
+      }
+    };
+
     const insertReplyIntoMessageInput = (
       replyText,
       { composer, conversationName = "Unknown conversation" } = {}
@@ -864,411 +900,274 @@
       }
     };
 
-    let scanScheduled = false;
+    const renderSmartReplyMenu = (shadowRoot, options = {}) => {
+      const style = document.createElement("style");
+      style.textContent = `
+        :host {
+          font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .focals-wrapper {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+        .focals-trigger {
+          border: none;
+          border-radius: 16px;
+          background: #0b63f6;
+          color: #fff;
+          padding: 8px 12px;
+          font-weight: 600;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .focals-trigger:hover {
+          background: #2f7dfc;
+        }
+        .focals-menu {
+          position: absolute;
+          right: 0;
+          top: calc(100% + 6px);
+          display: none;
+          flex-direction: column;
+          min-width: 220px;
+          background: #0f1b32;
+          border: 1px solid #1b2945;
+          border-radius: 12px;
+          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+          z-index: 2147483647;
+          overflow: hidden;
+        }
+        .focals-menu.open {
+          display: flex;
+        }
+        .focals-item {
+          padding: 10px 12px;
+          background: transparent;
+          border: none;
+          color: #e9edf5;
+          text-align: left;
+          cursor: pointer;
+          font-size: 14px;
+        }
+        .focals-item:hover {
+          background: rgba(255, 255, 255, 0.06);
+        }
+      `;
 
-    const scanAndInject = () => {
-      const editors = Array.from(document.querySelectorAll(EDITOR_SELECTOR));
-      if (editors.length === 0) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "focals-wrapper";
+
+      const trigger = document.createElement("button");
+      trigger.className = "focals-trigger";
+      trigger.type = "button";
+      trigger.textContent = "Smart Reply";
+
+      const caret = document.createElement("span");
+      caret.textContent = "▾";
+      trigger.appendChild(caret);
+
+      const menu = document.createElement("div");
+      menu.className = "focals-menu";
+
+      const addItem = (label, handler) => {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "focals-item";
+        item.textContent = label;
+        item.addEventListener("click", () => {
+          menu.classList.remove("open");
+          if (typeof handler === "function") {
+            handler(item);
+          }
+        });
+        menu.appendChild(item);
+      };
+
+      addItem("Standard reply", options.onStandardReply);
+      addItem("Custom reply", options.onCustomReply);
+      addItem("Personalized follow-up", options.onPersonalizedFollowup);
+
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        menu.classList.toggle("open");
+      });
+
+      const closeMenu = (event) => {
+        const composedPath = event.composedPath();
+        if (composedPath.includes(menu) || composedPath.includes(trigger)) return;
+        menu.classList.remove("open");
+      };
+
+      shadowRoot.addEventListener("click", closeMenu);
+      document.addEventListener("click", closeMenu);
+
+      wrapper.appendChild(trigger);
+      wrapper.appendChild(menu);
+
+      shadowRoot.appendChild(style);
+      shadowRoot.appendChild(wrapper);
+    };
+
+    const getConversationRootFromButton = (buttonEl) => {
+      if (!buttonEl) return null;
+      const root = buttonEl.getRootNode();
+      const host = (root instanceof ShadowRoot ? root.host : buttonEl);
+      const conversationRoot = host.closest(
+        ".msg-overlay-conversation-bubble, .msg-convo-wrapper"
+      );
+      return conversationRoot;
+    };
+
+    const getProfileLinkFromConversation = (conversationRoot) => {
+      if (!conversationRoot) return null;
+
+      const headerLink = conversationRoot.querySelector(
+        'header a[href*="/in/"]'
+      );
+      if (headerLink) {
+        return headerLink.getAttribute("href") || null;
+      }
+
+      const otherMsgLink = conversationRoot.querySelector(
+        '.msg-s-event-listitem--other a[href*="/in/"]'
+      );
+      if (otherMsgLink) {
+        return otherMsgLink.getAttribute("href") || null;
+      }
+
+      return null;
+    };
+
+    const extractThreadText = (conversationRoot) => {
+      if (!conversationRoot) return "";
+
+      const bubbles = conversationRoot.querySelectorAll(
+        ".msg-s-event-listitem__body"
+      );
+
+      return Array.from(bubbles)
+        .map((b) => (b.innerText || b.textContent || "").trim())
+        .filter(Boolean)
+        .join("\n\n");
+    };
+
+    const injectReplyIntoComposer = (conversationRoot, reply) => {
+      if (!conversationRoot) return;
+
+      const editor = conversationRoot.querySelector(
+        '.msg-form__contenteditable[contenteditable="true"]'
+      );
+      if (!editor) {
+        console.warn("[FOCALS] No message editor found in conversation");
         return;
       }
 
-      editors.forEach((editor, index) => {
-        const composer = editor.closest(".msg-form");
-        if (!composer) {
-          warn("[SCAN] Unable to resolve composer for editor, skipping");
-          return;
-        }
+      editor.focus();
+      editor.innerHTML = (reply || "").replace(/\n/g, "<br>");
+      const inputEvent = new InputEvent("input", { bubbles: true, cancelable: true });
+      editor.dispatchEvent(inputEvent);
+    };
 
-        const footer = composer.querySelector("footer.msg-form__footer");
-        if (!footer) {
-          warn("[SCAN] Missing footer in composer, skipping");
-          return;
-        }
-
-        const rightActions = footer.querySelector(".msg-form__right-actions");
-        if (!rightActions) {
-          warn("[SCAN] Missing right actions container, skipping");
-          return;
-        }
-
-        const conversationRoot = resolveConversationRoot(composer);
-        const conversationName = resolveConversationName(conversationRoot);
-
-        if (composer.dataset.focalsBound === "true") {
-          log(
-            `[MSG] BUTTON_BIND_SKIP already bound for this composer (conversation: "${conversationName}")`
+    const handlePersonalizedFollowup = async (buttonEl) => {
+      try {
+        const conversationRoot = getConversationRootFromButton(buttonEl);
+        if (!conversationRoot) {
+          console.warn(
+            "[FOCALS] No conversation root found for personalized follow-up"
           );
           return;
         }
 
-        const palette = {
-          primary: "#0b63f6",
-          primaryHover: "#2f7dfc",
-          primaryActive: "#5592ff",
-          border: "#1b2945",
-          text: "#e9edf5",
-          muted: "#9fb1d3",
-          surface: "#0b1220",
-          elevated: "#0f1b32",
-          overlay: "rgba(6, 12, 26, 0.65)",
-        };
+        const profileHref = getProfileLinkFromConversation(conversationRoot);
+        if (!profileHref) {
+          console.warn("[FOCALS] No profile link found in conversation");
+          return;
+        }
 
-        const controlsWrapper = document.createElement("div");
-        controlsWrapper.style.position = "relative";
-        controlsWrapper.style.display = "flex";
-        controlsWrapper.style.flexDirection = "column";
-        controlsWrapper.style.alignItems = "flex-end";
-        controlsWrapper.style.flex = "1";
+        const profileUrl = new URL(profileHref, window.location.origin).toString();
+        const threadText = extractThreadText(conversationRoot);
 
-        const dropdownsRow = document.createElement("div");
-        dropdownsRow.className = BUTTON_CLASS;
-        dropdownsRow.style.display = "flex";
-        dropdownsRow.style.gap = "8px";
-        dropdownsRow.style.marginLeft = "8px";
-        dropdownsRow.style.alignItems = "center";
-
-        const createMainButton = (label) => {
-          const btn = document.createElement("button");
-          btn.textContent = label;
-          btn.style.padding = "10px 16px";
-          btn.style.cursor = "pointer";
-          btn.style.borderRadius = "999px";
-          btn.style.border = "none";
-          btn.style.background = palette.primary;
-          btn.style.color = "#ffffff";
-          btn.style.fontWeight = "700";
-          btn.style.fontSize = "13px";
-          btn.style.boxShadow = "0 6px 18px rgba(0,0,0,0.25)";
-          btn.style.transition = "all 0.15s ease";
-          btn.addEventListener("mouseenter", () => {
-            btn.style.background = palette.primaryHover;
-          });
-          btn.addEventListener("mouseleave", () => {
-            btn.style.background = uiState?.openMenu ? palette.primaryHover : palette.primary;
-          });
-          btn.addEventListener("mousedown", () => {
-            btn.style.background = palette.primaryActive;
-          });
-          btn.addEventListener("mouseup", () => {
-            btn.style.background = uiState?.openMenu ? palette.primaryHover : palette.primary;
-          });
-          return btn;
-        };
-
-        const createMenuContainer = () => {
-          const menu = document.createElement("div");
-          menu.style.display = "none";
-          menu.style.flexDirection = "column";
-          menu.style.position = "absolute";
-          menu.style.bottom = "44px";
-          menu.style.right = "0";
-          menu.style.background = palette.surface;
-          menu.style.border = `1px solid ${palette.border}`;
-          menu.style.borderRadius = "12px";
-          menu.style.minWidth = "240px";
-          menu.style.padding = "6px 0";
-          menu.style.color = palette.text;
-          menu.style.alignItems = "stretch";
-          menu.style.boxShadow = "0 18px 40px rgba(0,0,0,0.35)";
-          menu.style.zIndex = "2147483647";
-          return menu;
-        };
-
-        const uiState = {
-          openMenu: null,
-          smartMode: "standard",
-          customPrompt: "",
-          showCustomModal: false,
-        };
-
-        const autoResize = (textarea, minHeight = 48) => {
-          requestAnimationFrame(() => {
-            textarea.style.height = `${minHeight}px`;
-            const nextHeight = Math.max(minHeight, textarea.scrollHeight);
-            textarea.style.height = `${nextHeight}px`;
-          });
-        };
-
-        const customModal = document.createElement("div");
-        customModal.style.position = "fixed";
-        customModal.style.inset = "0";
-        customModal.style.display = "none";
-        customModal.style.alignItems = "center";
-        customModal.style.justifyContent = "center";
-        customModal.style.background = palette.overlay;
-        customModal.style.zIndex = "2147483647";
-
-        const customModalCard = document.createElement("div");
-        customModalCard.style.background = palette.surface;
-        customModalCard.style.border = `1px solid ${palette.border}`;
-        customModalCard.style.borderRadius = "16px";
-        customModalCard.style.padding = "18px";
-        customModalCard.style.width = "480px";
-        customModalCard.style.maxWidth = "calc(100% - 32px)";
-        customModalCard.style.boxShadow = "0 24px 60px rgba(0,0,0,0.45)";
-        customModalCard.style.color = palette.text;
-
-        const customHeader = document.createElement("div");
-        customHeader.style.display = "flex";
-        customHeader.style.justifyContent = "space-between";
-        customHeader.style.alignItems = "center";
-
-        const customTitle = document.createElement("div");
-        customTitle.textContent = "Create a custom reply";
-        customTitle.style.fontWeight = "700";
-        customTitle.style.fontSize = "15px";
-
-        const customClose = document.createElement("button");
-        customClose.textContent = "×";
-        customClose.setAttribute("aria-label", "Close custom reply modal");
-        customClose.style.background = "transparent";
-        customClose.style.border = "none";
-        customClose.style.color = palette.text;
-        customClose.style.cursor = "pointer";
-        customClose.style.fontSize = "18px";
-
-        customHeader.appendChild(customTitle);
-        customHeader.appendChild(customClose);
-
-        const promptLabel = document.createElement("div");
-        promptLabel.textContent = "Instructions pour la réponse";
-        promptLabel.style.fontSize = "12px";
-        promptLabel.style.color = palette.muted;
-        promptLabel.style.marginTop = "12px";
-
-        const promptInput = document.createElement("textarea");
-        promptInput.placeholder =
-          "Exemple : réponds en vouvoiement, fais une réponse courte qui remercie la personne et propose un call la semaine prochaine...";
-        promptInput.style.width = "100%";
-        promptInput.style.minHeight = "140px";
-        promptInput.style.maxHeight = "260px";
-        promptInput.style.background = "rgba(255,255,255,0.03)";
-        promptInput.style.color = palette.text;
-        promptInput.style.border = `1px solid ${palette.border}`;
-        promptInput.style.borderRadius = "10px";
-        promptInput.style.padding = "10px";
-        promptInput.style.resize = "vertical";
-        promptInput.style.overflowY = "auto";
-
-        const customGenerate = document.createElement("button");
-        customGenerate.textContent = "Générer la réponse";
-        customGenerate.className = "artdeco-button";
-        customGenerate.style.marginTop = "16px";
-        customGenerate.style.width = "100%";
-        customGenerate.style.padding = "12px";
-        customGenerate.style.borderRadius = "999px";
-        customGenerate.style.background = palette.primary;
-        customGenerate.style.border = `1px solid ${palette.border}`;
-        customGenerate.style.color = "#ffffff";
-        customGenerate.style.cursor = "pointer";
-        customGenerate.style.fontWeight = "700";
-
-        customModalCard.appendChild(customHeader);
-        customModalCard.appendChild(promptLabel);
-        customModalCard.appendChild(promptInput);
-        customModalCard.appendChild(customGenerate);
-        customModal.appendChild(customModalCard);
-
-        const closeCustomModal = () => {
-          uiState.showCustomModal = false;
-          syncUI();
-        };
-
-        const openCustomModal = () => {
-          uiState.showCustomModal = true;
-          uiState.openMenu = null;
-          syncUI();
-          setTimeout(() => promptInput.focus(), 50);
-        };
-
-        customModal.addEventListener("click", (event) => {
-          if (event.target === customModal) {
-            closeCustomModal();
-          }
+        const reply = await backendGeneratePersonalizedFollowup({
+          profileUrl,
+          threadText,
         });
-        customClose.addEventListener("click", closeCustomModal);
 
-const smartButton = createMainButton("Smart Reply ▾");
-        const smartMenu = createMenuContainer();
+        if (!reply) {
+          console.warn(
+            "[FOCALS] backendGeneratePersonalizedFollowup returned empty reply"
+          );
+          return;
+        }
 
-        const menuOption = (label, action) => {
-          const option = document.createElement("button");
-          option.style.background = "transparent";
-          option.style.border = "none";
-          option.style.textAlign = "left";
-          option.style.padding = "12px 16px";
-          option.style.cursor = "pointer";
-          option.style.color = palette.text;
-          option.style.fontWeight = "600";
-          option.style.fontSize = "13px";
-          option.style.width = "100%";
+        injectReplyIntoComposer(conversationRoot, reply);
+      } catch (err) {
+        console.error("[FOCALS] Error in handlePersonalizedFollowup", err);
+      }
+    };
 
-          option.addEventListener("mouseenter", () => {
-            option.style.background = "rgba(255,255,255,0.08)";
-          });
-          option.addEventListener("mouseleave", () => {
-            option.style.background = "transparent";
-          });
+    const injectSmartReplyButtons = () => {
+      const forms = document.querySelectorAll(".msg-form");
 
-          option.addEventListener("click", async () => {
-            uiState.openMenu = null;
-            syncUI();
-            await action();
-          });
+      forms.forEach((form) => {
+        if (form.querySelector(`.${BUTTON_CLASS}`)) {
+          return;
+        }
 
-          option.textContent = label;
-          return option;
-        };
+        const footerRightActions = form.querySelector(".msg-form__right-actions");
+        if (!footerRightActions) return;
 
-        const handleStandardReply = async () => {
-          smartButton.textContent = "⏳ Smart Reply…";
-          smartButton.disabled = true;
-          smartButton.style.opacity = "0.7";
-          try {
+        const host = document.createElement("div");
+        host.className = BUTTON_CLASS;
+        footerRightActions.appendChild(host);
+
+        const shadowRoot = host.attachShadow({ mode: "open" });
+        const conversationRoot = resolveConversationRoot(form);
+        const conversationName = resolveConversationName(conversationRoot);
+
+        renderSmartReplyMenu(shadowRoot, {
+          onStandardReply: async (buttonEl) => {
             await runSuggestReplyPipeline({
-              button: smartButton,
-              composer,
-              conversationRoot,
+              button: buttonEl,
+              conversationRoot: conversationRoot || document,
+              composer: form,
               conversationName,
-              editorIndex: index + 1,
+              editorIndex: 1,
             });
-          } finally {
-            smartButton.textContent = "Smart Reply ▾";
-            smartButton.disabled = false;
-            smartButton.style.opacity = "1";
-          }
-        };
-
-        const syncMenuOptions = () => {
-          smartMenu.innerHTML = "";
-          [
-            { label: "Standard reply", action: handleStandardReply },
-            { label: "Custom reply", action: openCustomModal },
-          ].forEach(({ label, action }) => smartMenu.appendChild(menuOption(label, action)));
-        };
-
-        const syncUI = () => {
-          smartMenu.style.display = uiState.openMenu ? "flex" : "none";
-
-          smartButton.textContent = uiState.openMenu ? "Smart Reply ▴" : "Smart Reply ▾";
-          smartButton.style.background = uiState.openMenu ? palette.primaryHover : palette.primary;
-
-          customModal.style.display = uiState.showCustomModal ? "flex" : "none";
-          const hasPrompt = (uiState.customPrompt || "").trim().length > 0;
-          customGenerate.disabled = !hasPrompt;
-          customGenerate.style.opacity = customGenerate.disabled ? "0.6" : "1";
-        };
-
-        smartButton.addEventListener("click", () => {
-          uiState.openMenu = uiState.openMenu ? null : "menu";
-          syncUI();
-        });
-
-        document.addEventListener("click", (event) => {
-          const target = event.target;
-          if (
-            smartMenu.contains(target) ||
-            smartButton.contains(target) ||
-            customModal.contains(target)
-          ) {
-            return;
-          }
-          if (uiState.openMenu) {
-            uiState.openMenu = null;
-            syncUI();
-          }
-        });
-
-        promptInput.addEventListener("input", () => {
-          uiState.customPrompt = promptInput.value;
-          autoResize(promptInput, 120);
-          syncUI();
-        });
-
-        autoResize(promptInput, 120);
-
-        const buildCustomInstructions = () => (uiState.customPrompt || "").trim();
-
-        customGenerate.addEventListener("click", async () => {
-          const instructions = buildCustomInstructions();
-          if (!instructions.trim()) {
-            alert("Ajoutez des instructions avant de générer la réponse.");
-            return;
-          }
-          customGenerate.textContent = "⏳ Génération…";
-          customGenerate.disabled = true;
-          customGenerate.style.opacity = "0.7";
-          try {
+          },
+          onCustomReply: async (buttonEl) => {
+            const instructions = window.prompt(
+              "Add custom reply instructions (optional)",
+              ""
+            );
             await runSuggestReplyPipeline({
-              button: customGenerate,
-              composer,
-              conversationRoot,
+              button: buttonEl,
+              conversationRoot: conversationRoot || document,
+              composer: form,
               conversationName,
-              editorIndex: index + 1,
-              customInstructions: instructions,
+              editorIndex: 1,
+              customInstructions: instructions || "",
             });
-            closeCustomModal();
-          } finally {
-            customGenerate.textContent = "Générer la réponse";
-            customGenerate.disabled = false;
-            customGenerate.style.opacity = "1";
-          }
-        });
-
-        syncMenuOptions();
-        syncUI();
-
-        const smartWrapper = document.createElement("div");
-        smartWrapper.style.position = "relative";
-        smartWrapper.appendChild(smartButton);
-        smartWrapper.appendChild(smartMenu);
-
-        dropdownsRow.appendChild(smartWrapper);
-
-        controlsWrapper.appendChild(dropdownsRow);
-        rightActions.appendChild(controlsWrapper);
-
-        document.body.appendChild(customModal);
-
-        composer.dataset.focalsBound = "true";
-
-        log("[MSG] Conversational controls injected", {
-          conversation: conversationName,
-          editorIndex: index + 1,
+          },
+          onPersonalizedFollowup: handlePersonalizedFollowup,
         });
       });
     };
 
-    const scheduleScan = () => {
-      if (scanScheduled) return;
-      scanScheduled = true;
-      setTimeout(() => {
-        scanScheduled = false;
-        scanAndInject();
-      }, 250);
+    const setupMessagingObserver = () => {
+      const observer = new MutationObserver(() => {
+        injectSmartReplyButtons();
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      injectSmartReplyButtons();
     };
 
     const initMessagingWatcher = () => {
-      scanAndInject();
-
-      const startObserver = () => {
-        const observer = new MutationObserver(() => {
-          scheduleScan();
-        });
-
-        observer.observe(document.body, { childList: true, subtree: true });
-      };
-
-      if (document.body) {
-        startObserver();
-      } else {
-        document.addEventListener("DOMContentLoaded", () => {
-          scheduleScan();
-          startObserver();
-        });
-      }
-
-      setInterval(scheduleScan, 3000);
+      setupMessagingObserver();
     };
 
     if (document.readyState === "loading") {
