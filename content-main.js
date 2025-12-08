@@ -71,17 +71,33 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   function getEnvInfo() {
     const href = window.location.href;
     const origin = window.location.origin;
+    const hostname = window.location.hostname;
     const isTop = window === window.top;
     const isSandbox =
       document.origin === "null" ||
       window.location.origin === "null" ||
       !!window.frameElement?.hasAttribute("sandbox");
 
-    return { href, origin, isTop, isSandbox };
+    return { href, origin, hostname, isTop, isSandbox };
   }
 
   const env = getEnvInfo();
   debugLog("ENV", env);
+
+  // Surface resource loading issues to ease debugging when the LinkedIn UI blocks assets
+  // (e.g. 400/410/ERR_FAILED). This runs before any early-return so we still capture errors
+  // that might explain missing buttons or scrapers.
+  window.addEventListener(
+    "error",
+    (event) => {
+      const target = event?.target;
+      if (!target || target === window) return;
+      const url = target?.src || target?.href || target?.currentSrc;
+      if (!url) return;
+      console.warn("[Focals][RESOURCE_ERROR] Failed to load", url, "at", env.hostname);
+    },
+    true
+  );
 
   if (!env.isTop) {
     debugLog("EXIT", "Not in top window, skipping Focals content script");
@@ -91,8 +107,12 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     debugLog("EXIT", "Sandboxed document, skipping Focals content script");
     return;
   }
-  if (env.origin !== "https://www.linkedin.com") {
-    debugLog("EXIT", `Not on linkedin.com (origin = ${env.origin}), skipping Focals content script`);
+  const isLinkedinHost = (env.hostname || "").endsWith("linkedin.com");
+  if (!isLinkedinHost) {
+    debugLog(
+      "EXIT",
+      `Not on linkedin.com (hostname = ${env.hostname || "unknown"}), skipping Focals content script`
+    );
     return;
   }
 
@@ -1571,8 +1591,14 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", () => {
+      init().catch((err) => {
+        console.error("[FOCALS] Failed to initialize content script", err);
+      });
+    });
   } else {
-    init();
+    init().catch((err) => {
+      console.error("[FOCALS] Failed to initialize content script", err);
+    });
   }
 })();
