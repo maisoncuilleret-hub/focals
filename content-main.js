@@ -84,6 +84,21 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   const env = getEnvInfo();
   debugLog("ENV", env);
 
+  // Surface resource loading issues to ease debugging when the LinkedIn UI blocks assets
+  // (e.g. 400/410/ERR_FAILED). This runs before any early-return so we still capture errors
+  // that might explain missing buttons or scrapers.
+  window.addEventListener(
+    "error",
+    (event) => {
+      const target = event?.target;
+      if (!target || target === window) return;
+      const url = target?.src || target?.href || target?.currentSrc;
+      if (!url) return;
+      console.warn("[Focals][RESOURCE_ERROR] Failed to load", url, "at", env.hostname);
+    },
+    true
+  );
+
   if (!env.isTop) {
     debugLog("EXIT", "Not in top window, skipping Focals content script");
     return;
@@ -1576,8 +1591,14 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", () => {
+      init().catch((err) => {
+        console.error("[FOCALS] Failed to initialize content script", err);
+      });
+    });
   } else {
-    init();
+    init().catch((err) => {
+      console.error("[FOCALS] Failed to initialize content script", err);
+    });
   }
 })();
