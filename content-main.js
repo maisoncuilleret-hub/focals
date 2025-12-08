@@ -23,6 +23,23 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     }
   }
 
+  function logStorageSnapshot() {
+    try {
+      chrome.storage.local.get(null, (data) => {
+        console.log("FOCALS STORAGE SNAPSHOT", {
+          focals_user_id: data?.focals_user_id,
+          focals_jobs: data?.focals_jobs,
+          focals_selectedJob: data?.focals_selectedJob,
+          focals_templates: data?.focals_templates,
+        });
+      });
+    } catch (err) {
+      console.warn("[FOCALS] Failed to read storage snapshot", err);
+    }
+  }
+
+  window.focalsLogStorageSnapshot = logStorageSnapshot;
+
   function extractMemberIdFromProfile(targetUrl) {
     try {
       const url = targetUrl || window.location.href;
@@ -1182,6 +1199,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           }
 
           if (missing.length) {
+            logStorageSnapshot();
             console.warn("[FOCALS] Config incomplète, initAppsInjections stoppé", {
               missing,
               snapshot: {
