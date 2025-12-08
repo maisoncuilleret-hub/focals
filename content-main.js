@@ -402,11 +402,19 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   let conversationInitialized = false;
-  const hasMessagingUi = () =>
-    /\/messaging\//.test(window.location.pathname) ||
-    !!document.querySelector(
-      [".msg-overlay-list-bubble", ".msg-overlay-conversation-bubble", ".msg-overlay-container"].join(", ")
-    );
+  const hasMessagingUi = () => {
+    const pathnameMatch = /\/messaging\//.test(window.location.pathname);
+    const overlaySelector = [
+      ".msg-overlay-list-bubble",
+      ".msg-overlay-conversation-bubble",
+      ".msg-overlay-container",
+    ].join(", ");
+    const hasOverlay = !!document.querySelector(overlaySelector);
+
+    console.log("[FOCALS] detectMessagingMode – pathnameMatch:", pathnameMatch, "hasOverlay:", hasOverlay);
+
+    return pathnameMatch || hasOverlay;
+  };
 
   const maybeInitConversationFlow = async () => {
     if (conversationInitialized) return;
@@ -1742,25 +1750,23 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     const isProfileDetected = isProfilePage() || hasInlineRecruiterProfileCard();
     console.log("[FOCALS] detectIsProfilePage =", isProfileDetected);
 
-    if (!isProfileDetected && !hasMessagingUi()) {
+    const messagingDetected = hasMessagingUi();
+
+    if (!isProfileDetected && !messagingDetected) {
       console.warn("[FOCALS] Page non reconnue comme profil, arrêt du script");
       return;
     }
 
     console.log("[FOCALS] Début injection UI Focals");
 
-    if (hasMessagingUi()) {
-      console.log("[FOCALS] Mode messagerie détecté, activation du flux conversation");
-      await maybeInitConversationFlow();
-      return;
-    }
-
     if (isProfileDetected) {
       await initProfileFlow();
-      return;
     }
 
-    debugLog("MODE", "unsupported-context");
+    if (messagingDetected) {
+      console.log("[FOCALS] Mode messagerie détecté, activation du flux conversation");
+      await maybeInitConversationFlow();
+    }
   }
 
   const runInit = () => {
