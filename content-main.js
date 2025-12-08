@@ -71,13 +71,14 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   function getEnvInfo() {
     const href = window.location.href;
     const origin = window.location.origin;
+    const hostname = window.location.hostname;
     const isTop = window === window.top;
     const isSandbox =
       document.origin === "null" ||
       window.location.origin === "null" ||
       !!window.frameElement?.hasAttribute("sandbox");
 
-    return { href, origin, isTop, isSandbox };
+    return { href, origin, hostname, isTop, isSandbox };
   }
 
   const env = getEnvInfo();
@@ -91,8 +92,12 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     debugLog("EXIT", "Sandboxed document, skipping Focals content script");
     return;
   }
-  if (env.origin !== "https://www.linkedin.com") {
-    debugLog("EXIT", `Not on linkedin.com (origin = ${env.origin}), skipping Focals content script`);
+  const isLinkedinHost = (env.hostname || "").endsWith("linkedin.com");
+  if (!isLinkedinHost) {
+    debugLog(
+      "EXIT",
+      `Not on linkedin.com (hostname = ${env.hostname || "unknown"}), skipping Focals content script`
+    );
     return;
   }
 
