@@ -1165,6 +1165,45 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     return cachedBootstrap;
   }
 
+  async function ensureConfigAvailable() {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.get(null, (data) => {
+          const missing = [];
+
+          if (!Array.isArray(data.focals_jobs) || data.focals_jobs.length === 0) {
+            missing.push("focals_jobs");
+          }
+          if (!data.focals_selectedJob) {
+            missing.push("focals_selectedJob");
+          }
+          if (!Array.isArray(data.focals_templates) || data.focals_templates.length === 0) {
+            missing.push("focals_templates");
+          }
+
+          if (missing.length) {
+            console.warn("[FOCALS] Config incomplète, initAppsInjections stoppé", {
+              missing,
+              snapshot: {
+                focals_user_id: data.focals_user_id,
+                focals_jobs: data.focals_jobs?.length || 0,
+                focals_selectedJob: data.focals_selectedJob || null,
+                focals_templates: data.focals_templates?.length || 0,
+              },
+            });
+            resolve({ ok: false, missing });
+            return;
+          }
+
+          resolve({ ok: true });
+        });
+      } catch (err) {
+        console.warn("[FOCALS] Impossible de lire le storage", err);
+        resolve({ ok: false, missing: ["storage_read_error"] });
+      }
+    });
+  }
+
   function buildGreeting(firstNameInfo, language) {
     if (language === "en") {
       if (firstNameInfo.firstName && firstNameInfo.confidence >= 0.75) {
@@ -1608,6 +1647,12 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   async function init() {
+    const configCheck = await ensureConfigAvailable();
+    if (!configCheck.ok) {
+      debugLog("CONFIG_GUARD", configCheck);
+      return;
+    }
+
     if (hasMessagingUi()) {
       await maybeInitConversationFlow();
       return;
@@ -1640,4 +1685,31 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       { once: true }
     );
   }
+
+  // === DEBUG FOCALS – NE PAS LAISSER EN PROD ===
+  window.FOCALS_DEBUG = function () {
+    console.log("[FOCALS DEBUG] href", window.location.href);
+
+    try {
+      chrome.storage.local.get(null, (data) => {
+        console.log("[FOCALS DEBUG] STORAGE COMPLET", data);
+
+        const hasJobs = Array.isArray(data.focals_jobs) && data.focals_jobs.length > 0;
+        const hasSelectedJob = !!data.focals_selectedJob;
+        const hasTemplates = Array.isArray(data.focals_templates) && data.focals_templates.length > 0;
+
+        console.log("[FOCALS DEBUG] hasJobs", hasJobs, "hasSelectedJob", hasSelectedJob, "hasTemplates", hasTemplates);
+
+        const profileRoot = document.querySelector("main");
+        console.log("[FOCALS DEBUG] profileRoot", !!profileRoot);
+
+        const nameEl = document.querySelector("h1");
+        console.log("[FOCALS DEBUG] nameEl", !!nameEl, nameEl && nameEl.innerText);
+
+        console.log("[FOCALS DEBUG] FIN DEBUG");
+      });
+    } catch (e) {
+      console.error("[FOCALS DEBUG] ERREUR GLOBALE", e);
+    }
+  };
 })();
