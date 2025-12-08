@@ -1175,6 +1175,33 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     const userId = await getUserId();
     try {
       cachedBootstrap = await bootstrapUser(userId);
+
+      const needsEnrichment =
+        !Array.isArray(cachedBootstrap?.jobs) ||
+        !cachedBootstrap.jobs.length ||
+        !Array.isArray(cachedBootstrap?.templates) ||
+        !cachedBootstrap.templates.length;
+      if (needsEnrichment) {
+        try {
+          const fullData = await getAllData(userId);
+          cachedBootstrap = {
+            ...cachedBootstrap,
+            ...fullData,
+            templates: Array.isArray(fullData?.templates)
+              ? fullData.templates
+              : cachedBootstrap?.templates || [],
+            jobs: Array.isArray(fullData?.jobs)
+              ? fullData.jobs
+              : cachedBootstrap?.jobs || [],
+          };
+          debugLog("BOOTSTRAP_ENRICHED", {
+            templates: cachedBootstrap.templates?.length || 0,
+            jobs: cachedBootstrap.jobs?.length || 0,
+          });
+        } catch (err) {
+          debugLog("BOOTSTRAP_ENRICH_ERROR", err?.message || String(err));
+        }
+      }
     } catch (err) {
       debugLog("BOOTSTRAP_ERROR", err?.message || String(err));
       throw err;
@@ -1303,7 +1330,11 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
       templates: Array.isArray(bootstrap?.templates) ? bootstrap.templates : [],
       jobs: Array.isArray(bootstrap?.jobs) ? bootstrap.jobs : [],
       selectedTemplate: values[STORAGE_KEYS.selectedTemplate] || null,
-      selectedJob: values[STORAGE_KEYS.selectedJob] || bootstrap?.settings?.default_job_id || null,
+      selectedJob:
+        values[STORAGE_KEYS.selectedJob] ||
+        bootstrap?.settings?.default_job_id ||
+        bootstrap?.jobs?.[0]?.id ||
+        null,
     };
   }
 
