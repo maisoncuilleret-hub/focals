@@ -85,6 +85,84 @@
     return "";
   };
 
+  function getProfileNameFromTopCard(root = document) {
+    const explicit = root.querySelector(
+      '[data-view-name="profile-top-card-verified-badge"] h2'
+    );
+    if (explicit && explicit.innerText) {
+      return explicit.innerText.trim();
+    }
+
+    const main = root.querySelector("main") || root;
+    const h2 = main.querySelector("h2");
+    if (h2 && h2.innerText) {
+      return h2.innerText.trim();
+    }
+
+    return "";
+  }
+
+  function getProfileLocationFromTopCard(root = document) {
+    const name = getProfileNameFromTopCard(root);
+    if (!name) return "";
+
+    const all = root.querySelectorAll("h2, span, div, p");
+    let nameNode = null;
+    for (const el of all) {
+      const text = el.innerText?.trim();
+      if (!text) continue;
+      if (text === name) {
+        nameNode = el;
+        break;
+      }
+    }
+    if (!nameNode) return "";
+
+    const container = nameNode.closest("section") || nameNode.closest("div") || root;
+
+    const candidates = container.querySelectorAll("p");
+    for (const p of candidates) {
+      const t = p.innerText?.trim();
+      if (!t) continue;
+      if (t.length < 3 || t.length > 80) continue;
+
+      if (/,/.test(t) || /france|paris|lyon|london|berlin|remote/i.test(t)) {
+        return t;
+      }
+    }
+
+    return "";
+  }
+
+  function getExperienceSection(root = document) {
+    return root.querySelector('section[componentkey*="ExperienceTopLevelSection"]');
+  }
+
+  function getCurrentJob(root = document) {
+    const section = getExperienceSection(root);
+    if (!section) return null;
+
+    const firstItem = section.querySelector('[componentkey^="entity-collection-item"]');
+    if (!firstItem) return null;
+
+    const ps = Array.from(firstItem.querySelectorAll("p"));
+    if (!ps.length) return null;
+
+    const safeText = (el) => el?.innerText?.trim() || "";
+
+    const title = safeText(ps[0]) || "";
+    const companyLine = safeText(ps[1]) || "";
+    const dates = safeText(ps[2]) || "";
+    const location = ps.length > 3 ? safeText(ps[3]) : "";
+
+    return {
+      title,
+      companyLine,
+      dates,
+      location,
+    };
+  }
+
   const normalizeText = (text) => (text || "").replace(/\s+/g, " ").trim();
   const firstNonEmpty = (...values) => {
     for (const value of values) {
@@ -1435,6 +1513,7 @@
     const lastName = rest.join(" ").trim();
 
     const connectionInfo = computeConnectionInfo();
+    const currentJob = getCurrentJob(document) || null;
     const publicProfileUrl = sanitizeLinkedinUrl(findPublicProfileUrl());
 
     const sanitizedCompany = sanitizeCompanyName(current_company);
@@ -1474,7 +1553,9 @@
 
     console.log("[FOCALS][SCRAPER] Falling back to legacy DOM selectors");
 
+    const fullName = getProfileNameFromTopCard(document) || "";
     const rawName =
+      fullName ||
       pickText(
         ".pv-text-details__left-panel h1",
         "div[data-view-name='profile-card'] h1",
@@ -1505,6 +1586,7 @@
       ) || "";
 
     const localisation =
+      getProfileLocationFromTopCard(document) ||
       getText(q(".pv-text-details__left-panel .text-body-small.inline.t-black--light.break-words")) ||
       getText(q(".text-body-small.inline.t-black--light.break-words")) ||
       getText(q("div[data-view-name='profile-card'] .text-body-small")) ||
@@ -1661,6 +1743,7 @@
       photo_url: photo_url || "",
       firstName,
       lastName,
+      currentJob,
       connection_status: connectionInfo.connection_status,
       connection_degree: connectionInfo.connection_degree,
       connection_label: connectionInfo.connection_label,
