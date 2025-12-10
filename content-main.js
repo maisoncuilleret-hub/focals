@@ -1170,169 +1170,191 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   const triggerProfileScrape = async (force = false) => {
-    console.log("[FOCALS] triggerProfileScrape - Démarrage...");
+    console.log("%c[FOCALS] Scraper SDUI V3 - Démarrage...", "background: #0077b5; color: white; font-weight: bold; padding: 4px;");
 
-    // --- FONCTION D'ATTENTE (POLLING) ---
+    // Fonction d'attente d'élément (Timeboxée à 5s)
     const waitForElement = (selector, timeout = 5000) => {
       return new Promise((resolve) => {
         if (document.querySelector(selector)) return resolve(document.querySelector(selector));
-
         const observer = new MutationObserver((mutations, obs) => {
-          const el = document.querySelector(selector);
-          if (el) {
-            obs.disconnect();
-            resolve(el);
-          }
+          if (document.querySelector(selector)) { obs.disconnect(); resolve(document.querySelector(selector)); }
         });
-
         observer.observe(document.body, { childList: true, subtree: true });
-        setTimeout(() => {
-          observer.disconnect();
-          resolve(null); // Timeout
-        }, timeout);
+        setTimeout(() => { observer.disconnect(); resolve(null); }, timeout);
       });
     };
 
     try {
-      console.log("[FOCALS] Attente du chargement du profil...");
-      const nameElFound = await waitForElement(
-        "h1, .text-heading-xlarge, .artdeco-entity-lockup__title"
-      );
+      // 1. Attente de l'affichage du Nom (Preuve que le profil est chargé)
+      const nameEl = await waitForElement("h1, .text-heading-xlarge");
+      if (!nameEl) console.warn("[FOCALS] ⚠️ Nom introuvable (Scraping continué malgré tout).");
 
-      if (!nameElFound) {
-        console.warn("[FOCALS] Timeout: Le profil ne semble pas s'être chargé complètement.");
+      // Pause de sécurité pour laisser React finir le rendu des listes
+      await new Promise(r => setTimeout(r, 1500)); 
+
+      const main = document.querySelector("main") || document.body;
+      const cleanText = (txt) => txt ? txt.replace(/\s+/g, ' ').trim() : "";
+
+      // --- HELPER 1 : Détection du type de contrat ---
+      const detectContract = (text) => {
+          if (!text) return "";
+          const lower = text.toLowerCase();
+          if (lower.includes("cdi") || lower.includes("full-time") || lower.includes("permanent")) return "CDI";
+          if (lower.includes("cdd") || lower.includes("contract") || lower.includes("fixed-term") || lower.includes("déterminé")) return "CDD";
+          if (lower.includes("freelance") || lower.includes("indépendant")) return "Freelance";
+          if (lower.includes("stage") || lower.includes("internship")) return "Stage";
+          if (lower.includes("alternance") || lower.includes("apprenti") || lower.includes("apprentissage") || lower.includes("professionalisation")) return "Alternance";
+          return "";
+      };
+
+      // --- HELPER 2 : Extraction Entreprise via Logo (Priorité Absolue) ---
+      const getCompanyFromLogo = (container) => {
+          const img = container.querySelector("img[alt^='Logo de'], img[alt^='Logo']");
+          if (img && img.alt) {
+              return img.alt.replace("Logo de ", "").replace("Logo ", "").trim();
+          }
+          return "";
+      };
+
+      // --- HELPER 3 : Logique d'Héritage (Le Secret du Fix) ---
+      // Récupère les infos (Entreprise, Contrat, Lieu) depuis le header au-dessus de la liste
+      const getParentHeaderData = (liElement) => {
+          const parentUl = liElement.closest("ul");
+          if (!parentUl) return {};
+
+          // Le header est l'élément juste avant le UL
+          const headerDiv = parentUl.previousElementSibling;
+          if (!headerDiv) return {};
+
+          // 1. Entreprise
+          let company = getCompanyFromLogo(headerDiv);
+          if (!company) {
+               // Fallback texte : souvent dans un paragraphe spécifique du header
+               const p = headerDiv.querySelector("div > div > div > p");
+               if (p) company = cleanText(p.innerText);
+          }
+          
+          // 2. Contrat & Lieu (Scan de tous les textes du header)
+          const headerTexts = [...headerDiv.querySelectorAll("p, span")].map(el => el.innerText);
+          let contract = "";
+          let location = "";
+          
+          headerTexts.forEach(txt => {
+              if (!contract) contract = detectContract(txt);
+              if (!location && (txt.includes("France") || txt.includes("Paris") || txt.includes("Région"))) location = txt;
+          });
+
+          return { company, contract, location };
+      };
+
+      // --- 2. RECHERCHE DE LA SECTION EXPÉRIENCE ---
+      const allSections = [...main.querySelectorAll("section")];
+      const expSection = allSections.find(sec => {
+          const h2 = sec.querySelector("h2");
+          return h2 && /exp[ée]rience/i.test(h2.innerText);
+      });
+
+      let experiences = [];
+      
+      if (expSection) {
+          // On cible les éléments de liste (li)
+          const items = [...expSection.querySelectorAll("ul > li")];
+          console.log(`[FOCALS] 📋 ${items.length} expériences trouvées.`);
+
+          experiences = items.map((item) => {
+              // A. Données Locales (dans le li)
+              const localParagraphs = [...item.querySelectorAll("p, span[aria-hidden='true']")];
+              const localTexts = localParagraphs.map(p => cleanText(p.innerText)).filter(t => t.length > 0);
+              
+              // B. Données Héritées (depuis le header parent)
+              const inherited = getParentHeaderData(item);
+
+              // --- CONSTRUCTION INTELLIGENTE ---
+              
+              // TITRE : Toujours le 1er texte local
+              let title = localTexts[0] || "";
+
+              // ENTREPRISE : Héritée > Logo Local > Texte Local (2eme pos)
+              let company = inherited.company; 
+              if (!company) company = getCompanyFromLogo(item);
+              if (!company && localTexts[1] && !localTexts[1].match(/\d{4}/)) company = localTexts[1];
+
+              // CONTRAT : Hérité > Local
+              let contract = inherited.contract;
+              if (!contract) {
+                  localTexts.forEach(t => { if (!contract) contract = detectContract(t); });
+              }
+
+              // DATE & LIEU : Scan local + Fallback hérité pour le lieu
+              let dateRange = "";
+              let location = inherited.location || "";
+              
+              localTexts.forEach(txt => {
+                  // Date : contient une année (4 chiffres) ou "aujourd'hui"
+                  if ((txt.match(/\d{4}/) || txt.toLowerCase().includes("aujourd’hui") || txt.toLowerCase().includes("present")) && !dateRange) {
+                      dateRange = txt;
+                  }
+                  // Lieu : mots clés géographiques
+                  if (!location && (txt.includes("France") || txt.includes("Paris") || txt.includes("Région"))) {
+                      location = txt;
+                  }
+              });
+
+              // Nettoyage final de la date (si le contrat est collé dedans ex: "CDI · 2 ans")
+              if (dateRange && dateRange.includes("·")) {
+                  const parts = dateRange.split("·").map(s => s.trim());
+                  if (detectContract(parts[0])) {
+                      // Si la première partie est un contrat, on le capture (si manquant) et on l'enlève de la date
+                      if (!contract) contract = detectContract(parts[0]);
+                      dateRange = parts.filter(p => !detectContract(p)).join(" · ");
+                  }
+              }
+
+              // Ignorer les éléments vides
+              if (!title) return null;
+
+              return {
+                  title: title,
+                  company: company || "Entreprise inconnue",
+                  contract_type: contract || "Non spécifié",
+                  dates: dateRange,
+                  location: location,
+                  description: item.innerText // Snippet complet pour le contexte LLM
+              };
+          }).filter(Boolean);
+
       } else {
-        console.log("[FOCALS] Élément clé trouvé, scraping immédiat.");
+          console.error("[FOCALS] ❌ Section Expérience introuvable (DOM structure inconnue).");
       }
 
-      // --- DÉBUT LOGIQUE SCRAPING INTERNE ---
-      const getText = (el) => (el ? el.innerText.trim() : "");
-      const safeQueryAll = (root, selector) => {
-        try {
-          return [...root.querySelectorAll(selector)];
-        } catch (e) {
-          return [];
-        }
-      };
-
-      // On cible le contenu principal
-      const main = document.querySelector("main") || document.body;
-
-      // 1. Recherche du NOM
-      const findNameElement = (root) => {
-        const selectors = [
-          "h1",
-          ".text-heading-xlarge",
-          ".pv-text-details__left-panel h1",
-          "[data-test-row-lockup-full-name]",
-          ".artdeco-entity-lockup__title",
-          "#ember35",
-        ];
-        for (const sel of selectors) {
-          const el = root.querySelector(sel);
-          if (el && el.innerText.trim().length > 1) return el;
-        }
-        return null;
-      };
-
-      // 2. Recherche du TITRE
-      const findHeadline = (root) => {
-        const selectors = [
-          ".text-body-medium",
-          "[data-test-row-lockup-headline]",
-          ".pv-text-details__left-panel .text-body-medium",
-          "div[data-view-name='profile-card'] .text-body-medium",
-        ];
-        for (const sel of selectors) {
-          const el = root.querySelector(sel);
-          if (el && el.innerText.trim().length > 3) return el.innerText.trim();
-        }
-        return "";
-      };
-
-      // 3. Recherche de la LOCALISATION
-      const findLocation = (root) => {
-        const selectors = [
-          ".text-body-small.inline.t-black--light",
-          "[data-test-row-lockup-location]",
-          ".pv-text-details__left-panel .text-body-small",
-        ];
-        for (const sel of selectors) {
-          const el = root.querySelector(sel);
-          if (el && el.innerText.trim().length > 2) return el.innerText.trim();
-        }
-        return "";
-      };
-
-      // 4. Recherche de l'IMAGE
-      const findProfileImage = (root) => {
-        const img =
-          root.querySelector("img.pv-top-card-profile-picture__image--show") ||
-          root.querySelector(".pv-top-card-profile-picture__image") ||
-          root.querySelector("img[id^='ember'][src*='profile']");
-        return img ? img.src : "";
-      };
-
-      // 5. Recherche de l'EXPERIENCE
-      const findExperiences = (root) => {
-        // Chercher la section par ID ou mot clé
-        let section = root.querySelector("#experience")?.closest("section");
-        if (!section) {
-          const h2s = safeQueryAll(root, "h2");
-          const expH2 = h2s.find((h) => /exp[ée]rience/i.test(h.innerText));
-          if (expH2) section = expH2.closest("section");
-        }
-
-        if (!section) return [];
-
-        const items = safeQueryAll(section, "li.artdeco-list__item, .pvs-list__paged-list-item");
-        return items
-          .map((item) => {
-            const spans = safeQueryAll(item, "span[aria-hidden='true']");
-            // Heuristique simple : 1er span = role, 2eme = boite
-            return {
-              title: spans[0]?.innerText.trim() || "",
-              company: spans[1]?.innerText.trim() || "",
-              dates: spans[2]?.innerText.trim() || "",
-            };
-          })
-          .filter((e) => e.title && e.company);
-      };
-
-      // --- EXÉCUTION ---
-      await new Promise((r) => setTimeout(r, 500));
-
-      const nameEl = findNameElement(main);
-      const finalName = nameEl
-        ? getText(nameEl)
-        : (document.title.split("|")[0].trim() || "Profil Inconnu");
+      // --- 3. RETOUR DU RÉSULTAT GLOBAL ---
       const result = {
-        name: finalName || "Profil Inconnu",
-        headline: findHeadline(main),
-        localisation: findLocation(main),
-        profileImageUrl: findProfileImage(main),
-        experiences: findExperiences(main),
+        name: nameEl ? cleanText(nameEl.innerText) : document.title.split("|")[0].trim(),
+        headline: document.querySelector(".text-body-medium")?.innerText.trim() || "",
+        localisation: document.querySelector(".text-body-small.inline")?.innerText.trim() || "",
+        experiences: experiences,
+        // Le job actuel est le premier de la liste
+        current_job: experiences[0] || {}, 
         linkedinProfileUrl: window.location.href.split("?")[0],
-        source: "direct-content-main-scraping",
+        source: "focals-scraper-sdui-v3"
       };
 
-      // Fallback company
-      result.current_company = result.experiences[0]?.company || "—";
+      // Compatibilité
+      result.current_company = result.current_job.company || "—";
 
-      console.log("[FOCALS] ✅ Scraping Réussi :", result);
+      console.log("%c[FOCALS] ✅ SCRAPING TERMINÉ & RÉUSSI", "background: green; color: white; padding: 4px;", result);
 
       // Sauvegarde
-      if (result.name !== "Profil Inconnu") {
-        chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
-        // Si tu as une fonction pour mettre à jour l'UI, appelle-la ici
-        // updateFocalsPanel(result);
+      if (result.name) {
+         chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
+         // Si tu as une fonction d'update UI, appelle-la ici :
+         // updateFocalsPanel(result);
       }
 
       return result;
-      // --- FIN LOGIQUE SCRAPING INTERNE ---
 
     } catch (e) {
-      console.error("[FOCALS] ❌ Erreur critique dans le scraping :", e);
+      console.error("[FOCALS] 💥 Erreur Critique Scraper:", e);
       return null;
     }
   };
