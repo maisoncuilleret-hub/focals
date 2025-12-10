@@ -1139,28 +1139,32 @@ console.log(
       const root = getLinkedinMessagingRoot();
       const forms = root.querySelectorAll("form.msg-form");
 
-      console.log(
-        "[FOCALS DEBUG] injectSmartReplyButtons – root =",
-        root === document ? "document" : "interop-shadow-root"
-      );
-      console.log("[FOCALS DEBUG] injectSmartReplyButtons – forms:", forms.length, forms);
+      // console.log("[FOCALS DEBUG] forms scan:", forms.length);
 
       forms.forEach((form, i) => {
-        console.log(`[FOCALS DEBUG] form[${i}] classes:`, form.className);
+        const footerRightActions = form.querySelector(".msg-form__right-actions");
 
-        if (form.querySelector(`.${BUTTON_CLASS}`)) {
-          console.log(`[FOCALS DEBUG] form[${i}] already has button, skip`);
+        // Si pas de footer d'actions, on ne peut rien faire pour ce form
+        if (!footerRightActions) return;
+
+        // 1. Vérifie si le bouton est DÉJÀ dans le footer (le bon endroit)
+        const btnInFooter = footerRightActions.querySelector(`.${BUTTON_CLASS}`);
+        if (btnInFooter) {
+          // Tout est bon, le bouton est là où il faut
           return;
         }
 
-        const footerRightActions = form.querySelector(".msg-form__right-actions");
-        console.log(
-          `[FOCALS DEBUG] form[${i}] footerRightActions:`,
-          !!footerRightActions
-        );
+        // 2. Vérifie si un bouton "fantôme" traîne ailleurs dans le form (ex: ancien container)
+        // et supprime-le pour éviter les conflits
+        const strayBtn = form.querySelector(`.${BUTTON_CLASS}`);
+        if (strayBtn) {
+          console.log(`[FOCALS DEBUG] Removing stray button from form[${i}]`);
+          strayBtn.remove();
+        }
 
-        if (!footerRightActions) return;
-
+        // 3. Injection propre dans le footer visible
+        // console.log(`[FOCALS] Injecting button into form[${i}]`);
+        
         const host = document.createElement("div");
         host.className = BUTTON_CLASS;
         footerRightActions.appendChild(host);
