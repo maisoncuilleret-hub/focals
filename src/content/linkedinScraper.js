@@ -85,6 +85,178 @@
     return "";
   };
 
+  const normalizeWhitespace = (value) => normalizeText(value || "");
+
+  const isLikelyName = (text) => {
+    if (!text || typeof text !== "string") return false;
+    const normalized = normalizeWhitespace(text);
+    if (!normalized) return false;
+    if (/[0-9@|]/.test(normalized)) return false;
+    const words = normalized.split(" ").filter(Boolean);
+    if (words.length < 2 || words.length > 4) return false;
+    if (normalized.length < 4 || normalized.length > 60) return false;
+    const hasUppercaseStart = words.every((w) => /^[A-ZÀ-Ý]/.test(w));
+    return hasUppercaseStart;
+  };
+
+  const isLikelyHeadline = (text) => {
+    if (!text || typeof text !== "string") return false;
+    const normalized = normalizeWhitespace(text);
+    if (!normalized) return false;
+    if (normalized.length < 6 || normalized.length > 120) return false;
+    if (/[#@]/.test(normalized)) return false;
+    const keywordPattern = /(engineer|lead|manager|founder|developer|designer|consultant|cto|cpo|ceo|product|data|ai|ml|cloud|mobile|frontend|back-end|backend|fullstack)/i;
+    return keywordPattern.test(normalized);
+  };
+
+  const isLikelyLocation = (text) => {
+    if (!text || typeof text !== "string") return false;
+    const normalized = normalizeWhitespace(text);
+    if (!normalized) return false;
+    if (normalized.length < 3 || normalized.length > 80) return false;
+    return /,/.test(normalized) || /(france|paris|london|berlin|new york|remote|region)/i.test(normalized);
+  };
+
+  const isLikelyExperience = (text) => {
+    if (!text || typeof text !== "string") return false;
+    const normalized = normalizeWhitespace(text);
+    if (!normalized || normalized.length < 4 || normalized.length > 160) return false;
+    if (/\n/.test(normalized)) return false;
+    if (/(linkedin|cookie|privacy)/i.test(normalized)) return false;
+    const markers = /(·|CDI|CDD|Intern|Stage|Engineer|Manager|Founder|Lead|Consultant|Developer|Designer|Chef de projet|Product|Data)/i;
+    return markers.test(normalized);
+  };
+
+  const collectStringsFromObject = (value, push, seen = new Set()) => {
+    if (!value || seen.has(value)) return;
+    if (typeof value === "string") {
+      push(value);
+      return;
+    }
+    if (typeof value !== "object") return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) collectStringsFromObject(item, push, seen);
+    } else {
+      for (const key of Object.keys(value)) {
+        collectStringsFromObject(value[key], push, seen);
+      }
+    }
+  };
+
+  const findReactFiberNodes = () => {
+    const roots = new Set();
+    const addCandidate = (node) => {
+      if (!node) return;
+      const props = Object.getOwnPropertyNames(node);
+      for (const prop of props) {
+        if (prop.startsWith("__reactFiber$") || prop.startsWith("__reactContainer$")) {
+          const fiber = node[prop];
+          if (fiber) roots.add(fiber);
+        }
+      }
+    };
+
+    const walker = document.createTreeWalker(document.body || document.documentElement || document, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      addCandidate(walker.currentNode);
+    }
+
+    addCandidate(document.getElementById("__next"));
+    addCandidate(document.body);
+    return Array.from(roots);
+  };
+
+  const traverseFiber = (fiber, visitor, seen = new Set()) => {
+    if (!fiber || seen.has(fiber)) return;
+    seen.add(fiber);
+    try {
+      visitor(fiber);
+    } catch (err) {
+      debugLog("FIBER_VISIT_ERROR", err?.message || err);
+    }
+
+    if (fiber.child) traverseFiber(fiber.child, visitor, seen);
+    if (fiber.sibling) traverseFiber(fiber.sibling, visitor, seen);
+  };
+
+  const scrapeFromFiber = () => {
+    const roots = findReactFiberNodes();
+    if (!roots.length) return { rawStrings: [] };
+
+    const strings = [];
+    const screenIds = new Set();
+
+    const visitor = (node) => {
+      const { memoizedProps, memoizedState } = node || {};
+      collectStringsFromObject(memoizedProps, (value) => strings.push(value));
+      collectStringsFromObject(memoizedState, (value) => strings.push(value));
+
+      if (memoizedProps && typeof memoizedProps === "object") {
+        const candidateScreenId = memoizedProps.screenId || memoizedProps.pageKey;
+        if (typeof candidateScreenId === "string" && candidateScreenId) {
+          screenIds.add(candidateScreenId);
+        }
+      }
+    };
+
+    for (const root of roots) {
+      traverseFiber(root, visitor);
+    }
+
+    const normalizedStrings = strings
+      .map((s) => (typeof s === "string" ? normalizeWhitespace(s) : ""))
+      .filter(Boolean);
+
+    const nameCandidate = normalizedStrings.find((s) => isLikelyName(s));
+    const headlineCandidate = normalizedStrings.find((s) => isLikelyHeadline(s));
+    const locationCandidate = normalizedStrings.find((s) => isLikelyLocation(s));
+    const experiences = normalizedStrings.filter((s) => isLikelyExperience(s)).slice(0, 10);
+
+    let currentCompany = "";
+    const companyFromHeadline = headlineCandidate && headlineCandidate.match(/(?:chez|at)\s+([^·]+)/i);
+    if (companyFromHeadline && companyFromHeadline[1]) {
+      currentCompany = normalizeWhitespace(companyFromHeadline[1]);
+    }
+    if (!currentCompany) {
+      const experienceWithCompany = experiences.find((exp) => /·/.test(exp));
+      if (experienceWithCompany) {
+        currentCompany = normalizeWhitespace(experienceWithCompany.split("·")[0]);
+      }
+    }
+
+    return {
+      name: nameCandidate || "",
+      headline: headlineCandidate || "",
+      location: locationCandidate || "",
+      currentCompany: currentCompany || "",
+      experiences,
+      screenIds: Array.from(screenIds),
+      rawStrings: normalizedStrings,
+    };
+  };
+
+  const detectSduiProfile = (domSnapshot, fiberSnapshot = null) => {
+    const hasDomName = !!normalizeWhitespace(domSnapshot?.name);
+    const hasDomHeadline = !!normalizeWhitespace(domSnapshot?.headline);
+    const hasDomExperienceSection = !!getExperienceSection(document);
+    const hasH1 = !!document.querySelector("h1");
+    const bodyText = normalizeWhitespace(document.body?.innerText || "");
+    const bodyHasProfile = hasDomName && bodyText.includes(domSnapshot.name || "");
+    const shouldFallback = !hasH1 || !hasDomExperienceSection || !bodyHasProfile;
+
+    if (!shouldFallback) return false;
+
+    const fiberData = fiberSnapshot || null;
+    const screenMatch = (fiberData?.screenIds || []).some((id) =>
+      /com\.linkedin\.sdui\.flagshipnav\.profile\.Profile/i.test(id || "")
+    );
+
+    const hasFiberSignals = screenMatch || (fiberData?.rawStrings || []).some((s) => /sdui/i.test(s));
+
+    return shouldFallback && (!hasDomName || !hasDomHeadline || hasFiberSignals);
+  };
+
   function getProfileNameFromTopCard(root = document) {
     const explicit = root.querySelector(
       '[data-view-name="profile-top-card-verified-badge"] h2'
@@ -1574,7 +1746,7 @@
         "aria-label"
       ) ||
       "";
-    const name = rawName.replace(/\s+/g, " ").trim();
+    let name = rawName.replace(/\s+/g, " ").trim();
 
     const headline =
       pickText(
@@ -1585,7 +1757,7 @@
         ".display-flex.full-width .hoverable-link-text"
       ) || "";
 
-    const localisation =
+    let localisation =
       getProfileLocationFromTopCard(document) ||
       getText(q(".pv-text-details__left-panel .text-body-small.inline.t-black--light.break-words")) ||
       getText(q(".text-body-small.inline.t-black--light.break-words")) ||
@@ -1619,6 +1791,28 @@
     const topCardCompany = parseCompanyAndContract(topCardCompanyRaw);
     let current_company = topCardCompany.company;
     let contract = topCardCompany.contract;
+    let experiences = [];
+
+    const domSnapshot = {
+      name,
+      headline,
+      localisation,
+      current_company,
+    };
+
+    let fiberData = null;
+    const shouldFallbackToFiber = detectSduiProfile(domSnapshot);
+
+    if (shouldFallbackToFiber || !name || !current_title || !current_company || !localisation) {
+      fiberData = scrapeFromFiber();
+      if (fiberData) {
+        name = name || fiberData.name || "";
+        current_title = current_title || fiberData.headline || "";
+        current_company = current_company || fiberData.currentCompany || "";
+        localisation = localisation || fiberData.location || "";
+        experiences = fiberData.experiences || [];
+      }
+    }
 
     const experienceSection = findExperienceSection();
     if (experienceSection) {
@@ -1744,12 +1938,17 @@
       firstName,
       lastName,
       currentJob,
+      experiences,
       connection_status: connectionInfo.connection_status,
       connection_degree: connectionInfo.connection_degree,
       connection_label: connectionInfo.connection_label,
       connection_summary: connectionInfo.connection_summary,
       is_premium: connectionInfo.is_premium,
       can_message_without_connect: connectionInfo.can_message_without_connect,
+      raw: {
+        dom: domSnapshot,
+        fiber: fiberData || null,
+      },
     };
     debugLog("PROFILE_SCRAPED", { source: "public", profile });
     return profile;
