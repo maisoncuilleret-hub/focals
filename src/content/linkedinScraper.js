@@ -435,31 +435,57 @@
     const main = document.querySelector("main") || document.body;
     console.log("[FOCALS][DOM] main element =", main);
 
-    const nameEl = findNameElement(main);
-    const name = getText(nameEl);
+    try {
+      console.log("[FOCALS][DOM] Step 1: locating name element...");
+      const nameEl = findNameElement(main);
+      const name = getText(nameEl);
+      console.log("[FOCALS][DOM] Step 1 complete. name =", name);
 
-    const headline = findHeadlineNearName(main, nameEl);
-    const localisation = findLocation(main);
-    const profileImageUrl = findProfileImage(main);
+      console.log("[FOCALS][DOM] Step 2: extracting headline...");
+      const headline = findHeadlineNearName(main, nameEl);
+      console.log("[FOCALS][DOM] Step 2 complete. headline =", headline);
 
-    const expSection = findExperienceSection(main);
-    const experiences = extractExperiences(expSection);
+      console.log("[FOCALS][DOM] Step 3: extracting location...");
+      const localisation = findLocation(main);
+      console.log("[FOCALS][DOM] Step 3 complete. localisation =", localisation);
 
-    const linkedinProfileUrl = window.location.href.split("?")[0];
+      console.log("[FOCALS][DOM] Step 4: extracting profile image...");
+      const profileImageUrl = findProfileImage(main);
+      console.log(
+        "[FOCALS][DOM] Step 4 complete. profileImageUrl =",
+        profileImageUrl
+      );
 
-    const result = {
-      name,
-      headline,
-      localisation,
-      profileImageUrl,
-      current_company: experiences[0]?.company || "",
-      experiences,
-      linkedinProfileUrl,
-      source: "public-sdui-dom-fallback",
-    };
+      console.log("[FOCALS][DOM] Step 5: locating experience section...");
+      const expSection = findExperienceSection(main);
+      console.log("[FOCALS][DOM] Step 5 complete. section found =", !!expSection);
 
-    console.log("[FOCALS] DOM FALLBACK RESULT =", result);
-    return result;
+      console.log("[FOCALS][DOM] Step 6: extracting experiences...");
+      const experiences = extractExperiences(expSection);
+      console.log(
+        "[FOCALS][DOM] Step 6 complete. experiences count =",
+        experiences.length
+      );
+
+      const linkedinProfileUrl = window.location.href.split("?")[0];
+
+      const result = {
+        name,
+        headline,
+        localisation,
+        profileImageUrl,
+        current_company: experiences[0]?.company || "",
+        experiences,
+        linkedinProfileUrl,
+        source: "public-sdui-dom-fallback",
+      };
+
+      console.log("[FOCALS] DOM FALLBACK RESULT =", result);
+      return result;
+    } catch (error) {
+      console.error("[FOCALS][DOM] DOM fallback scraping crashed", error);
+      return null;
+    }
   };
 
   const scrapeFromFiber = () => {
