@@ -1169,17 +1169,133 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     }
   }
 
-  async function triggerProfileScrape(force = false) {
+  const triggerProfileScrape = async (force = false) => {
+    console.log("[FOCALS] triggerProfileScrape - Démarrage du scraping direct...");
+
     try {
-      console.log("[FOCALS] triggerProfileScrape - Waiting for scraper...");
-      linkedinScraper = await waitForScraper();
-      console.log("[FOCALS] Scraper found, executing...");
-      runProfileScrape(force);
-    } catch (err) {
-      console.error("[FOCALS] Scraping failed:", err);
-      setProfileStatus("error");
+      // --- DÉBUT LOGIQUE SCRAPING INTERNE ---
+      const getText = (el) => (el ? el.innerText.trim() : "");
+      const safeQueryAll = (root, selector) => {
+        try {
+          return [...root.querySelectorAll(selector)];
+        } catch (e) {
+          return [];
+        }
+      };
+
+      // On cible le contenu principal
+      const main = document.querySelector("main") || document.body;
+
+      // 1. Recherche du NOM
+      const findNameElement = (root) => {
+        const selectors = [
+          "h1",
+          ".text-heading-xlarge",
+          ".pv-text-details__left-panel h1",
+          "[data-test-row-lockup-full-name]",
+          ".artdeco-entity-lockup__title",
+          "#ember35"
+        ];
+        for (const sel of selectors) {
+          const el = root.querySelector(sel);
+          if (el && el.innerText.trim().length > 1) return el;
+        }
+        return null;
+      };
+
+      // 2. Recherche du TITRE
+      const findHeadline = (root) => {
+        const selectors = [
+          ".text-body-medium",
+          "[data-test-row-lockup-headline]",
+          ".pv-text-details__left-panel .text-body-medium",
+          "div[data-view-name='profile-card'] .text-body-medium"
+        ];
+        for (const sel of selectors) {
+          const el = root.querySelector(sel);
+          if (el && el.innerText.trim().length > 3) return el.innerText.trim();
+        }
+        return "";
+      };
+
+      // 3. Recherche de la LOCALISATION
+      const findLocation = (root) => {
+        const selectors = [
+          ".text-body-small.inline.t-black--light",
+          "[data-test-row-lockup-location]",
+          ".pv-text-details__left-panel .text-body-small"
+        ];
+        for (const sel of selectors) {
+          const el = root.querySelector(sel);
+          if (el && el.innerText.trim().length > 2) return el.innerText.trim();
+        }
+        return "";
+      };
+
+      // 4. Recherche de l'IMAGE
+      const findProfileImage = (root) => {
+        const img = root.querySelector("img.pv-top-card-profile-picture__image--show") ||
+                    root.querySelector(".pv-top-card-profile-picture__image") ||
+                    root.querySelector("img[id^='ember'][src*='profile']");
+        return img ? img.src : "";
+      };
+
+      // 5. Recherche de l'EXPERIENCE
+      const findExperiences = (root) => {
+        // Chercher la section par ID ou mot clé
+        let section = root.querySelector("#experience")?.closest("section");
+        if (!section) {
+          const h2s = safeQueryAll(root, "h2");
+          const expH2 = h2s.find(h => /exp[ée]rience/i.test(h.innerText));
+          if (expH2) section = expH2.closest("section");
+        }
+        
+        if (!section) return [];
+
+        const items = safeQueryAll(section, "li.artdeco-list__item, .pvs-list__paged-list-item");
+        return items.map(item => {
+          const spans = safeQueryAll(item, "span[aria-hidden='true']");
+          // Heuristique simple : 1er span = role, 2eme = boite
+          return {
+            title: spans[0]?.innerText.trim() || "",
+            company: spans[1]?.innerText.trim() || "",
+            dates: spans[2]?.innerText.trim() || ""
+          };
+        }).filter(e => e.title && e.company);
+      };
+
+      // --- EXÉCUTION ---
+      const nameEl = findNameElement(main);
+      const result = {
+        name: getText(nameEl) || "Profil Inconnu",
+        headline: findHeadline(main),
+        localisation: findLocation(main),
+        profileImageUrl: findProfileImage(main),
+        experiences: findExperiences(main),
+        linkedinProfileUrl: window.location.href.split("?")[0],
+        source: "direct-content-main-scraping"
+      };
+      
+      // Fallback company
+      result.current_company = result.experiences[0]?.company || "—";
+
+      console.log("[FOCALS] ✅ Scraping Réussi :", result);
+
+      // Sauvegarde
+      if (result.name !== "Profil Inconnu") {
+        chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
+        // Si tu as une fonction pour mettre à jour l'UI, appelle-la ici
+        // updateFocalsPanel(result);
+      }
+
+      return result;
+      // --- FIN LOGIQUE SCRAPING INTERNE ---
+
+    } catch (e) {
+      console.error("[FOCALS] ❌ Erreur critique dans le scraping :", e);
+      return null;
     }
-  }
+  };
 
   setProfileStatus(isProfilePage() || hasInlineRecruiterProfileCard() ? "loading" : "idle");
   if (isProfilePage() || hasInlineRecruiterProfileCard()) {
