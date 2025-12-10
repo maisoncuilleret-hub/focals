@@ -180,27 +180,38 @@
     if (fiber.sibling) traverseFiber(fiber.sibling, visitor, seen);
   };
 
-  // Version optimisée qui ne gèle pas le navigateur
+  // Scrape public profile from the new SDUI DOM as a fallback
+  // VERSION OPTIMISÉE - NE GELE PLUS LE NAVIGATEUR
   const scrapePublicProfileDomFallback = () => {
     console.log("[FOCALS] scrapePublicProfileDomFallback() start");
 
     const getText = (el) => (el ? el.innerText.trim() : "");
-    const safeQueryAll = (root, selector) => [...(root?.querySelectorAll(selector) || [])];
+    // On garde safeQueryAll mais on l'utilisera intelligemment
+    const safeQueryAll = (root, selector) => {
+      try {
+        return [...root.querySelectorAll(selector)];
+      } catch (e) {
+        return [];
+      }
+    };
+
     const main = document.querySelector("main") || document.body;
 
-    // --- 1. Extraction du NOM (Optimisé) ---
+    // 1. Optimisation : Recherche ciblée du NOM
     const findNameElement = (main) => {
-      // On cible uniquement les endroits probables pour un nom
-      const selectors = [
+      // Liste de sélecteurs précis au lieu de chercher partout
+      const specificSelectors = [
         "h1",
         ".text-heading-xlarge",
         ".pv-text-details__left-panel h1",
         "[data-test-row-lockup-full-name]",
         ".artdeco-entity-lockup__title",
+        "#ember35", // Parfois l'ID change mais c'est une cible rapide
       ];
 
-      for (const sel of selectors) {
+      for (const sel of specificSelectors) {
         const el = main.querySelector(sel);
+        // Vérification simple : texte > 2 chars et pas de chiffres (exclure les compteurs)
         if (el && el.innerText.trim().length > 2) {
           console.log("[FOCALS][DOM] Name found via selector:", sel);
           return el;
@@ -209,54 +220,121 @@
       return null;
     };
 
-    // --- 2. Extraction du TITRE (Headline) ---
+    // 2. Optimisation : Recherche ciblée du TITRE (Headline)
     const findHeadline = (main) => {
       const selectors = [
-        ".text-body-medium",
+        ".text-body-medium.break-words",
         "[data-test-row-lockup-headline]",
         ".pv-text-details__left-panel .text-body-medium",
+        "div[data-view-name='profile-card'] .text-body-medium",
       ];
+
       for (const sel of selectors) {
         const el = main.querySelector(sel);
-        if (el && el.innerText.trim().length > 5) return el.innerText.trim();
+        if (el && el.innerText.trim().length > 5) {
+          console.log("[FOCALS][DOM] Headline found via selector:", sel);
+          return el.innerText.trim();
+        }
       }
       return "";
     };
 
-    // --- 3. Extraction de la LOCALISATION ---
+    // 3. Optimisation : Recherche ciblée de la LOCALISATION
     const findLocation = (main) => {
       const selectors = [
         ".text-body-small.inline.t-black--light",
         "[data-test-row-lockup-location]",
         ".pv-text-details__left-panel .text-body-small",
+        "span.text-body-small.inline.t-black--light",
       ];
+
       for (const sel of selectors) {
         const el = main.querySelector(sel);
-        if (el) return el.innerText.trim();
+        if (el && el.innerText.trim().length > 2) {
+          return el.innerText.trim();
+        }
       }
       return "";
     };
 
-    // --- Exécution ---
-    const nameEl = findNameElement(main);
-    const name = getText(nameEl);
-    const headline = findHeadline(main);
-    const localisation = findLocation(main);
-    const linkedinProfileUrl = window.location.href.split("?")[0];
+    // 4. Recherche de l'IMAGE (inchangée mais sécurisée)
+    const findProfileImage = (main) => {
+      const img =
+        main.querySelector("img.pv-top-card-profile-picture__image--show") ||
+        main.querySelector(".pv-top-card-profile-picture__image") ||
+        main.querySelector("img[id^='ember']"); // Fallback large
 
-    // On retourne le résultat minimal vital pour débloquer la situation
-    const result = {
-      name: name || "—",
-      headline,
-      localisation,
-      current_company: "—", // On pourra améliorer ça plus tard
-      experiences: [],
-      linkedinProfileUrl,
-      source: "public-sdui-dom-fallback-optimized",
+      if (img && img.src && (img.src.includes("profile") || img.src.includes("image"))) {
+        return img.src;
+      }
+      return "";
     };
 
-    console.log("[FOCALS] DOM FALLBACK RESULT =", result);
-    return result;
+    // 5. Recherche de l'EXPERIENCE (Optimisée par ID)
+    const findExperienceSection = (main) => {
+      // Essayer d'abord l'ID direct (beaucoup plus rapide)
+      let sec = main.querySelector("#experience");
+      if (sec) return sec.closest("section");
+
+      // Sinon chercher par les titres h2 spécifiques
+      const headers = safeQueryAll(main, "h2");
+      for (const h2 of headers) {
+        if (/exp[ée]rience/i.test(h2.innerText)) {
+          return h2.closest("section");
+        }
+      }
+      return null;
+    };
+
+    const extractExperiences = (section) => {
+      if (!section) return [];
+      // On cible uniquement les items de liste d'expérience
+      const items = safeQueryAll(section, ".pvs-list__paged-list-item, li.artdeco-list__item");
+
+      const experiences = [];
+      items.forEach((item) => {
+        const spans = safeQueryAll(item, "span[aria-hidden='true']");
+        // Logique heuristique : le 1er span est souvent le titre, le 2eme l'entreprise
+        if (spans.length >= 2) {
+          experiences.push({
+            title: spans[0].innerText.trim(),
+            company: spans[1].innerText.trim(),
+            // On pourra affiner la date plus tard, l'important est de ne pas bloquer
+            dates: spans[2] ? spans[2].innerText.trim() : "",
+          });
+        }
+      });
+      return experiences;
+    };
+
+    // --- EXECUTION ---
+    try {
+      const nameEl = findNameElement(main);
+      const name = getText(nameEl);
+      const headline = findHeadline(main);
+      const localisation = findLocation(main);
+      const profileImageUrl = findProfileImage(main);
+
+      const expSection = findExperienceSection(main);
+      const experiences = extractExperiences(expSection);
+
+      const result = {
+        name: name || "—",
+        headline,
+        localisation,
+        profileImageUrl,
+        current_company: experiences[0]?.company || "—",
+        experiences,
+        linkedinProfileUrl: window.location.href.split("?")[0],
+        source: "public-sdui-dom-fallback-optimized",
+      };
+
+      console.log("[FOCALS] DOM FALLBACK RESULT (Optimized) =", result);
+      return result;
+    } catch (error) {
+      console.error("[FOCALS][DOM] Optimized scraper crashed", error);
+      return null;
+    }
   };
   const scrapeFromFiber = () => {
     const roots = findReactFiberNodes();
