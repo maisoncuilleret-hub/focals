@@ -531,7 +531,23 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     return markers.some((regex) => regex.test(normalized));
   };
 
-  const linkedinScraper = window.__FocalsLinkedinScraper || {};
+  let linkedinScraper = window.__FocalsLinkedinScraper || {};
+
+  const waitForScraper = (retries = 10, delay = 500) =>
+    new Promise((resolve, reject) => {
+      const check = () => {
+        const scraper = window.__FocalsLinkedinScraper;
+        if (scraper) {
+          resolve(scraper);
+        } else if (retries > 0) {
+          retries -= 1;
+          setTimeout(check, delay);
+        } else {
+          reject(new Error("Scraper not found after timeout"));
+        }
+      };
+      check();
+    });
 
   function hasInlineRecruiterProfileCard() {
     return !!document.querySelector("section.artdeco-card.pv-profile-card");
@@ -1153,8 +1169,16 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
     }
   }
 
-  function triggerProfileScrape(force = false) {
-    runProfileScrape(force);
+  async function triggerProfileScrape(force = false) {
+    try {
+      console.log("[FOCALS] triggerProfileScrape - Waiting for scraper...");
+      linkedinScraper = await waitForScraper();
+      console.log("[FOCALS] Scraper found, executing...");
+      runProfileScrape(force);
+    } catch (err) {
+      console.error("[FOCALS] Scraping failed:", err);
+      setProfileStatus("error");
+    }
   }
 
   setProfileStatus(isProfilePage() || hasInlineRecruiterProfileCard() ? "loading" : "idle");
