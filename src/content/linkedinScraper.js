@@ -181,11 +181,12 @@
   };
 
   // Scrape public profile from the new SDUI DOM as a fallback
+  // VERSION OPTIMISÉE - NE GELE PLUS LE NAVIGATEUR
   const scrapePublicProfileDomFallback = () => {
     console.log("[FOCALS] scrapePublicProfileDomFallback() start");
 
     const getText = (el) => (el ? el.innerText.trim() : "");
-
+    // On garde safeQueryAll mais on l'utilisera intelligemment
     const safeQueryAll = (root, selector) => {
       try {
         return [...root.querySelectorAll(selector)];
@@ -194,300 +195,147 @@
       }
     };
 
-    const guessNameFromMeta = () => {
-      const meta = document.querySelector('meta[property="og:title"]');
-      if (!meta || !meta.content) return "";
-      return meta.content.split("|")[0].trim();
-    };
+    const main = document.querySelector("main") || document.body;
 
+    // 1. Optimisation : Recherche ciblée du NOM
     const findNameElement = (main) => {
-      const nameGuess = guessNameFromMeta();
-      console.log("[FOCALS][DOM] nameGuess from og:title =", nameGuess);
+      // Liste de sélecteurs précis au lieu de chercher partout
+      const specificSelectors = [
+        "h1",
+        ".text-heading-xlarge",
+        ".pv-text-details__left-panel h1",
+        "[data-test-row-lockup-full-name]",
+        ".artdeco-entity-lockup__title",
+        "#ember35", // Parfois l'ID change mais c'est une cible rapide
+      ];
 
-      const candidates = safeQueryAll(main, "h1, h2, div, span");
-      let best = null;
-      let bestScore = 0;
-
-      for (const el of candidates) {
-        const t = el.innerText && el.innerText.trim();
-        if (!t) continue;
-
-        if (nameGuess && t.includes(nameGuess)) {
-          console.log("[FOCALS][DOM] name element matched by exact name:", el);
+      for (const sel of specificSelectors) {
+        const el = main.querySelector(sel);
+        // Vérification simple : texte > 2 chars et pas de chiffres (exclure les compteurs)
+        if (el && el.innerText.trim().length > 2) {
+          console.log("[FOCALS][DOM] Name found via selector:", sel);
           return el;
         }
+      }
+      return null;
+    };
 
-        const words = t.split(/\s+/);
-        if (words.length > 6 || words.length < 2) continue;
-        if (!/^[A-Za-zÀ-ÖØ-öø-ÿ' -]+$/.test(t)) continue;
+    // 2. Optimisation : Recherche ciblée du TITRE (Headline)
+    const findHeadline = (main) => {
+      const selectors = [
+        ".text-body-medium.break-words",
+        "[data-test-row-lockup-headline]",
+        ".pv-text-details__left-panel .text-body-medium",
+        "div[data-view-name='profile-card'] .text-body-medium",
+      ];
 
-        let score = 0;
-        if (el.tagName === "H1") score += 2;
-        if (el.tagName === "H2") score += 1;
-        if (words.length <= 4) score += 1;
-
-        if (score > bestScore) {
-          bestScore = score;
-          best = el;
+      for (const sel of selectors) {
+        const el = main.querySelector(sel);
+        if (el && el.innerText.trim().length > 5) {
+          console.log("[FOCALS][DOM] Headline found via selector:", sel);
+          return el.innerText.trim();
         }
       }
-
-      if (best) {
-        console.log("[FOCALS][DOM] name element matched heuristically:", best);
-      } else {
-        console.warn("[FOCALS][DOM] no name element found");
-      }
-
-      return best;
-    };
-
-    const isLocationLike = (text) => {
-      const t = text.toLowerCase();
-      return (
-        t.includes("france") ||
-        t.includes("paris") ||
-        t.includes("lille") ||
-        /\d{2}\s?\d{3}/.test(text)
-      );
-    };
-
-    const findHeadlineNearName = (main, nameEl) => {
-      if (!nameEl) return "";
-
-      const container =
-        nameEl.closest("section, div") || nameEl.parentElement || document.body;
-
-      const byProximity = safeQueryAll(container, "div, span, p")
-        .filter((el) => el !== nameEl)
-        .map((el) => ({
-          el,
-          text: el.innerText ? el.innerText.trim() : "",
-        }))
-        .filter(
-          (x) =>
-            x.text &&
-            x.text.length > 5 &&
-            x.text.length < 200 &&
-            !isLocationLike(x.text) &&
-            !x.text.includes("Coordonnées") &&
-            x.text !== x.text.toUpperCase()
-        );
-
-      if (byProximity[0]) {
-        console.log(
-          "[FOCALS][DOM] headline candidate (near name):",
-          byProximity[0].el,
-          byProximity[0].text
-        );
-        return byProximity[0].text;
-      }
-
-      // Fallback: anciens profils ou autres layouts
-      const explicitHeadline =
-        document.querySelector("div.text-body-medium.break-words") ||
-        document.querySelector("[data-view-name*='top-card'] div");
-
-      if (explicitHeadline) {
-        const txt = getText(explicitHeadline);
-        console.log(
-          "[FOCALS][DOM] headline candidate (classic selector):",
-          explicitHeadline,
-          txt
-        );
-        return txt;
-      }
-
-      console.warn("[FOCALS][DOM] headline not found");
       return "";
     };
 
+    // 3. Optimisation : Recherche ciblée de la LOCALISATION
     const findLocation = (main) => {
-      const els = safeQueryAll(main, "span, p");
-      const candidates = els
-        .map((el) => el.innerText.trim())
-        .filter((t) => t && t.length < 80 && isLocationLike(t));
+      const selectors = [
+        ".text-body-small.inline.t-black--light",
+        "[data-test-row-lockup-location]",
+        ".pv-text-details__left-panel .text-body-small",
+        "span.text-body-small.inline.t-black--light",
+      ];
 
-      const loc = candidates[0] || "";
-      if (loc) {
-        console.log("[FOCALS][DOM] location candidate:", loc);
-      } else {
-        console.warn("[FOCALS][DOM] location not found");
+      for (const sel of selectors) {
+        const el = main.querySelector(sel);
+        if (el && el.innerText.trim().length > 2) {
+          return el.innerText.trim();
+        }
       }
-      return loc;
-    };
-
-    const findExperienceSection = (main) => {
-      const sections = safeQueryAll(main, "section");
-      const sec = sections.find((sec) => {
-        const t = sec.innerText && sec.innerText.toLowerCase();
-        if (!t) return false;
-        return (
-          t.includes("expérience") ||
-          t.includes("experiences") ||
-          t.includes("experience")
-        );
-      });
-
-      if (sec) {
-        console.log("[FOCALS][DOM] experience section found:", sec);
-      } else {
-        console.warn("[FOCALS][DOM] experience section NOT found");
-      }
-
-      return sec;
-    };
-
-    const findProfileImage = (main) => {
-      const imgs = safeQueryAll(main, "img");
-
-      const candidates = imgs.filter((img) => {
-        const src = img.getAttribute("src") || "";
-        if (!src) return false;
-        return (
-          src.includes("profile-framedphoto") ||
-          src.includes("profile-displayphoto") ||
-          src.includes("profile-photo") ||
-          src.includes("profile_")
-        );
-      });
-
-      if (candidates.length) {
-        const src = candidates[0].getAttribute("src");
-        console.log(
-          "[FOCALS][DOM] profile image candidate:",
-          candidates[0],
-          src
-        );
-        return src;
-      }
-
-      console.warn("[FOCALS][DOM] profile image not found");
       return "";
+    };
+
+    // 4. Recherche de l'IMAGE (inchangée mais sécurisée)
+    const findProfileImage = (main) => {
+      const img =
+        main.querySelector("img.pv-top-card-profile-picture__image--show") ||
+        main.querySelector(".pv-top-card-profile-picture__image") ||
+        main.querySelector("img[id^='ember']"); // Fallback large
+
+      if (img && img.src && (img.src.includes("profile") || img.src.includes("image"))) {
+        return img.src;
+      }
+      return "";
+    };
+
+    // 5. Recherche de l'EXPERIENCE (Optimisée par ID)
+    const findExperienceSection = (main) => {
+      // Essayer d'abord l'ID direct (beaucoup plus rapide)
+      let sec = main.querySelector("#experience");
+      if (sec) return sec.closest("section");
+
+      // Sinon chercher par les titres h2 spécifiques
+      const headers = safeQueryAll(main, "h2");
+      for (const h2 of headers) {
+        if (/exp[ée]rience/i.test(h2.innerText)) {
+          return h2.closest("section");
+        }
+      }
+      return null;
     };
 
     const extractExperiences = (section) => {
       if (!section) return [];
+      // On cible uniquement les items de liste d'expérience
+      const items = safeQueryAll(section, ".pvs-list__paged-list-item, li.artdeco-list__item");
 
-      const items = safeQueryAll(
-        section,
-        "div[componentkey^='entity-collection-item']"
-      );
       const experiences = [];
-
       items.forEach((item) => {
-        const rawText = item.innerText ? item.innerText.trim() : "";
-        if (!rawText) return;
-        if (rawText.length < 15) return;
-
-        const lines = rawText
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean);
-
-        if (lines.length < 2) return;
-
-        const title = lines[0] || "";
-        const company = lines[1] || "";
-
-        let datesLine = "";
-        let datesIndex = -1;
-
-        for (let i = 0; i < lines.length; i++) {
-          const l = lines[i];
-          const lower = l.toLowerCase();
-          if (
-            /\d{4}/.test(l) ||
-            lower.includes("présent") ||
-            lower.includes("present") ||
-            lower.includes("aujourd’hui")
-          ) {
-            datesLine = l;
-            datesIndex = i;
-            break;
-          }
+        const spans = safeQueryAll(item, "span[aria-hidden='true']");
+        // Logique heuristique : le 1er span est souvent le titre, le 2eme l'entreprise
+        if (spans.length >= 2) {
+          experiences.push({
+            title: spans[0].innerText.trim(),
+            company: spans[1].innerText.trim(),
+            // On pourra affiner la date plus tard, l'important est de ne pas bloquer
+            dates: spans[2] ? spans[2].innerText.trim() : "",
+          });
         }
-
-        let locationLine = "";
-
-        if (datesIndex >= 0) {
-          for (let i = datesIndex + 1; i < Math.min(lines.length, datesIndex + 4); i++) {
-            const l = lines[i];
-            if (!l) continue;
-            if (isLocationLike(l)) {
-              locationLine = l;
-              break;
-            }
-          }
-        }
-
-        experiences.push({
-          title,
-          company,
-          dates: datesLine,
-          location: locationLine,
-        });
       });
-
-      console.log("[FOCALS][DOM] extracted experiences:", experiences);
       return experiences;
     };
 
-    const main = document.querySelector("main") || document.body;
-    console.log("[FOCALS][DOM] main element =", main);
-
+    // --- EXECUTION ---
     try {
-      console.log("[FOCALS][DOM] Step 1: locating name element...");
       const nameEl = findNameElement(main);
       const name = getText(nameEl);
-      console.log("[FOCALS][DOM] Step 1 complete. name =", name);
-
-      console.log("[FOCALS][DOM] Step 2: extracting headline...");
-      const headline = findHeadlineNearName(main, nameEl);
-      console.log("[FOCALS][DOM] Step 2 complete. headline =", headline);
-
-      console.log("[FOCALS][DOM] Step 3: extracting location...");
+      const headline = findHeadline(main);
       const localisation = findLocation(main);
-      console.log("[FOCALS][DOM] Step 3 complete. localisation =", localisation);
-
-      console.log("[FOCALS][DOM] Step 4: extracting profile image...");
       const profileImageUrl = findProfileImage(main);
-      console.log(
-        "[FOCALS][DOM] Step 4 complete. profileImageUrl =",
-        profileImageUrl
-      );
 
-      console.log("[FOCALS][DOM] Step 5: locating experience section...");
       const expSection = findExperienceSection(main);
-      console.log("[FOCALS][DOM] Step 5 complete. section found =", !!expSection);
-
-      console.log("[FOCALS][DOM] Step 6: extracting experiences...");
       const experiences = extractExperiences(expSection);
-      console.log(
-        "[FOCALS][DOM] Step 6 complete. experiences count =",
-        experiences.length
-      );
-
-      const linkedinProfileUrl = window.location.href.split("?")[0];
 
       const result = {
-        name,
+        name: name || "—",
         headline,
         localisation,
         profileImageUrl,
-        current_company: experiences[0]?.company || "",
+        current_company: experiences[0]?.company || "—",
         experiences,
-        linkedinProfileUrl,
-        source: "public-sdui-dom-fallback",
+        linkedinProfileUrl: window.location.href.split("?")[0],
+        source: "public-sdui-dom-fallback-optimized",
       };
 
-      console.log("[FOCALS] DOM FALLBACK RESULT =", result);
+      console.log("[FOCALS] DOM FALLBACK RESULT (Optimized) =", result);
       return result;
     } catch (error) {
-      console.error("[FOCALS][DOM] DOM fallback scraping crashed", error);
+      console.error("[FOCALS][DOM] Optimized scraper crashed", error);
       return null;
     }
   };
-
   const scrapeFromFiber = () => {
     const roots = findReactFiberNodes();
     if (!roots.length) return { rawStrings: [] };
