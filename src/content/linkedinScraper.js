@@ -561,6 +561,102 @@
     return deduped.join(" ");
   };
 
+  const findPersonEntity = (data) => {
+    if (!data) return null;
+    if (Array.isArray(data)) {
+      for (const entry of data) {
+        const found = findPersonEntity(entry);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    if (typeof data !== "object") return null;
+
+    const type = data["@type"];
+    const types = Array.isArray(type) ? type : [type];
+    if (types.some((value) => typeof value === "string" && value.toLowerCase() === "person")) {
+      return data;
+    }
+
+    if (Array.isArray(data["@graph"])) {
+      return findPersonEntity(data["@graph"]);
+    }
+
+    return null;
+  };
+
+  const extractProfileFromJsonLd = (doc = document) => {
+    try {
+      const scripts = Array.from(
+        doc.querySelectorAll('script[type="application/ld+json"]') || []
+      );
+
+      for (const script of scripts) {
+        let parsed;
+        try {
+          parsed = JSON.parse(script.textContent || "");
+        } catch (err) {
+          continue;
+        }
+
+        const person = findPersonEntity(parsed);
+        if (!person) continue;
+
+        const name = normalizeText(person.name || "");
+        if (!name) continue;
+
+        const headline = normalizeText(person.headline || person.jobTitle || "");
+        const worksFor =
+          typeof person.worksFor === "string"
+            ? person.worksFor
+            : person.worksFor?.name || "";
+        const location = normalizeText(
+          person.address?.addressLocality ||
+            person.address?.addressRegion ||
+            person.address?.addressCountry ||
+            ""
+        );
+        const profileUrl = sanitizeLinkedinUrl(person.url || location.href);
+        const profileSlug = extractMemberIdFromProfile(profileUrl || location.href);
+        const connectionInfo = computeConnectionInfo();
+        const sanitizedCompany = sanitizeCompanyName(worksFor);
+        const photoUrl =
+          typeof person.image === "string"
+            ? person.image
+            : person.image?.url || "";
+
+        const [firstName, ...rest] = (name || "").split(/\s+/);
+        const lastName = rest.join(" ").trim();
+
+        console.log("[FOCALS][SCRAPER] Using JSON-LD profile data");
+
+        return {
+          name: name || "—",
+          current_title: headline || "—",
+          current_company: sanitizedCompany || "—",
+          contract: "—",
+          localisation: location || "—",
+          linkedin_url: profileUrl || "—",
+          profile_slug: profileSlug || "",
+          photo_url: photoUrl || "",
+          firstName,
+          lastName,
+          connection_status: connectionInfo.connection_status,
+          connection_degree: connectionInfo.connection_degree,
+          connection_label: connectionInfo.connection_label,
+          connection_summary: connectionInfo.connection_summary,
+          is_premium: connectionInfo.is_premium,
+          can_message_without_connect: connectionInfo.can_message_without_connect,
+        };
+      }
+    } catch (err) {
+      console.warn("[FOCALS][SCRAPER] JSON-LD extraction failed", err);
+    }
+
+    return null;
+  };
+
   const parseCompanyAndContract = (rawText) => {
     const trimmed = (rawText || "").trim();
     if (!trimmed) return { company: "", contract: "" };
@@ -1370,6 +1466,13 @@
       throw new Error("Cette page affiche une liste pipeline. Utilise l'export CSV.");
     }
     if (recruiterPage) return scrapeRecruiterProfile();
+
+    const jsonLdProfile = extractProfileFromJsonLd(document);
+    if (jsonLdProfile && jsonLdProfile.name && jsonLdProfile.name !== "—") {
+      return jsonLdProfile;
+    }
+
+    console.log("[FOCALS][SCRAPER] Falling back to legacy DOM selectors");
 
     const rawName =
       pickText(

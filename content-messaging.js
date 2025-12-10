@@ -924,6 +924,9 @@ console.log(
       style.textContent = `
         :host {
           font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          position: relative;
+          display: inline-flex;
+          align-items: center;
         }
         .focals-wrapper {
           position: relative;
@@ -948,7 +951,8 @@ console.log(
         .focals-menu {
           position: absolute;
           right: 0;
-          top: calc(100% + 6px);
+          top: auto;
+          bottom: calc(100% + 6px);
           display: none;
           flex-direction: column;
           min-width: 220px;
@@ -958,6 +962,9 @@ console.log(
           box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
           z-index: 2147483647;
           overflow: hidden;
+          max-height: 320px;
+          overflow-y: auto;
+          transform: translateY(-2px);
         }
         .focals-menu.open {
           display: flex;
