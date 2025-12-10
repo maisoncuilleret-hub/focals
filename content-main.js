@@ -1129,6 +1129,11 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         profile = scrapeProfileFromDom();
       }
 
+      if ((!profile || !profile.name) && typeof linkedinScraper.scrapePublicProfileDomFallback === "function") {
+        console.log("[FOCALS] Voyager empty, using DOM fallback");
+        profile = linkedinScraper.scrapePublicProfileDomFallback();
+      }
+
       lastScrapedProfile = profile;
       debugLog("PROFILE_SCRAPED", { source: "historical", profile });
       if (token === currentScrapeToken) {
