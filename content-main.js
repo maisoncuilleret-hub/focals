@@ -1170,9 +1170,41 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
   }
 
   const triggerProfileScrape = async (force = false) => {
-    console.log("[FOCALS] triggerProfileScrape - Démarrage du scraping direct...");
+    console.log("[FOCALS] triggerProfileScrape - Démarrage...");
+
+    // --- FONCTION D'ATTENTE (POLLING) ---
+    const waitForElement = (selector, timeout = 5000) => {
+      return new Promise((resolve) => {
+        if (document.querySelector(selector)) return resolve(document.querySelector(selector));
+
+        const observer = new MutationObserver((mutations, obs) => {
+          const el = document.querySelector(selector);
+          if (el) {
+            obs.disconnect();
+            resolve(el);
+          }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+        setTimeout(() => {
+          observer.disconnect();
+          resolve(null); // Timeout
+        }, timeout);
+      });
+    };
 
     try {
+      console.log("[FOCALS] Attente du chargement du profil...");
+      const nameElFound = await waitForElement(
+        "h1, .text-heading-xlarge, .artdeco-entity-lockup__title"
+      );
+
+      if (!nameElFound) {
+        console.warn("[FOCALS] Timeout: Le profil ne semble pas s'être chargé complètement.");
+      } else {
+        console.log("[FOCALS] Élément clé trouvé, scraping immédiat.");
+      }
+
       // --- DÉBUT LOGIQUE SCRAPING INTERNE ---
       const getText = (el) => (el ? el.innerText.trim() : "");
       const safeQueryAll = (root, selector) => {
@@ -1194,7 +1226,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           ".pv-text-details__left-panel h1",
           "[data-test-row-lockup-full-name]",
           ".artdeco-entity-lockup__title",
-          "#ember35"
+          "#ember35",
         ];
         for (const sel of selectors) {
           const el = root.querySelector(sel);
@@ -1209,7 +1241,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
           ".text-body-medium",
           "[data-test-row-lockup-headline]",
           ".pv-text-details__left-panel .text-body-medium",
-          "div[data-view-name='profile-card'] .text-body-medium"
+          "div[data-view-name='profile-card'] .text-body-medium",
         ];
         for (const sel of selectors) {
           const el = root.querySelector(sel);
@@ -1223,7 +1255,7 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         const selectors = [
           ".text-body-small.inline.t-black--light",
           "[data-test-row-lockup-location]",
-          ".pv-text-details__left-panel .text-body-small"
+          ".pv-text-details__left-panel .text-body-small",
         ];
         for (const sel of selectors) {
           const el = root.querySelector(sel);
@@ -1234,9 +1266,10 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
 
       // 4. Recherche de l'IMAGE
       const findProfileImage = (root) => {
-        const img = root.querySelector("img.pv-top-card-profile-picture__image--show") ||
-                    root.querySelector(".pv-top-card-profile-picture__image") ||
-                    root.querySelector("img[id^='ember'][src*='profile']");
+        const img =
+          root.querySelector("img.pv-top-card-profile-picture__image--show") ||
+          root.querySelector(".pv-top-card-profile-picture__image") ||
+          root.querySelector("img[id^='ember'][src*='profile']");
         return img ? img.src : "";
       };
 
@@ -1246,36 +1279,43 @@ console.log("[Focals][CONTENT] content-main loaded on", window.location.href);
         let section = root.querySelector("#experience")?.closest("section");
         if (!section) {
           const h2s = safeQueryAll(root, "h2");
-          const expH2 = h2s.find(h => /exp[ée]rience/i.test(h.innerText));
+          const expH2 = h2s.find((h) => /exp[ée]rience/i.test(h.innerText));
           if (expH2) section = expH2.closest("section");
         }
-        
+
         if (!section) return [];
 
         const items = safeQueryAll(section, "li.artdeco-list__item, .pvs-list__paged-list-item");
-        return items.map(item => {
-          const spans = safeQueryAll(item, "span[aria-hidden='true']");
-          // Heuristique simple : 1er span = role, 2eme = boite
-          return {
-            title: spans[0]?.innerText.trim() || "",
-            company: spans[1]?.innerText.trim() || "",
-            dates: spans[2]?.innerText.trim() || ""
-          };
-        }).filter(e => e.title && e.company);
+        return items
+          .map((item) => {
+            const spans = safeQueryAll(item, "span[aria-hidden='true']");
+            // Heuristique simple : 1er span = role, 2eme = boite
+            return {
+              title: spans[0]?.innerText.trim() || "",
+              company: spans[1]?.innerText.trim() || "",
+              dates: spans[2]?.innerText.trim() || "",
+            };
+          })
+          .filter((e) => e.title && e.company);
       };
 
       // --- EXÉCUTION ---
+      await new Promise((r) => setTimeout(r, 500));
+
       const nameEl = findNameElement(main);
+      const finalName = nameEl
+        ? getText(nameEl)
+        : (document.title.split("|")[0].trim() || "Profil Inconnu");
       const result = {
-        name: getText(nameEl) || "Profil Inconnu",
+        name: finalName || "Profil Inconnu",
         headline: findHeadline(main),
         localisation: findLocation(main),
         profileImageUrl: findProfileImage(main),
         experiences: findExperiences(main),
         linkedinProfileUrl: window.location.href.split("?")[0],
-        source: "direct-content-main-scraping"
+        source: "direct-content-main-scraping",
       };
-      
+
       // Fallback company
       result.current_company = result.experiences[0]?.company || "—";
 
