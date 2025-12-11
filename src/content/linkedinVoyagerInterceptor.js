@@ -1,4 +1,4 @@
-(() => {
+;(() => {
   const INTERCEPTOR_FLAG = "__FOCALS_VOYAGER_INTERCEPTOR__";
   const MESSAGE_TYPE = "FOCALS_VOYAGER_RESPONSE";
 
