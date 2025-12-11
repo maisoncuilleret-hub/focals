@@ -185,7 +185,7 @@
           normalizedProfile,
           rawResponse: payload,
         },
-        "*"
+        "*",
       );
     } catch (err) {
       console.warn("[Focals][Voyager] Failed to emit payload", err?.message || err);
@@ -276,8 +276,7 @@
     if (window[INTERCEPTOR_FLAG]) return;
     window[INTERCEPTOR_FLAG] = true;
     const MESSAGE_TYPE = "FOCALS_VOYAGER_RESPONSE";
-    
-    // FIX: Wrapping the function bodies in parentheses
+
     const shouldCaptureUrl = (${shouldCaptureUrl.toString()});
     const normalizeProfileCandidate = (${normalizeProfileCandidate.toString()});
     const extractProfile = (${extractProfile.toString()});
@@ -285,7 +284,7 @@
     const captureResponse = (${captureResponse.toString()});
     const installFetchInterceptor = (${installFetchInterceptor.toString()});
     const installXhrInterceptor = (${installXhrInterceptor.toString()});
-    
+
     installFetchInterceptor(window);
     installXhrInterceptor(window);
   }.toString()})();`;
@@ -388,7 +387,7 @@
           raw: data.rawResponse,
         };
         window.dispatchEvent(
-          new CustomEvent("focals:voyager-profile", { detail })
+          new CustomEvent("focals:voyager-profile", { detail }),
         );
       } catch (err) {
         console.warn("[Focals][Voyager] Failed to handle message", err?.message || err);
