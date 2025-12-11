@@ -171,7 +171,7 @@ if (window !== window.top) {
         // 3. Parsing Heuristique Final
         const textSelectors = "h3, .t-bold, .text-body-medium, span[aria-hidden='true'], p, span";
         
-        experiences = allItems.map((item, index) => {
+        const experiences = allItems.map((item, index) => {
             
             // 1. Détection d'Entreprise (Logo > Héritage > Fallback)
             let company = getCompanyFromLogo(item); 
