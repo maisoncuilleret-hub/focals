@@ -1,27 +1,78 @@
 // ============================================================================
-// [FOCALS] CONTENT SCRIPT V7 - LE FIX FINAL (Logique V3 Éprouvée + Stabilité)
+// [FOCALS] CONTENT SCRIPT V13 - PRODUCTION FINALE (Fix Timing + Résilience)
 // ============================================================================
 
-// 1. SÉCURITÉ : Bloque l'exécution dans les iframes (pub, notif, etc.)
+// 1. SÉCURITÉ : Bloque l'exécution dans les iframes
 if (window !== window.top) {
     // Si on n'est pas sur la fenêtre principale, on ne fait rien.
 } else {
 
-    console.log("%c[FOCALS] Scraper V7 (Final Stable) - Loaded", "background: #117a65; color: white; padding: 4px; font-weight: bold;");
+    console.log("%c[FOCALS] Scraper V13 (Production Finale) - Loaded", "background: #008080; color: white; padding: 4px; font-weight: bold;");
 
     window.triggerProfileScrape = async (force = false) => {
-      console.log("%c[FOCALS] 🚀 Lancement du Scraper V7...", "color: #117a65; font-weight: bold;");
+      console.log("%c[FOCALS] 🚀 Lancement du Scraper V13...", "color: #008080; font-weight: bold;");
 
+      // Fonction d'attente générique pour le nom
       const waitForElement = (selector, timeout = 5000) => {
         return new Promise((resolve) => {
-          if (document.querySelector(selector)) return resolve(document.querySelector(selector));
+          const check = () => {
+             const el = document.querySelector(selector);
+             if (el && el.innerText.trim().length > 0) { 
+                 return resolve(el);
+             }
+             return null;
+          }
+          if (check()) return;
           const observer = new MutationObserver((mutations, obs) => {
-            if (document.querySelector(selector)) { obs.disconnect(); resolve(document.querySelector(selector)); }
+            if (check()) obs.disconnect();
           });
           observer.observe(document.body, { childList: true, subtree: true });
-          setTimeout(() => { observer.disconnect(); resolve(null); }, timeout);
+          setTimeout(() => { observer.disconnect(); resolve(document.querySelector(selector)); }, timeout);
         });
       };
+      
+      // Nouvelle fonction d'attente spécifique à la section Expérience (utilise MutationObserver)
+      const waitForExperienceSection = (timeout = 8000) => {
+          return new Promise((resolve) => {
+              const main = document.querySelector("main") || document.body;
+              let observer;
+              
+              const check = () => {
+                  // Selecteurs d'ancrage stables (section, componentkey, data-view-name)
+                  const potentialContainers = [...main.querySelectorAll("section, div[componentkey*='ExperienceTopLevelSection'], div[data-view-name*='experience']")];
+                  
+                  const foundSection = potentialContainers.find(el => {
+                      // Vérifie la présence du titre (h2 ou classe de titre)
+                      const titleElement = el.querySelector("h2, .pvs-header__title, .text-heading-large");
+                      // Vérifie que le titre contient "Expérience" (casse et accent insensibles)
+                      return titleElement && /exp[ée]rience/i.test(titleElement.innerText);
+                  });
+
+                  if (foundSection) {
+                      if (observer) observer.disconnect();
+                      return resolve(foundSection);
+                  }
+                  
+                  return null;
+              }
+
+              // On observe le DOM pour détecter l'apparition du contenu dynamique
+              observer = new MutationObserver(check);
+              if (main) {
+                observer.observe(main, { childList: true, subtree: true });
+              }
+
+              // Vérification initiale (si le contenu est déjà là)
+              check();
+              
+              // Timeout de sécurité
+              setTimeout(() => { 
+                  if (observer) observer.disconnect(); 
+                  resolve(null); 
+              }, timeout);
+          });
+      };
+
 
       try {
         // A. Conditions de lancement et attente
@@ -31,134 +82,175 @@ if (window !== window.top) {
         }
 
         const nameEl = await waitForElement("h1, .text-heading-xlarge");
-        if (!nameEl) console.warn("[FOCALS] ⚠️ Nom non détecté.");
+        if (!nameEl) console.warn("%c[FOCALS] ⚠️ Nom non détecté après timeout. Continuation...", "color:orange;");
+        
+        // 1. Trouver la section (Ancrage V13 - Utilise le nouveau waitForExperienceSection)
+        let expSection = await waitForExperienceSection();
 
-        // Pause de sécurité avant le scraping de la liste
-        await new Promise(r => setTimeout(r, 1500));
+        if (!expSection) {
+            console.warn("%c[FOCALS] ❌ Section Expérience introuvable après timeout. Skip.", "color: red;");
+            return null;
+        }
+        
+        // ✅ Section trouvée, on peut scraper
+        console.log("✅ Section Expérience trouvée. Démarrage du parsing.");
 
         const cleanText = (txt) => txt ? txt.replace(/\s+/g, ' ').trim() : "";
-        const main = document.querySelector("main") || document.body;
         
-        // --- HELPERS (Copie conforme de V3) ---
+        // --- HELPERS (Logique V3) ---
         const detectContract = (text) => {
             if (!text) return "";
             const lower = text.toLowerCase();
             if (lower.includes("cdi") || lower.includes("full-time") || lower.includes("permanent")) return "CDI";
             if (lower.includes("cdd") || lower.includes("contract") || lower.includes("fixed-term")) return "CDD";
-            if (lower.includes("freelance") || lower.includes("indépendant")) return "Freelance";
+            if (lower.includes("freelance") || lower.includes("indépendant") || lower.includes("self-employed")) return "Freelance";
             if (lower.includes("stage") || lower.includes("internship")) return "Stage";
             if (lower.includes("alternance") || lower.includes("apprenti") || lower.includes("apprentissage") || lower.includes("professionalisation")) return "Alternance";
             return "";
         };
+        
+        const isDateRange = (text) => {
+            const lower = text.toLowerCase();
+            if (lower.match(/janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre|jan|fev|mar|avr|mai|juin|juil|aou|sep|oct|nov|dec/i)) return true;
+            if (lower.match(/aujourd’hui|present|current/i)) return true;
+            if (lower.match(/\d{4} - \d{4}|\d{4} - aujourd’hui/i)) return true;
+            if (lower.match(/\d+ (an|ans|mois|mo|yr|yrs)/i)) return true;
+            return false;
+        }
+        
+        const isLocation = (text) => {
+            const lower = text.toLowerCase();
+            if (lower.includes("france") || lower.includes("paris") || lower.includes("région") || lower.includes("états-unis") || lower.includes("californie")) return true;
+            return false;
+        }
 
         const getCompanyFromLogo = (container) => {
             const img = container.querySelector("img[alt^='Logo de'], img[alt^='Logo']");
             if (img && img.alt) return img.alt.replace("Logo de ", "").replace("Logo ", "").trim();
             return "";
         };
+        
+        // 2. Pré-processing : Générer la liste finale avec l'héritage de l'entreprise injecté
+        const topLevelItems = [...expSection.querySelectorAll('[componentkey^="entity-collection-item"], ul > li')];
+        let allItems = [];
+        const processedItems = new Set();
+        
+        for(const item of topLevelItems) {
+            if (processedItems.has(item)) continue;
 
-        const getParentHeaderData = (liElement) => {
-            const parentUl = liElement.closest("ul");
-            if (!parentUl) return {};
-            const headerDiv = parentUl.previousElementSibling;
-            if (!headerDiv) return {};
-
-            let company = getCompanyFromLogo(headerDiv);
-            if (!company) {
-                 const p = headerDiv.querySelector("div > div > div > p");
-                 if (p) company = cleanText(p.innerText);
-                 if (!company) {
-                    const strong = headerDiv.querySelector("strong");
-                    if(strong) company = cleanText(strong.innerText);
-                 }
-            }
+            const subRoles = item.querySelectorAll('ul > li');
             
-            const headerTexts = [...headerDiv.querySelectorAll("p, span")].map(el => el.innerText);
-            let contract = "";
-            let location = "";
-            headerTexts.forEach(txt => {
-                if (!contract) contract = detectContract(txt);
-                if (!location && (txt.includes("France") || txt.includes("Paris") || txt.includes("Région"))) location = txt;
-            });
-
-            return { company, contract, location };
-        };
-
-        // --- B. EXTRACTION DES EXPÉRIENCES (Logique V3) ---
-
-        // 1. Trouver la section (Méthode V3)
-        const allSections = [...main.querySelectorAll("section")];
-        let expSection = allSections.find(sec => {
-            const h2 = sec.querySelector("h2, span.text-heading-large");
-            return h2 && /exp[ée]rience/i.test(h2.innerText);
-        });
-
-        if (!expSection) {
-            // Tentative par ID d'ancre (méthode V6) si la V3 échoue
-            const anchor = document.getElementById("experience");
-            if (anchor) expSection = anchor.closest("section") || anchor.parentElement.closest("section");
+            if (subRoles.length > 0) {
+                // CAS 1: C'est un groupe (ex: Numberly). On extrait le nom du groupe.
+                const headerContainer = item.querySelector('div:first-child');
+                
+                let companyName = "Entreprise Groupée";
+                if (headerContainer) {
+                    companyName = getCompanyFromLogo(headerContainer) || cleanText(headerContainer.querySelector('p')?.innerText) || cleanText(headerContainer.querySelector('span')?.innerText) || companyName;
+                }
+                
+                for(const subItem of subRoles) {
+                    if (processedItems.has(subItem)) continue;
+                    subItem.setAttribute('data-focals-inherited-company', companyName); 
+                    allItems.push(subItem);
+                    processedItems.add(subItem);
+                }
+                processedItems.add(item); 
+            } else {
+                // CAS 2: C'est une expérience individuelle.
+                if (item.querySelector("h3, p, .t-bold")) {
+                    allItems.push(item);
+                }
+                processedItems.add(item);
+            }
         }
         
-        let experiences = [];
-        if (expSection) {
-            // 2. Parser les items (Sélecteur V3 éprouvé)
-            const items = [...expSection.querySelectorAll("ul > li")];
+        console.log(`%c[FOCALS] 🔎 ${allItems.length} rôles individuels détectés après traitement d'héritage.`, "color:yellowgreen;");
+        
+        // 3. Parsing Heuristique Final
+        const textSelectors = "h3, .t-bold, .text-body-medium, span[aria-hidden='true'], p, span";
+        
+        let experiences = allItems.map((item, index) => {
             
-            console.log(`[FOCALS] 🔎 ${items.length} expériences trouvées dans la section.`);
+            // 1. Détection d'Entreprise (Logo > Héritage > Fallback)
+            let company = getCompanyFromLogo(item); 
+            if (!company) company = item.getAttribute('data-focals-inherited-company');
+            
+            // Fallback pour Self-employed / Indépendant
+            const texts = item.innerText;
+            if (texts.includes("Self-employed") && !company) company = "Self-employed";
+            if (texts.includes("Indépendant") && !company) company = "Indépendant";
+            if (!company) company = "Non détectée";
 
-            experiences = items.map((item) => {
-                // On utilise les sélecteurs V3 / SDUI pour les textes locaux
-                const localParagraphs = [...item.querySelectorAll("p, span[aria-hidden='true']")]; 
-                const localTexts = localParagraphs.map(p => cleanText(p.innerText)).filter(t => t.length > 0);
+            
+            // 2. Extraction du Texte
+            let title = '';
+            let contract = '';
+            let dates = '';
+            let location = '';
+
+            const localElements = [...item.querySelectorAll(textSelectors)];
+            const localTexts = localElements.map(p => cleanText(p.innerText)).filter(t => t.length > 0 && t !== company && t !== item.getAttribute('aria-label'));
+            
+            if (localTexts.length === 0) return null;
+
+            // PARSING HEURISTIQUE
+            const candidates = [...localTexts];
+
+            for (let i = 0; i < candidates.length; i++) {
+                const text = candidates[i];
                 
-                if (localTexts.length === 0) return null; // Ignore les <li> vides (séparateurs, etc.)
-
-                const inherited = getParentHeaderData(item);
-
-                let title = localTexts[0] || "";
+                const detectedContract = detectContract(text);
                 
-                let company = inherited.company; 
-                if (!company) company = getCompanyFromLogo(item);
-                if (!company && localTexts[1] && !localTexts[1].match(/\d{4}/)) company = localTexts[1];
-
-                let contract = inherited.contract;
-                if (!contract) localTexts.forEach(t => { if (!contract) contract = detectContract(t); });
-
-                let dateRange = "";
-                let location = inherited.location || "";
+                if (detectedContract && !contract) { contract = detectedContract; }
+                if (isDateRange(text) && !dates) { dates = text; }
+                if (isLocation(text) && !location) { location = text; }
                 
-                localTexts.forEach(txt => {
-                    if ((txt.match(/\d{4}/) || txt.toLowerCase().includes("aujourd’hui") || txt.toLowerCase().includes("present")) && !dateRange) dateRange = txt;
-                    if (!location && (txt.includes("France") || txt.includes("Paris") || txt.includes("Région"))) location = txt;
-                });
-
-                if (dateRange && dateRange.includes("·")) {
-                    const parts = dateRange.split("·").map(s => s.trim());
-                    if (detectContract(parts[0])) dateRange = parts.filter(p => !detectContract(p)).join(" · ");
+                if (!title) {
+                    const isMetadata = isDateRange(text) || detectedContract || text === company;
+                    if (i < 2 && !isMetadata && text.length > 5 && text.length < 100) { 
+                        title = text;
+                    }
                 }
+            }
+            
+            // Fallback pour le titre
+            if (!title) title = localTexts.find(t => t.length > 5 && !isDateRange(t) && !detectContract(t) && !isLocation(t) && t !== company) || "Titre inconnu";
 
-                if (!title) return null;
+            // Nettoyage final du titre si c'est la description
+            if (title.length > 150) {
+                 title = title.substring(0, 150) + "...";
+            }
+            
+            // Cas spécial où le titre est le nom de la compagnie
+            if (title === company && candidates.length > 1) {
+                 const nextTitle = candidates.find(t => t !== company && !isDateRange(t) && !detectContract(t) && !isLocation(t));
+                 if (nextTitle) title = nextTitle;
+            }
 
-                return {
-                    title,
-                    company: company || "Entreprise inconnue",
-                    contract_type: contract || "Non spécifié",
-                    dates: dateRange,
-                    location: location,
-                    description: item.innerText.substring(0, 150) + "..."
-                };
-            }).filter(Boolean);
-        } else {
-            console.warn("[FOCALS] ❌ Section Expérience introuvable. Assurez-vous d'être sur la bonne page.");
-        }
+
+            return {
+                title: title,
+                company: company,
+                contract_type: contract || "Non spécifié",
+                dates: dates,
+                location: location,
+                description: item.innerText.substring(0, 150) + "..."
+            };
+
+        }).filter(Boolean);
+
 
         // --- C. INFOS GLOBALES & IMAGE PROFIL ---
         const imgEl = document.querySelector("img.pv-top-card-profile-picture__image--show") || 
                       document.querySelector(".pv-top-card-profile-picture__image") || 
                       document.querySelector("img[class*='profile-picture']"); 
+                      
+        const mainEl = document.querySelector("main") || document.body;
 
         const result = {
-          name: nameEl ? cleanText(nameEl.innerText) : document.title.split("|")[0].trim(),
+          // On tente de récupérer le nom depuis un selecteur plus générique si h1 échoue
+          name: nameEl ? cleanText(nameEl.innerText) : cleanText(mainEl.querySelector("h1")?.innerText || document.title.split("|")[0]),
           headline: document.querySelector(".text-body-medium")?.innerText.trim() || "",
           localisation: document.querySelector(".text-body-small.inline")?.innerText.trim() || "",
           profileImageUrl: imgEl ? imgEl.src : "",
@@ -166,7 +258,7 @@ if (window !== window.top) {
           current_job: experiences[0] || {},
           current_company: experiences[0]?.company || "—",
           linkedinProfileUrl: window.location.href.split("?")[0],
-          source: "focals-scraper-v7-final"
+          source: "focals-scraper-v13-production"
         };
 
         console.log(`%c[FOCALS] ✅ SCRAPING TERMINÉ. Experiences trouvées: ${experiences.length}`, "background: green; color: white;", result);
@@ -181,7 +273,7 @@ if (window !== window.top) {
         return result;
 
       } catch (e) {
-        console.error("[FOCALS] 💥 CRASH:", e);
+        console.error("[FOCALS] 💥 CRASH V13:", e);
         return null;
       }
     };
