@@ -276,13 +276,16 @@
     if (window[INTERCEPTOR_FLAG]) return;
     window[INTERCEPTOR_FLAG] = true;
     const MESSAGE_TYPE = "FOCALS_VOYAGER_RESPONSE";
-    const shouldCaptureUrl = ${shouldCaptureUrl.toString()};
-    const normalizeProfileCandidate = ${normalizeProfileCandidate.toString()};
-    const extractProfile = ${extractProfile.toString()};
-    const emitVoyagerResponse = ${emitVoyagerResponse.toString()};
-    const captureResponse = ${captureResponse.toString()};
-    const installFetchInterceptor = ${installFetchInterceptor.toString()};
-    const installXhrInterceptor = ${installXhrInterceptor.toString()};
+    
+    // FIX: Wrapping the function bodies in parentheses
+    const shouldCaptureUrl = (${shouldCaptureUrl.toString()});
+    const normalizeProfileCandidate = (${normalizeProfileCandidate.toString()});
+    const extractProfile = (${extractProfile.toString()});
+    const emitVoyagerResponse = (${emitVoyagerResponse.toString()});
+    const captureResponse = (${captureResponse.toString()});
+    const installFetchInterceptor = (${installFetchInterceptor.toString()});
+    const installXhrInterceptor = (${installXhrInterceptor.toString()});
+    
     installFetchInterceptor(window);
     installXhrInterceptor(window);
   }.toString()})();`;
