@@ -65,6 +65,37 @@ function withStorage(area = "sync") {
 }
 
 const syncStore = withStorage("sync");
+const localStore = withStorage("local");
+
+function displayProfileData(profile) {
+  const nameEl = document.getElementById("profileName");
+  const headlineEl = document.getElementById("profileHeadline");
+  const companyEl = document.getElementById("currentCompany");
+  const statusEl = document.getElementById("profileStatus");
+
+  if (profile && nameEl && headlineEl && companyEl) {
+    nameEl.innerText = profile.name || "Profil inconnu";
+    headlineEl.innerText = profile.headline || "Pas de titre trouvé";
+    companyEl.innerText = profile.current_company || "Pas d'entreprise actuelle";
+
+    if (statusEl) {
+      statusEl.innerText = "Dernier scrape V14 réussi : " + new Date().toLocaleTimeString();
+    }
+  } else if (nameEl && headlineEl && companyEl) {
+    nameEl.innerText = "--";
+    headlineEl.innerText = "--";
+    companyEl.innerText = "--";
+    if (statusEl) {
+      statusEl.innerText = "Aucun profil chargé. Lancez le scrape.";
+    }
+  }
+}
+
+async function loadProfileDataFromStorage(localStore) {
+  const data = await localStore.get("FOCALS_LAST_PROFILE");
+  const profile = data ? data.FOCALS_LAST_PROFILE : null;
+  displayProfileData(profile);
+}
 
 let state = {
   userId: null,
@@ -456,8 +487,45 @@ async function handleAssociateProfile() {
 function setupProfileActions() {
   const refreshBtn = document.getElementById("refreshProfile");
   const associateBtn = document.getElementById("associateProfile");
-  if (refreshBtn) refreshBtn.addEventListener("click", () => forceRescrapeProfile());
-  if (associateBtn) associateBtn.addEventListener("click", () => handleAssociateProfile());
+  const statusEl = document.getElementById("profileStatus");
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", async () => {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabs[0];
+
+      if (activeTab && isLinkedinProfileContext(activeTab.url)) {
+        const currentStatusText = statusEl.innerText;
+        statusEl.innerText = "Scraping en cours... ⏳";
+
+        try {
+          chrome.tabs.sendMessage(activeTab.id, { action: "SCRAPE_PROFILE" }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error("[Focals][Popup] Erreur de communication:", chrome.runtime.lastError.message);
+              statusEl.innerText = "Erreur: Rechargez la page LinkedIn. ❌";
+              return;
+            }
+
+            if (response && response.status === "success" && response.data) {
+              displayProfileData(response.data);
+              statusEl.innerText = "Scrape V14 terminé ! ✅";
+            } else {
+              statusEl.innerText = response?.error || "Échec du scrape. ❌";
+            }
+          });
+        } catch (e) {
+          statusEl.innerText = "Échec de l'envoi du message. ❌";
+          console.error("[Focals] Message send failed:", e);
+        }
+      } else {
+        statusEl.innerText = "Veuillez vous placer sur un profil LinkedIn. ⚠️";
+      }
+    });
+  }
+
+  if (associateBtn) {
+    associateBtn.addEventListener("click", () => handleAssociateProfile());
+  }
 }
 
 function setupTone() {
@@ -514,6 +582,7 @@ function setupSystemPrompt() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   await loadState();
+  await loadProfileDataFromStorage(localStore);
   setupTone();
   setupSystemPrompt();
   setupTabs();
