@@ -271,23 +271,23 @@
     win.XMLHttpRequest = PatchedXHR;
   };
 
-  const injectionSource = `(${function () {
+  const injectionSource = `;(() => {
     const INTERCEPTOR_FLAG = "__FOCALS_VOYAGER_CHILD__";
     if (window[INTERCEPTOR_FLAG]) return;
     window[INTERCEPTOR_FLAG] = true;
     const MESSAGE_TYPE = "FOCALS_VOYAGER_RESPONSE";
 
-    const shouldCaptureUrl = (${shouldCaptureUrl.toString()});
-    const normalizeProfileCandidate = (${normalizeProfileCandidate.toString()});
-    const extractProfile = (${extractProfile.toString()});
-    const emitVoyagerResponse = (${emitVoyagerResponse.toString()});
-    const captureResponse = (${captureResponse.toString()});
-    const installFetchInterceptor = (${installFetchInterceptor.toString()});
-    const installXhrInterceptor = (${installXhrInterceptor.toString()});
+    const shouldCaptureUrl = ${shouldCaptureUrl.toString()};
+    const normalizeProfileCandidate = ${normalizeProfileCandidate.toString()};
+    const extractProfile = ${extractProfile.toString()};
+    const emitVoyagerResponse = ${emitVoyagerResponse.toString()};
+    const captureResponse = ${captureResponse.toString()};
+    const installFetchInterceptor = ${installFetchInterceptor.toString()};
+    const installXhrInterceptor = ${installXhrInterceptor.toString()};
 
     installFetchInterceptor(window);
     installXhrInterceptor(window);
-  }.toString()})();`;
+  })();`;
 
   const injectIntoFrame = (frame) => {
     if (!frame || !(frame instanceof HTMLIFrameElement)) return;
