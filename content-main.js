@@ -83,7 +83,43 @@ if (window !== window.top) {
 
         const nameEl = await waitForElement("h1, .text-heading-xlarge");
         if (!nameEl) console.warn("%c[FOCALS] ⚠️ Nom non détecté après timeout. Continuation...", "color:orange;");
-        
+
+        const sdui =
+          window.__FocalsLinkedinSduiScraper && window.__FocalsLinkedinSduiScraper.scrapeFromDom
+            ? window.__FocalsLinkedinSduiScraper.scrapeFromDom()
+            : null;
+
+        if (sdui && (sdui.fullName || sdui.name)) {
+          const normalizedPhoto = sdui.photoUrl || sdui.photo_url || "";
+          const normalizedLinkedinUrl =
+            sdui.linkedinUrl || sdui.linkedin_url || window.location.href.split("?")[0];
+
+          const normalizedProfile = {
+            ...sdui,
+            name: sdui.fullName || sdui.name || "",
+            headline: sdui.headline || sdui.current_title || "",
+            localisation: sdui.location || sdui.localisation || "",
+            photoUrl: normalizedPhoto,
+            photo_url: normalizedPhoto,
+            profileImageUrl: normalizedPhoto,
+            linkedinUrl: normalizedLinkedinUrl,
+            linkedin_url: normalizedLinkedinUrl,
+            linkedinProfileUrl: normalizedLinkedinUrl,
+            experiences: sdui.experiences || [],
+            current_title: sdui.current_title || sdui.experiences?.[0]?.title || "",
+            current_company: sdui.current_company || sdui.experiences?.[0]?.company || "",
+            source: "focals-sdui-scraper"
+          };
+
+          chrome.storage.local.set({ "FOCALS_LAST_PROFILE": normalizedProfile });
+
+          if (window.updateFocalsPanel && typeof window.updateFocalsPanel === "function") {
+              window.updateFocalsPanel(normalizedProfile);
+          }
+
+          return normalizedProfile;
+        }
+
         // 1. Trouver la section (Ancrage V13 - Utilise le nouveau waitForExperienceSection)
         let expSection = await waitForExperienceSection();
 
@@ -284,7 +320,7 @@ if (window !== window.top) {
           profileImageUrl: imgEl ? imgEl.src : "",
           experiences: experiences,
           current_job: experiences[0] || {},
-          current_company: experiences[0]?.company || "—",
+          current_company: experiences[0]?.company || "-",
           linkedinProfileUrl: window.location.href.split("?")[0],
           source: "focals-scraper-v14-production" // Mise à jour de la version
         };

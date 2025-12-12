@@ -133,7 +133,7 @@ async function saveProfileToSupabase(profile) {
 
   const { data: userResult, error: userError } = await supabase.auth.getUser();
   if (userError || !userResult?.user) {
-    throw new Error("Utilisateur non authentifié — connecte-toi sur l'app web.");
+    throw new Error("Utilisateur non authentifié - connecte-toi sur l'app web.");
   }
 
   const { data: clientId, error: clientError } = await supabase.rpc("get_user_client_id");
