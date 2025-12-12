@@ -249,7 +249,7 @@ console.log(
         return firstIncomingWithName.senderName;
 
       const cleaned = normalizeText(conversationName).replace(/\s*\([^)]*\)/g, "");
-      const delimiters = ["|", "·", "•", "-", "—", " avec ", " with "];
+      const delimiters = ["|", "·", "•", "-", " avec ", " with "];
       for (const delimiter of delimiters) {
         if (cleaned.includes(delimiter)) {
           const part = cleaned.split(delimiter)[0].trim();

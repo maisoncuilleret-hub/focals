@@ -36,16 +36,6 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
-      ],
-      "js": ["src/content/linkedinVoyagerInterceptor.js"],
-      "run_at": "document_start",
-      "all_frames": true
-    },
-    {
-      "matches": [
         "https://*.lovable.app/*"
       ],
       "js": ["session-bridge.js"],
@@ -57,7 +47,7 @@
         "https://linkedin.com/*",
         "https://*.linkedin.com/*"
       ],
-      "js": ["src/content/linkedinScraper.js", "content-main.js", "content-messaging.js"],
+      "js": ["src/content/linkedinSduiScraper.js", "content-main.js", "content-messaging.js"],
       "run_at": "document_idle",
       "all_frames": true
     }
