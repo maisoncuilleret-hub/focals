@@ -1,294 +1,597 @@
-// ============================================================================
-// [FOCALS] CONTENT SCRIPT V13 - PRODUCTION FINALE (Fix Timing + Résilience)
-// ============================================================================
+(() => {
+  if (window !== window.top) return;
+  const TAG = "🧪 FOCALS CONSOLE";
+  const DEBUG = false;
 
-// 1. SÉCURITÉ : Bloque l'exécution dans les iframes
-if (window !== window.top) {
-    // Si on n'est pas sur la fenêtre principale, on ne fait rien.
-} else {
+  const log = (...a) => console.log(TAG, ...a);
+  const dlog = (...a) => DEBUG && console.log(TAG, ...a);
+  const warn = (...a) => console.warn(TAG, ...a);
 
-    console.log("%c[FOCALS] Scraper V13 (Production Finale) - Loaded", "background: #008080; color: white; padding: 4px; font-weight: bold;");
+  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    window.triggerProfileScrape = async (force = false) => {
-      console.log("%c[FOCALS] 🚀 Lancement du Scraper V13...", "color: #008080; font-weight: bold;");
+  const uniq = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) {
+      const v = clean(x);
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  };
 
-      // Fonction d'attente générique pour le nom
-      const waitForElement = (selector, timeout = 5000) => {
-        return new Promise((resolve) => {
-          const check = () => {
-             const el = document.querySelector(selector);
-             if (el && el.innerText.trim().length > 0) { 
-                 return resolve(el);
-             }
-             return null;
-          }
-          if (check()) return;
-          const observer = new MutationObserver((mutations, obs) => {
-            if (check()) obs.disconnect();
-          });
-          observer.observe(document.body, { childList: true, subtree: true });
-          setTimeout(() => { observer.disconnect(); resolve(document.querySelector(selector)); }, timeout);
-        });
-      };
-      
-      // Nouvelle fonction d'attente spécifique à la section Expérience (utilise MutationObserver)
-      const waitForExperienceSection = (timeout = 8000) => {
-          return new Promise((resolve) => {
-              const main = document.querySelector("main") || document.body;
-              let observer;
-              
-              const check = () => {
-                  // Selecteurs d'ancrage stables (section, componentkey, data-view-name)
-                  const potentialContainers = [...main.querySelectorAll("section, div[componentkey*='ExperienceTopLevelSection'], div[data-view-name*='experience']")];
-                  
-                  const foundSection = potentialContainers.find(el => {
-                      // Vérifie la présence du titre (h2 ou classe de titre)
-                      const titleElement = el.querySelector("h2, .pvs-header__title, .text-heading-large");
-                      // Vérifie que le titre contient "Expérience" (casse et accent insensibles)
-                      return titleElement && /exp[ée]rience/i.test(titleElement.innerText);
-                  });
+  const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const canonicalProfileUrl = (u) => {
+    try {
+      const url = new URL(u);
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return u;
+    }
+  };
 
-                  if (foundSection) {
-                      if (observer) observer.disconnect();
-                      return resolve(foundSection);
-                  }
-                  
-                  return null;
-              }
+  function elementPath(el) {
+    if (!el) return null;
+    const parts = [];
+    let cur = el;
+    for (let i = 0; i < 8 && cur; i++) {
+      const id = cur.id ? `#${cur.id}` : "";
+      const cls =
+        cur.className && typeof cur.className === "string"
+          ? "." + cur.className.split(/\s+/).slice(0, 2).join(".")
+          : "";
+      parts.push(`${cur.tagName.toLowerCase()}${id}${cls}`);
+      cur = cur.parentElement;
+    }
+    return parts.join(" <- ");
+  }
 
-              // On observe le DOM pour détecter l'apparition du contenu dynamique
-              observer = new MutationObserver(check);
-              if (main) {
-                observer.observe(main, { childList: true, subtree: true });
-              }
+  // ---------------- Top card ----------------
+  function pickBestProfileRoot() {
+    return (
+      document.querySelector('section[componentkey*="Topcard"]') ||
+      document.querySelector('[data-view-name="profile-top-card"]') ||
+      document.querySelector(".pv-top-card") ||
+      document.querySelector("main") ||
+      document.body
+    );
+  }
 
-              // Vérification initiale (si le contenu est déjà là)
-              check();
-              
-              // Timeout de sécurité
-              setTimeout(() => { 
-                  if (observer) observer.disconnect(); 
-                  resolve(null); 
-              }, timeout);
-          });
-      };
+  function getFullName(profileRoot) {
+    const h1 = profileRoot.querySelector("h1");
+    if (clean(h1?.textContent)) return clean(h1.textContent);
 
+    const h2 = profileRoot.querySelector("h2");
+    if (clean(h2?.textContent)) return clean(h2.textContent);
 
-      try {
-        // A. Conditions de lancement et attente
-        if (!window.location.href.includes("/in/")) {
-            console.log("[FOCALS] Pas sur un profil (/in/), abandon.");
-            return null;
-        }
+    const candidates = Array.from(profileRoot.querySelectorAll("h1,h2,span,p"))
+      .map((n) => clean(n.textContent))
+      .filter((t) => t && t.length >= 3 && t.length <= 70)
+      .filter((t) => !/abonnés|followers/i.test(t));
 
-        const nameEl = await waitForElement("h1, .text-heading-xlarge");
-        if (!nameEl) console.warn("%c[FOCALS] ⚠️ Nom non détecté après timeout. Continuation...", "color:orange;");
-        
-        // 1. Trouver la section (Ancrage V13 - Utilise le nouveau waitForExperienceSection)
-        let expSection = await waitForExperienceSection();
+    return candidates[0] || null;
+  }
 
-        if (!expSection) {
-            console.warn("%c[FOCALS] ❌ Section Expérience introuvable après timeout. Skip.", "color: red;");
-            return null;
-        }
-        
-        // ✅ Section trouvée, on peut scraper
-        console.log("✅ Section Expérience trouvée. Démarrage du parsing.");
+  function normalizeDegree(s) {
+    const t = clean(s).toLowerCase();
+    if (t.includes("1er") || t.includes("1st")) return "1er";
+    if (t.includes("2e") || t.includes("2nd")) return "2e";
+    if (t.includes("3e") || t.includes("3rd")) return "3e";
+    return null;
+  }
 
-        const cleanText = (txt) => txt ? txt.replace(/\s+/g, ' ').trim() : "";
-        
-        // --- HELPERS (Logique V3) ---
-        const detectContract = (text) => {
-            if (!text) return "";
-            const lower = text.toLowerCase();
-            if (lower.includes("cdi") || lower.includes("full-time") || lower.includes("permanent")) return "CDI";
-            if (lower.includes("cdd") || lower.includes("contract") || lower.includes("fixed-term")) return "CDD";
-            if (lower.includes("freelance") || lower.includes("indépendant") || lower.includes("self-employed")) return "Freelance";
-            if (lower.includes("stage") || lower.includes("internship")) return "Stage";
-            if (lower.includes("alternance") || lower.includes("apprenti") || lower.includes("apprentissage") || lower.includes("professionalisation")) return "Alternance";
-            return "";
-        };
-        
-        const isDateRange = (text) => {
-            const lower = text.toLowerCase();
-            if (lower.match(/janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre|jan|fev|mar|avr|mai|juin|juil|aou|sep|oct|nov|dec/i)) return true;
-            if (lower.match(/aujourd’hui|present|current/i)) return true;
-            if (lower.match(/\d{4} - \d{4}|\d{4} - aujourd’hui/i)) return true;
-            if (lower.match(/\d+ (an|ans|mois|mo|yr|yrs)/i)) return true;
-            return false;
-        }
-        
-        const isLocation = (text) => {
-            const lower = text.toLowerCase();
-            if (lower.includes("france") || lower.includes("paris") || lower.includes("région") || lower.includes("états-unis") || lower.includes("californie")) return true;
-            return false;
-        }
+  function rankDegree(d) {
+    if (d === "1er") return 1;
+    if (d === "2e") return 2;
+    if (d === "3e") return 3;
+    return 99;
+  }
 
-        const getCompanyFromLogo = (container) => {
-            const img = container.querySelector("img[alt^='Logo de'], img[alt^='Logo']");
-            if (img && img.alt) return img.alt.replace("Logo de ", "").replace("Logo ", "").trim();
-            return "";
-        };
-        
-        // 2. Pré-processing : Générer la liste finale avec l'héritage de l'entreprise injecté
-        const topLevelItems = [...expSection.querySelectorAll('[componentkey^="entity-collection-item"], ul > li')];
-        let allItems = [];
-        const processedItems = new Set();
-        
-        for(const item of topLevelItems) {
-            if (processedItems.has(item)) continue;
+  function extractDegreesFromTexts(texts) {
+    const hits = [];
 
-            const subRoles = item.querySelectorAll('ul > li');
-            
-            if (subRoles.length > 0) {
-                // CAS 1: C'est un groupe (ex: Numberly). On extrait le nom du groupe.
-                const headerContainer = item.querySelector('div:first-child');
-                
-                let companyName = "Entreprise Groupée";
-                if (headerContainer) {
-                    companyName = getCompanyFromLogo(headerContainer) || cleanText(headerContainer.querySelector('p')?.innerText) || cleanText(headerContainer.querySelector('span')?.innerText) || companyName;
-                }
-                
-                for(const subItem of subRoles) {
-                    if (processedItems.has(subItem)) continue;
-                    subItem.setAttribute('data-focals-inherited-company', companyName); 
-                    allItems.push(subItem);
-                    processedItems.add(subItem);
-                }
-                processedItems.add(item); 
-            } else {
-                // CAS 2: C'est une expérience individuelle.
-                if (item.querySelector("h3, p, .t-bold")) {
-                    allItems.push(item);
-                }
-                processedItems.add(item);
-            }
-        }
-        
-        console.log(`%c[FOCALS] 🔎 ${allItems.length} rôles individuels détectés après traitement d'héritage.`, "color:yellowgreen;");
-        
-        // 3. Parsing Heuristique Final
-        const textSelectors = "h3, .t-bold, .text-body-medium, span[aria-hidden='true'], p, span";
-        
-        let experiences = allItems.map((item, index) => {
-            
-            // 1. Détection d'Entreprise (Logo > Héritage > Fallback)
-            let company = getCompanyFromLogo(item); 
-            if (!company) company = item.getAttribute('data-focals-inherited-company');
-            
-            // Fallback pour Self-employed / Indépendant
-            const texts = item.innerText;
-            if (texts.includes("Self-employed") && !company) company = "Self-employed";
-            if (texts.includes("Indépendant") && !company) company = "Indépendant";
-            if (!company) company = "Non détectée";
+    for (const raw of texts) {
+      const t = clean(raw);
+      if (!t) continue;
 
-            
-            // 2. Extraction du Texte
-            let title = '';
-            let contract = '';
-            let dates = '';
-            let location = '';
+      const rel = t.match(/\brelation\s+de\s+(1er|2e|3e)\s+niveau\b/i);
+      if (rel) hits.push(normalizeDegree(rel[1]));
 
-            const localElements = [...item.querySelectorAll(textSelectors)];
-            const localTexts = localElements.map(p => cleanText(p.innerText)).filter(t => t.length > 0 && t !== company && t !== item.getAttribute('aria-label'));
-            
-            if (localTexts.length === 0) return null;
+      const bullet = t.match(/[·•]\s*(1er|2e|3e|1st|2nd|3rd)\b/i);
+      if (bullet) hits.push(normalizeDegree(bullet[1]));
 
-            // PARSING HEURISTIQUE
-            const candidates = [...localTexts];
+      const loose = t.match(/\b(1er|2e|3e|1st|2nd|3rd)\b/i);
+      if (loose) hits.push(normalizeDegree(loose[1]));
+    }
 
-            for (let i = 0; i < candidates.length; i++) {
-                const text = candidates[i];
-                
-                const detectedContract = detectContract(text);
-                
-                if (detectedContract && !contract) { contract = detectedContract; }
-                if (isDateRange(text) && !dates) { dates = text; }
-                if (isLocation(text) && !location) { location = text; }
-                
-                if (!title) {
-                    const isMetadata = isDateRange(text) || detectedContract || text === company;
-                    if (i < 2 && !isMetadata && text.length > 5 && text.length < 100) { 
-                        title = text;
-                    }
-                }
-            }
-            
-            // Fallback pour le titre
-            if (!title) title = localTexts.find(t => t.length > 5 && !isDateRange(t) && !detectContract(t) && !isLocation(t) && t !== company) || "Titre inconnu";
+    return hits.filter(Boolean);
+  }
 
-            // Nettoyage final du titre si c'est la description
-            if (title.length > 150) {
-                 title = title.substring(0, 150) + "...";
-            }
-            
-            // Cas spécial où le titre est le nom de la compagnie
-            if (title === company && candidates.length > 1) {
-                 const nextTitle = candidates.find(t => t !== company && !isDateRange(t) && !detectContract(t) && !isLocation(t));
-                 if (nextTitle) title = nextTitle;
-            }
+  function getRelationDegree(profileRoot) {
+    const dist = document.querySelector(".dist-value");
+    const distText = clean(dist?.textContent || "");
+    if (distText) return normalizeDegree(distText);
 
+    const topcard =
+      document.querySelector('section[componentkey*="Topcard"]') ||
+      document.querySelector('[data-view-name="profile-top-card"]') ||
+      profileRoot;
 
-            return {
-                title: title,
-                company: company,
-                contract_type: contract || "Non spécifié",
-                dates: dates,
-                location: location,
-                description: item.innerText.substring(0, 150) + "..."
-            };
+    const nodes = Array.from(topcard.querySelectorAll("p,span,div")).slice(0, 500);
 
-        }).filter(Boolean);
+    const topTexts = [];
+    for (const n of nodes) {
+      const aria = clean(n.getAttribute?.("aria-label") || "");
+      if (aria) topTexts.push(aria);
+      const txt = clean(n.textContent || "");
+      if (txt) topTexts.push(txt);
+    }
 
+    let degrees = extractDegreesFromTexts(uniq(topTexts));
+    if (degrees.length) {
+      degrees.sort((a, b) => rankDegree(a) - rankDegree(b));
+      return degrees[0];
+    }
 
-        // --- C. INFOS GLOBALES & IMAGE PROFIL ---
-        const imgEl = document.querySelector("img.pv-top-card-profile-picture__image--show") || 
-                      document.querySelector(".pv-top-card-profile-picture__image") || 
-                      document.querySelector("img[class*='profile-picture']"); 
-                      
-        const mainEl = document.querySelector("main") || document.body;
+    const blob = clean(topcard.textContent || "");
+    degrees = extractDegreesFromTexts([blob]);
+    if (degrees.length) {
+      degrees.sort((a, b) => rankDegree(a) - rankDegree(b));
+      return degrees[0];
+    }
 
-        const result = {
-          // On tente de récupérer le nom depuis un selecteur plus générique si h1 échoue
-          name: nameEl ? cleanText(nameEl.innerText) : cleanText(mainEl.querySelector("h1")?.innerText || document.title.split("|")[0]),
-          headline: document.querySelector(".text-body-medium")?.innerText.trim() || "",
-          localisation: document.querySelector(".text-body-small.inline")?.innerText.trim() || "",
-          profileImageUrl: imgEl ? imgEl.src : "",
-          experiences: experiences,
-          current_job: experiences[0] || {},
-          current_company: experiences[0]?.company || "-",
-          linkedinProfileUrl: window.location.href.split("?")[0],
-          source: "focals-scraper-v13-production"
-        };
+    return null;
+  }
 
-        console.log(`%c[FOCALS] ✅ SCRAPING TERMINÉ. Experiences trouvées: ${experiences.length}`, "background: green; color: white;", result);
+  // ---------------- Photo ----------------
+  function isPlausibleProfilePhotoSrc(src) {
+    if (!src) return false;
+    const s = String(src).toLowerCase();
+    if (!s.startsWith("http")) return false;
+    if (!s.includes("media.licdn.com/dms/image")) return false;
+    return /\/profile-(displayphoto|framedphoto)/i.test(src);
+  }
 
-        // --- D. ENVOI DES DONNÉES À L'UI ---
-        chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
-        
-        if (window.updateFocalsPanel && typeof window.updateFocalsPanel === 'function') {
-            window.updateFocalsPanel(result);
-        }
+  function getPhotoUrl(profileRoot) {
+    const sduiImg =
+      document.querySelector('[data-view-name="profile-top-card-member-photo"] img') ||
+      profileRoot.querySelector('[data-view-name="profile-top-card-member-photo"] img');
+    if (sduiImg) {
+      const src = sduiImg.getAttribute("src") || sduiImg.currentSrc || "";
+      if (isPlausibleProfilePhotoSrc(src)) return src;
+    }
 
-        return result;
+    const selectors = [
+      "img.pv-top-card-profile-picture__image",
+      "img.profile-photo-edit__preview",
+      "img.pv-top-card__photo",
+      'img[alt*="Photo de profil"]',
+    ];
 
-      } catch (e) {
-        console.error("[FOCALS] 💥 CRASH V13:", e);
-        return null;
+    for (const sel of selectors) {
+      const img = profileRoot.querySelector(sel);
+      const src = img?.getAttribute("src") || img?.currentSrc || "";
+      if (isPlausibleProfilePhotoSrc(src)) return src;
+    }
+
+    const imgs = Array.from(profileRoot.querySelectorAll("img"))
+      .map((img) => ({
+        src: img.getAttribute("src") || img.currentSrc || "",
+        area: (img.naturalWidth || 0) * (img.naturalHeight || 0),
+      }))
+      .filter((x) => isPlausibleProfilePhotoSrc(x.src))
+      .sort((a, b) => b.area - a.area);
+
+    return imgs[0]?.src || null;
+  }
+
+  // ---------------- Experience root picking ----------------
+  function pickExperienceSection() {
+    const legacyAnchor = document.querySelector("#experience");
+    if (legacyAnchor) {
+      const section =
+        legacyAnchor.closest("section.artdeco-card") ||
+        legacyAnchor.closest("section") ||
+        legacyAnchor.parentElement;
+      if (section) return { mode: "LEGACY_ANCHOR", root: section };
+    }
+
+    const sduiCard = document.querySelector('[data-view-name="profile-card-experience"]');
+    if (sduiCard) return { mode: "SDUI_CARD", root: sduiCard.querySelector("section") || sduiCard };
+
+    const sduiTopSection = document.querySelector('section[componentkey*="ExperienceTopLevelSection"]');
+    if (sduiTopSection) return { mode: "SDUI_COMPONENTKEY", root: sduiTopSection };
+
+    const h2 = Array.from(document.querySelectorAll("h2")).find((x) =>
+      /expérience/i.test(clean(x.textContent))
+    );
+    if (h2) {
+      const sec = h2.closest("section");
+      if (sec) return { mode: "HEADING_FALLBACK", root: sec };
+    }
+
+    return { mode: "NOT_FOUND", root: null };
+  }
+
+  function looksLikeDates(s) {
+    const t = clean(s);
+    if (!t) return false;
+    return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
+  }
+
+  function looksLikeLocation(s) {
+    const t = clean(s);
+    if (!t) return false;
+    return /(sur site|hybride|à distance|remote|on[- ]site|région|region|france|,)/i.test(t);
+  }
+
+  function bestUlForLegacy(expSection) {
+    const uls = Array.from(expSection.querySelectorAll("ul"));
+    let best = null;
+    let bestScore = 0;
+
+    for (const ul of uls) {
+      const directLis = Array.from(ul.children).filter((c) => c && c.tagName === "LI");
+      const score = directLis.filter((li) => li.querySelector('div[data-view-name="profile-component-entity"]')).length;
+      if (score > bestScore) {
+        bestScore = score;
+        best = ul;
       }
-    };
+    }
 
-    // --- 2. GESTIONNAIRE D'ÉVÉNEMENTS (LISTENERS) ---
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      if (request.action === "SCRAPE_PROFILE") {
-        triggerProfileScrape(true).then(data => sendResponse({ status: "success", data: data }));
-        return true; 
-      }
-      if (request.action === "PING") sendResponse({ status: "pong" });
+    return { ul: best, score: bestScore };
+  }
+
+  function parseLegacyExperienceLi(li, index) {
+    const entity = li.querySelector('div[data-view-name="profile-component-entity"]');
+    if (!entity)
+      return { _idx: index, _ok: false, Titre: null, Entreprise: null, Dates: null, Lieu: null };
+
+    const mainLink =
+      entity.querySelector('a.optional-action-target-wrapper.display-flex.flex-column.full-width[href]') ||
+      Array.from(entity.querySelectorAll('a[href]')).find((a) => a.querySelector(".hoverable-link-text.t-bold")) ||
+      entity.querySelector('a[href]') ||
+      null;
+
+    if (!mainLink)
+      return { _idx: index, _ok: false, Titre: null, Entreprise: null, Dates: null, Lieu: null };
+
+    const title =
+      clean(mainLink.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+      clean(mainLink.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+      null;
+
+    const company =
+      clean(mainLink.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+      clean(mainLink.querySelector("span.t-14.t-normal")?.textContent) ||
+      null;
+
+    const dates =
+      clean(mainLink.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
+      clean(mainLink.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+      null;
+
+    let lightSpans = Array.from(
+      mainLink.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
+    )
+      .map((n) => clean(n.textContent))
+      .filter(Boolean);
+
+    if (!lightSpans.length) {
+      lightSpans = Array.from(mainLink.querySelectorAll("span.t-14.t-normal.t-black--light"))
+        .map((n) => clean(n.textContent))
+        .filter(Boolean);
+    }
+
+    lightSpans = uniq(lightSpans);
+
+    const location =
+      lightSpans.find((t) => looksLikeLocation(t) && t !== dates) ||
+      lightSpans.find((t) => t !== dates) ||
+      null;
+
+    const ok = !!(title && company && dates);
+    return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
+  }
+
+  function bestSduiLinkForItem(item) {
+    const links = Array.from(item.querySelectorAll('a[href]')).filter((a) => {
+      const href = a.getAttribute("href") || "";
+      if (!href) return false;
+      if (href === "#") return false;
+      return true;
     });
 
-    // --- 3. AUTO-START (Pour Debug) ---
-    setTimeout(() => {
-        triggerProfileScrape();
-    }, 3500); 
-}
+    if (!links.length) return null;
+
+    const scored = links
+      .map((a) => {
+        const ps = Array.from(a.querySelectorAll("p")).map((p) => clean(p.textContent)).filter(Boolean);
+        const hasDate = ps.some((t) => looksLikeDates(t));
+        const score = ps.length + (hasDate ? 10 : 0);
+        return { a, score, ps };
+      })
+      .sort((x, y) => y.score - x.score);
+
+    return scored[0]?.a || null;
+  }
+
+  function parseSduiExperienceItem(item, index) {
+    const link =
+      bestSduiLinkForItem(item) ||
+      item.querySelector('a[href*="/company/"]') ||
+      item.querySelector('a[href*="/school/"]') ||
+      item.querySelector('a[href^="/company/"]') ||
+      item.querySelector('a[href^="/school/"]') ||
+      item.querySelector('a[href^="https://www.linkedin.com/company/"]') ||
+      item.querySelector('a[href^="https://www.linkedin.com/school/"]') ||
+      null;
+
+    const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
+    let ps = Array.from(pNodes)
+      .map((p) => clean(p.textContent))
+      .filter(Boolean)
+      .filter((t) => !/compétences de plus|skills|programming language/i.test(t));
+
+    ps = uniq(ps);
+
+    const title = ps[0] || null;
+
+    let company = null;
+    if (ps[1]) company = clean(ps[1].split("·")[0]);
+
+    const dates = ps.find((t) => looksLikeDates(t)) || null;
+
+    const location = ps.find((t) => looksLikeLocation(t) && t !== dates) || null;
+
+    const ok = !!(title && company && dates);
+    return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
+  }
+
+  function collectExperiences(expSection) {
+    if (!expSection) return { mode: "NO_ROOT", experiences: [], counts: {} };
+
+    const sduiItems = Array.from(
+      expSection.querySelectorAll('[componentkey^="entity-collection-item-"], [componentkey*="entity-collection-item-"]')
+    );
+
+    const sduiLikely = sduiItems.filter((it) =>
+      Array.from(it.querySelectorAll("p")).some((p) => looksLikeDates(p.textContent))
+    );
+
+    const { ul: legacyUl, score: legacyScore } = bestUlForLegacy(expSection);
+    const legacyLis = legacyUl
+      ? Array.from(legacyUl.children).filter((li) => li.querySelector('div[data-view-name="profile-component-entity"]'))
+      : [];
+
+    const counts = {
+      sduiItems: sduiItems.length,
+      sduiLikely: sduiLikely.length,
+      legacyUlScore: legacyScore,
+      legacyLis: legacyLis.length,
+    };
+
+    if (sduiLikely.length) {
+      const parsed = sduiLikely.map((it, i) => parseSduiExperienceItem(it, i));
+      const ok = parsed.filter((x) => x._ok);
+      return { mode: "SDUI_ITEMS", experiences: ok, counts };
+    }
+
+    if (legacyLis.length) {
+      const parsed = legacyLis.map((li, i) => parseLegacyExperienceLi(li, i));
+      const ok = parsed.filter((x) => x._ok);
+      return { mode: "LEGACY_LIS", experiences: ok, counts };
+    }
+
+    return { mode: "EMPTY", experiences: [], counts };
+  }
+
+  async function waitForExperienceReady(timeoutMs = 6500) {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      const pick = pickExperienceSection();
+      if (pick.root) {
+        const collected = collectExperiences(pick.root);
+        if (collected.experiences.length > 0) return { pick, collected, waited: true };
+      }
+      await sleep(250);
+    }
+
+    const pick = pickExperienceSection();
+    const collected = pick.root
+      ? collectExperiences(pick.root)
+      : { mode: "NO_ROOT", experiences: [], counts: {} };
+    return { pick, collected, waited: true };
+  }
+
+  // ---------------- Runner + SPA watcher ----------------
+  async function runOnce(reason) {
+    const startedAt = new Date().toISOString();
+    const href = location.href;
+
+    if (!isProfileUrl(href)) {
+      warn("Not on /in/ profile page. Skipping.", href);
+      const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
+      window.__FOCALS_LAST = out;
+      return out;
+    }
+
+    const profileRoot = pickBestProfileRoot();
+    const fullName = getFullName(profileRoot);
+    const photoUrl = getPhotoUrl(profileRoot);
+    const relationDegree = getRelationDegree(profileRoot);
+    const linkedinUrl = canonicalProfileUrl(href);
+
+    const ready = await waitForExperienceReady(6500);
+
+    const result = {
+      ok: true,
+      mode: "OK",
+      reason,
+      startedAt,
+      fullName,
+      photoUrl,
+      linkedinUrl,
+      relationDegree,
+      experiences: ready.collected.experiences,
+      debug: {
+        experienceRootMode: ready.pick.mode,
+        experienceCollectionMode: ready.collected.mode,
+        experienceCounts: ready.collected.counts,
+        experienceRootPath: elementPath(ready.pick.root),
+      },
+    };
+
+    window.__FOCALS_LAST = result;
+
+    log(`AUTORUN (${reason})`, {
+      fullName: result.fullName,
+      relationDegree: result.relationDegree,
+      photoUrl: result.photoUrl,
+      linkedinUrl: result.linkedinUrl,
+      experiences: result.experiences.length,
+    });
+
+    if (!result.experiences.length) {
+      warn("No experiences parsed. Debug:", result.debug);
+    } else {
+      console.table(
+        result.experiences.map((e) => ({
+          Titre: e.Titre,
+          Entreprise: e.Entreprise,
+          Dates: e.Dates,
+          Lieu: e.Lieu,
+        }))
+      );
+    }
+
+    dlog("DEBUG (full)", result);
+    return result;
+  }
+
+  function normalizeForUi(result) {
+    if (!result || !result.ok) return null;
+
+    const experiences = (result.experiences || []).map((exp) => ({
+      title: exp.Titre || "",
+      company: exp.Entreprise || "",
+      dates: exp.Dates || "",
+      location: exp.Lieu || "",
+    }));
+
+    return {
+      name: result.fullName || "",
+      headline: "",
+      localisation: "",
+      profileImageUrl: result.photoUrl || "",
+      photoUrl: result.photoUrl || "",
+      photo_url: result.photoUrl || "",
+      experiences,
+      current_job: experiences[0] || {},
+      current_company: experiences[0]?.company || "",
+      linkedinProfileUrl: result.linkedinUrl || "",
+      linkedin_url: result.linkedinUrl || "",
+      relationDegree: result.relationDegree || null,
+      source: "focals-scraper-robust",
+    };
+  }
+
+  async function handleScrape(reason) {
+    const raw = await runOnce(reason);
+    const normalized = normalizeForUi(raw);
+
+    if (normalized) {
+      try {
+        if (chrome?.storage?.local) {
+          chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
+        }
+      } catch (err) {
+        warn("Unable to persist profile", err);
+      }
+
+      if (typeof window.updateFocalsPanel === "function") {
+        try {
+          window.updateFocalsPanel(normalized);
+        } catch (err) {
+          warn("updateFocalsPanel failed", err);
+        }
+      }
+    }
+
+    return normalized || raw;
+  }
+
+  function scheduleRun(reason) {
+    if (window.__FOCALS_TIMER) clearTimeout(window.__FOCALS_TIMER);
+    window.__FOCALS_TIMER = setTimeout(() => handleScrape(reason), 350);
+  }
+
+  function installSpaWatcher() {
+    if (window.__FOCALS_WATCHER_INSTALLED) return;
+    window.__FOCALS_WATCHER_INSTALLED = true;
+
+    let lastHref = location.href;
+
+    const patch = (fnName) => {
+      const orig = history[fnName];
+      if (!orig || orig.__FOCALS_PATCHED) return;
+      history[fnName] = function () {
+        const ret = orig.apply(this, arguments);
+        window.dispatchEvent(new Event("focals:navigation"));
+        return ret;
+      };
+      history[fnName].__FOCALS_PATCHED = true;
+    };
+    patch("pushState");
+    patch("replaceState");
+
+    window.addEventListener("popstate", () => window.dispatchEvent(new Event("focals:navigation")));
+    window.addEventListener("focals:navigation", () => {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        scheduleRun("spa_navigation");
+      }
+    });
+
+    const obs = new MutationObserver(() => {
+      if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+
+    log("SPA watcher installed");
+  }
+
+  function dump() {
+    const v = window.__FOCALS_LAST || null;
+    log("Last JSON:", v);
+    return v;
+  }
+
+  window.FOCALS = {
+    run: () => scheduleRun("manual_call"),
+    dump,
+  };
+
+  if (chrome?.runtime?.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request?.action === "SCRAPE_PROFILE") {
+        handleScrape("message_request").then((data) => sendResponse({ status: "success", data }));
+        return true;
+      }
+      if (request?.action === "PING") {
+        sendResponse({ status: "pong" });
+      }
+      return undefined;
+    });
+  }
+
+  log("Ready. Autorun enabled. Also available:", "FOCALS.dump()", "FOCALS.run()");
+  installSpaWatcher();
+  scheduleRun("init");
+})();
