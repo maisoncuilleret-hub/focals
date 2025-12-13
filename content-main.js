@@ -13,10 +13,12 @@
         const nameEl = await waitForElement("h1, .text-heading-xlarge");
         if (!nameEl) console.warn("%c[FOCALS] ⚠️ Nom non détecté après timeout. Continuation...", "color:orange;");
 
-        const sdui =
+        const sduiScraper =
           window.__FocalsLinkedinSduiScraper && window.__FocalsLinkedinSduiScraper.scrapeFromDom
-            ? window.__FocalsLinkedinSduiScraper.scrapeFromDom()
+            ? window.__FocalsLinkedinSduiScraper.scrapeFromDom
             : null;
+
+        const sdui = sduiScraper ? await sduiScraper() : null;
 
         if (sdui && (sdui.fullName || sdui.name)) {
           const normalizedPhoto = sdui.photoUrl || sdui.photo_url || "";
