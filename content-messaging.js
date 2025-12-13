@@ -739,6 +739,8 @@ console.log(
         return replyText || null;
       } catch (err) {
         error(`PIPELINE api_call: network failure`, err);
+        const reason = err?.message || "network failure";
+        alert(`Erreur Focals : ${reason}`);
         return null;
       }
     };

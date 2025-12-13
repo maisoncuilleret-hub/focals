@@ -214,11 +214,9 @@ function renderProfileCard(profile) {
     return;
   }
 
-  const photoSrc =
-    profile.photo_url || profile.photoUrl || profile.profileImageUrl || profile.profile_image_url;
-  if (photoSrc) {
+  if (profile.photo_url || profile.photoUrl) {
     const avatar = document.createElement("img");
-    avatar.src = photoSrc;
+    avatar.src = profile.photo_url || profile.photoUrl;
     avatar.alt = profile.fullName || profile.name || "Profil";
     avatar.className = "avatar";
     card.appendChild(avatar);
@@ -240,7 +238,7 @@ function renderProfileCard(profile) {
   const linkRow = document.createElement("div");
   linkRow.className = "profile-meta";
   const link = document.createElement("a");
-  link.href = profile.linkedin_url || profile.linkedinUrl || profile.linkedinProfileUrl || "#";
+  link.href = profile.linkedin_url || profile.linkedinUrl || "#";
   link.target = "_blank";
   link.rel = "noreferrer";
   link.style.color = "#60a5fa";

@@ -511,15 +511,110 @@
         if (chrome?.storage?.local) {
           chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
         }
-      } catch (err) {
-        warn("Unable to persist profile", err);
-      }
+        
+        console.log(`%c[FOCALS] 🔎 ${allItems.length} rôles individuels détectés après traitement d'héritage.`, "color:yellowgreen;");
+        
+        // 3. Parsing Heuristique Final
+        const textSelectors = "h3, .t-bold, .text-body-medium, span[aria-hidden='true'], p, span";
+        
+        let experiences = allItems.map((item, index) => {
+            
+            // 1. Détection d'Entreprise (Logo > Héritage > Fallback)
+            let company = getCompanyFromLogo(item); 
+            if (!company) company = item.getAttribute('data-focals-inherited-company');
+            
+            // Fallback pour Self-employed / Indépendant
+            const texts = item.innerText;
+            if (texts.includes("Self-employed") && !company) company = "Self-employed";
+            if (texts.includes("Indépendant") && !company) company = "Indépendant";
+            if (!company) company = "Non détectée";
 
-      if (typeof window.updateFocalsPanel === "function") {
-        try {
-          window.updateFocalsPanel(normalized);
-        } catch (err) {
-          warn("updateFocalsPanel failed", err);
+            
+            // 2. Extraction du Texte
+            let title = '';
+            let contract = '';
+            let dates = '';
+            let location = '';
+
+            const localElements = [...item.querySelectorAll(textSelectors)];
+            const localTexts = localElements.map(p => cleanText(p.innerText)).filter(t => t.length > 0 && t !== company && t !== item.getAttribute('aria-label'));
+            
+            if (localTexts.length === 0) return null;
+
+            // PARSING HEURISTIQUE
+            const candidates = [...localTexts];
+
+            for (let i = 0; i < candidates.length; i++) {
+                const text = candidates[i];
+                
+                const detectedContract = detectContract(text);
+                
+                if (detectedContract && !contract) { contract = detectedContract; }
+                if (isDateRange(text) && !dates) { dates = text; }
+                if (isLocation(text) && !location) { location = text; }
+                
+                if (!title) {
+                    const isMetadata = isDateRange(text) || detectedContract || text === company;
+                    if (i < 2 && !isMetadata && text.length > 5 && text.length < 100) { 
+                        title = text;
+                    }
+                }
+            }
+            
+            // Fallback pour le titre
+            if (!title) title = localTexts.find(t => t.length > 5 && !isDateRange(t) && !detectContract(t) && !isLocation(t) && t !== company) || "Titre inconnu";
+
+            // Nettoyage final du titre si c'est la description
+            if (title.length > 150) {
+                 title = title.substring(0, 150) + "...";
+            }
+            
+            // Cas spécial où le titre est le nom de la compagnie
+            if (title === company && candidates.length > 1) {
+                 const nextTitle = candidates.find(t => t !== company && !isDateRange(t) && !detectContract(t) && !isLocation(t));
+                 if (nextTitle) title = nextTitle;
+            }
+
+
+            return {
+                title: title,
+                company: company,
+                contract_type: contract || "Non spécifié",
+                dates: dates,
+                location: location,
+                description: item.innerText.substring(0, 150) + "..."
+            };
+
+        }).filter(Boolean);
+
+
+        // --- C. INFOS GLOBALES & IMAGE PROFIL ---
+        const imgEl = document.querySelector("img.pv-top-card-profile-picture__image--show") || 
+                      document.querySelector(".pv-top-card-profile-picture__image") || 
+                      document.querySelector("img[class*='profile-picture']"); 
+                      
+        const mainEl = document.querySelector("main") || document.body;
+
+        const result = {
+          // On tente de récupérer le nom depuis un selecteur plus générique si h1 échoue
+          name: nameEl ? cleanText(nameEl.innerText) : cleanText(mainEl.querySelector("h1")?.innerText || document.title.split("|")[0]),
+          headline: document.querySelector(".text-body-medium")?.innerText.trim() || "",
+          localisation: document.querySelector(".text-body-small.inline")?.innerText.trim() || "",
+          profileImageUrl: imgEl ? imgEl.src : "",
+          experiences: experiences,
+          current_job: experiences[0] || {},
+          current_company: experiences[0]?.company || "-",
+          linkedinProfileUrl: window.location.href.split("?")[0],
+          source: "focals-scraper-v13-production"
+        };
+
+        console.log(`%c[FOCALS] ✅ SCRAPING TERMINÉ. Experiences trouvées: ${experiences.length}`, "background: green; color: white;", result);
+
+        // --- D. ENVOI DES DONNÉES À L'UI ---
+        chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
+        
+        if (window.updateFocalsPanel && typeof window.updateFocalsPanel === 'function') {
+            window.updateFocalsPanel(result);
         }
       }
     }
