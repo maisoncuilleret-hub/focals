@@ -347,7 +347,14 @@
 
     const dates = ps.find((t) => looksLikeDates(t)) || null;
 
-    const location = ps.find((t) => looksLikeLocation(t) && t !== dates) || null;
+    let location = ps.find((t) => looksLikeLocation(t) && t !== dates) || null;
+
+    // Fallback: SDUI cards sometimes list a bare city (e.g. "Paris") that
+    // doesn't match the regex. If we still have nothing, grab the first other
+    // value that's not title/company/dates.
+    if (!location) {
+      location = ps.find((t) => t !== title && t !== company && t !== dates) || null;
+    }
 
     const ok = !!(title && company && dates);
     return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
