@@ -10,7 +10,14 @@ console.log(
 );
 
 (() => {
-  const FOCALS_DEBUG = false;
+  const FOCALS_DEBUG = (() => {
+    try {
+      return localStorage.getItem("FOCALS_DEBUG_MSG") === "true";
+    } catch (err) {
+      console.warn("[Focals][MSG][DEBUG] Unable to read debug flag", err);
+      return false;
+    }
+  })();
 
   function debugLog(stage, details) {
     if (!FOCALS_DEBUG) return;
@@ -39,20 +46,58 @@ console.log(
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { type: "API_REQUEST", endpoint, method, body, params },
-        (response) => {
+      const payload = { type: "API_REQUEST", endpoint, method, body, params };
+
+      const sendWithRetry = (attempt = 1) => {
+        console.log(
+          `[Focals][MSG][API_REQUEST] attempt ${attempt} -> ${method} ${endpoint}`
+        );
+        chrome.runtime.sendMessage(payload, (response) => {
           if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
+            const message = chrome.runtime.lastError.message || "Runtime messaging failed";
+
+            const transient =
+              /Extension context invalidated/i.test(message) ||
+              /Receiving end does not exist/i.test(message);
+
+            console.warn(
+              `[Focals][MSG][API_REQUEST] lastError on attempt ${attempt}: ${message}`
+            );
+
+            // The background service worker can be torn down between attempts, which triggers
+            // "Extension context invalidated." or a missing receiver. Retry a few times to let
+            // Chrome revive the context.
+            if (attempt < 3 && transient) {
+              setTimeout(() => sendWithRetry(attempt + 1), attempt * 100);
+              return;
+            }
+
+            reject(new Error(message));
             return;
           }
+
+          if (!response) {
+            console.warn(
+              `[Focals][MSG][API_REQUEST] empty response on attempt ${attempt}, retrying if possible`
+            );
+            if (attempt < 3) {
+              setTimeout(() => sendWithRetry(attempt + 1), attempt * 100);
+              return;
+            }
+            reject(new Error("Empty response from background"));
+            return;
+          }
+
           if (!response?.ok) {
             reject(new Error(response?.error || "API request failed"));
             return;
           }
+
           resolve(response.data);
-        }
-      );
+        });
+      };
+
+      sendWithRetry();
     });
   }
 
