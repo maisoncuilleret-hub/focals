@@ -252,16 +252,26 @@ function renderProfileCard(profile) {
 
   const chips = document.createElement("div");
   chips.className = "profile-meta";
+
   const contractChip = document.createElement("span");
   contractChip.className = "pill-inline";
   contractChip.textContent = profile.contract || "-";
   chips.appendChild(contractChip);
+
   if (profile.firstName) {
     const firstChip = document.createElement("span");
     firstChip.className = "pill-inline";
     firstChip.textContent = profile.firstName;
     chips.appendChild(firstChip);
   }
+
+  if (profile.relationDegree) {
+    const relationChip = document.createElement("span");
+    relationChip.className = "pill-inline";
+    relationChip.textContent = `Relation ${profile.relationDegree}`;
+    chips.appendChild(relationChip);
+  }
+
   info.appendChild(chips);
 
   const experiences = profile.experiences || [];
