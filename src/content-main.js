@@ -490,10 +490,13 @@
       headline: "",
       localisation: "",
       profileImageUrl: result.photoUrl || "",
+      photoUrl: result.photoUrl || "",
+      photo_url: result.photoUrl || "",
       experiences,
       current_job: experiences[0] || {},
       current_company: experiences[0]?.company || "",
       linkedinProfileUrl: result.linkedinUrl || "",
+      linkedin_url: result.linkedinUrl || "",
       relationDegree: result.relationDegree || null,
       source: "focals-scraper-robust",
     };
