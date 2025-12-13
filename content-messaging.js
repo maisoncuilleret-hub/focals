@@ -249,7 +249,7 @@ console.log(
         return firstIncomingWithName.senderName;
 
       const cleaned = normalizeText(conversationName).replace(/\s*\([^)]*\)/g, "");
-      const delimiters = ["|", "·", "•", "-", "—", " avec ", " with "];
+      const delimiters = ["|", "·", "•", "-", " avec ", " with "];
       for (const delimiter of delimiters) {
         if (cleaned.includes(delimiter)) {
           const part = cleaned.split(delimiter)[0].trim();
@@ -739,6 +739,8 @@ console.log(
         return replyText || null;
       } catch (err) {
         error(`PIPELINE api_call: network failure`, err);
+        const reason = err?.message || "network failure";
+        alert(`Erreur Focals : ${reason}`);
         return null;
       }
     };

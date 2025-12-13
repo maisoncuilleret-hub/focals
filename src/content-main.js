@@ -256,7 +256,7 @@ if (window !== window.top) {
           profileImageUrl: imgEl ? imgEl.src : "",
           experiences: experiences,
           current_job: experiences[0] || {},
-          current_company: experiences[0]?.company || "—",
+          current_company: experiences[0]?.company || "-",
           linkedinProfileUrl: window.location.href.split("?")[0],
           source: "focals-scraper-v13-production"
         };

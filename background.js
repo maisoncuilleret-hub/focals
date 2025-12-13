@@ -1,4 +1,4 @@
-import supabase from "./supabase-client.js";
+import supabase, { SUPABASE_ANON_KEY } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 
 const FOCALS_DEBUG = IS_DEV;
@@ -24,6 +24,26 @@ const buildApiUrl = (endpoint = "") => {
   return `${normalizedBase}${normalizedEndpoint}`;
 };
 
+async function resolveAuthHeaders(headers = {}) {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const sessionToken = data?.session?.access_token || null;
+
+    return {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: headers.Authorization || `Bearer ${sessionToken || SUPABASE_ANON_KEY}`,
+      ...headers,
+    };
+  } catch (err) {
+    console.warn("[Focals][AUTH] Unable to resolve Supabase session, falling back to anon", err);
+    return {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: headers.Authorization || `Bearer ${SUPABASE_ANON_KEY}`,
+      ...headers,
+    };
+  }
+}
+
 async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }) {
   const url = new URL(buildApiUrl(endpoint));
 
@@ -35,11 +55,13 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
     });
   }
 
+  const resolvedHeaders = await resolveAuthHeaders(headers);
+
   const response = await fetch(url.toString(), {
     method,
     headers: {
       "Content-Type": "application/json",
-      ...headers,
+      ...resolvedHeaders,
     },
     body: method && method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
   });
@@ -133,7 +155,7 @@ async function saveProfileToSupabase(profile) {
 
   const { data: userResult, error: userError } = await supabase.auth.getUser();
   if (userError || !userResult?.user) {
-    throw new Error("Utilisateur non authentifié — connecte-toi sur l'app web.");
+    throw new Error("Utilisateur non authentifié - connecte-toi sur l'app web.");
   }
 
   const { data: clientId, error: clientError } = await supabase.rpc("get_user_client_id");
@@ -217,8 +239,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       fetchApi({ endpoint, method, params, body, headers })
-        .then((result) => sendResponse(result))
-        .catch((error) => sendResponse({ ok: false, error: error?.message || "API request failed" }));
+        .then((result) => {
+          if (!result?.ok) {
+            console.warn("[Focals][API_REQUEST] Request failed", {
+              endpoint,
+              status: result?.status,
+              error: result?.error,
+            });
+          }
+          sendResponse(result);
+        })
+        .catch((error) => {
+          console.error("[Focals][API_REQUEST] Network error", error);
+          sendResponse({ ok: false, error: error?.message || "API request failed" });
+        });
 
       return true;
     }

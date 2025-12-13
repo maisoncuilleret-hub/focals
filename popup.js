@@ -23,20 +23,9 @@ function debugLog(stage, details) {
 
   const DEFAULT_TONE = "professional";
 
-  function isLinkedinRecruiterContext(url = "") {
-    if (!url) return false;
-    const normalized = url.toLowerCase();
-    return (
-      /linkedin\.com\/talent\/hire\//.test(normalized) ||
-      /linkedin\.com\/talent\/profile\//.test(normalized) ||
-      /linkedin\.com\/recruiter\//.test(normalized)
-    );
-  }
-
   function isLinkedinProfileContext(url = "") {
     if (!url) return false;
-    if (/linkedin\.com\/in\//i.test(url)) return true;
-    return isLinkedinRecruiterContext(url);
+    return /linkedin\.com\/in\//i.test(url);
   }
 
 function withStorage(area = "sync") {
@@ -94,7 +83,10 @@ function displayProfileData(profile) {
 async function loadProfileDataFromStorage(localStore) {
   const data = await localStore.get("FOCALS_LAST_PROFILE");
   const profile = data ? data.FOCALS_LAST_PROFILE : null;
+  state.profile = profile;
+  state.profileStatus = profile ? "ready" : "idle";
   displayProfileData(profile);
+  renderProfileCard(profile);
 }
 
 let state = {
@@ -125,7 +117,7 @@ async function ensureProfileScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["src/content/linkedinScraper.js", "content-main.js"],
+      files: ["src/content/linkedinSduiScraper.js", "content-main.js"],
     });
     debugLog("POPUP_SCRIPT_INJECT", { tabId });
     return true;
@@ -137,7 +129,7 @@ async function ensureProfileScripts(tabId) {
 
 function requestProfileFromTab(tabId) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { type: "FOCALS_GET_PROFILE" }, (response) => {
+    chrome.tabs.sendMessage(tabId, { action: "SCRAPE_PROFILE" }, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ error: chrome.runtime.lastError });
         return;
@@ -180,7 +172,11 @@ function renderTone() {
 function renderProfileCard(profile) {
   const card = document.getElementById("profileCard");
   const status = document.getElementById("profileStatus");
+  const experiencesList = document.getElementById("experiencesList");
+  const experiencesMeta = document.getElementById("experiencesMeta");
   if (status) status.textContent = "";
+  if (experiencesList) experiencesList.innerHTML = "";
+  if (experiencesMeta) experiencesMeta.textContent = "";
   if (!card) return;
   card.innerHTML = "";
 
@@ -200,23 +196,6 @@ function renderProfileCard(profile) {
     return;
   }
 
-  if (state.profileStatus === "unsupported") {
-    const info = document.createElement("div");
-    info.className = "profile-info";
-    const title = document.createElement("div");
-    title.className = "profile-name";
-    title.textContent = "Page Recruiter non supportée";
-    const subtitle = document.createElement("div");
-    subtitle.className = "profile-sub muted";
-    subtitle.textContent =
-      state.profileStatusMessage || "Cette page LinkedIn Recruiter n’est pas encore supportée pour l’aperçu de profil.";
-    info.appendChild(title);
-    info.appendChild(subtitle);
-    card.appendChild(info);
-    if (status) status.textContent = state.profileStatusMessage || "";
-    return;
-  }
-
   if (!profile || state.profileStatus === "error") {
     const info = document.createElement("div");
     info.className = "profile-info";
@@ -225,24 +204,20 @@ function renderProfileCard(profile) {
     title.textContent = "Aucun profil détecté";
     const subtitle = document.createElement("div");
     subtitle.className = "profile-sub muted";
-    subtitle.textContent =
-      state.profileStatusMessage ||
-      "La page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes.";
+    subtitle.textContent = state.profileStatusMessage || "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
     info.appendChild(title);
     info.appendChild(subtitle);
     card.appendChild(info);
     if (status && state.profileStatus === "error") {
-      status.textContent =
-        state.profileStatusMessage ||
-        "Aucun profil détecté (la page LinkedIn est peut-être encore en train de charger, réessayez dans quelques secondes).";
+      status.textContent = state.profileStatusMessage || "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
     }
     return;
   }
 
-  if (profile.photo_url) {
+  if (profile.photo_url || profile.photoUrl) {
     const avatar = document.createElement("img");
-    avatar.src = profile.photo_url;
-    avatar.alt = profile.name || "Profil";
+    avatar.src = profile.photo_url || profile.photoUrl;
+    avatar.alt = profile.fullName || profile.name || "Profil";
     avatar.className = "avatar";
     card.appendChild(avatar);
   }
@@ -251,17 +226,19 @@ function renderProfileCard(profile) {
   info.className = "profile-info";
   const title = document.createElement("div");
   title.className = "profile-name";
-  title.textContent = profile.name || "Profil LinkedIn";
+  title.textContent = profile.fullName || profile.name || "Profil LinkedIn";
   const subtitle = document.createElement("div");
   subtitle.className = "profile-sub";
   subtitle.textContent = profile.headline || profile.current_title || "";
   const meta = document.createElement("div");
   meta.className = "profile-meta";
-  meta.textContent = `${profile.current_company || ""} · ${profile.localisation || ""}`;
+  const location = profile.location || profile.localisation || "";
+  const metaParts = [profile.current_company || "", location].filter(Boolean);
+  meta.textContent = metaParts.join(" · ");
   const linkRow = document.createElement("div");
   linkRow.className = "profile-meta";
   const link = document.createElement("a");
-  link.href = profile.linkedin_url || "#";
+  link.href = profile.linkedin_url || profile.linkedinUrl || "#";
   link.target = "_blank";
   link.rel = "noreferrer";
   link.style.color = "#60a5fa";
@@ -277,7 +254,7 @@ function renderProfileCard(profile) {
   chips.className = "profile-meta";
   const contractChip = document.createElement("span");
   contractChip.className = "pill-inline";
-  contractChip.textContent = profile.contract || "—";
+  contractChip.textContent = profile.contract || "-";
   chips.appendChild(contractChip);
   if (profile.firstName) {
     const firstChip = document.createElement("span");
@@ -286,6 +263,41 @@ function renderProfileCard(profile) {
     chips.appendChild(firstChip);
   }
   info.appendChild(chips);
+
+  const experiences = profile.experiences || [];
+  if (experiencesMeta) {
+    experiencesMeta.textContent = `${experiences.length || 0} expérience(s)`;
+  }
+
+  if (experiencesList) {
+    if (!experiences.length) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Aucune expérience détectée.";
+      experiencesList.appendChild(empty);
+    } else {
+      experiences.forEach((exp) => {
+        const row = document.createElement("div");
+        row.className = "experience-row";
+
+        const header = document.createElement("div");
+        header.className = "profile-sub";
+        const headerParts = [exp.title, exp.company].filter(Boolean);
+        header.textContent = headerParts.join(" · ");
+        row.appendChild(header);
+
+        const detailsParts = [exp.dates, exp.location].filter(Boolean);
+        if (detailsParts.length) {
+          const details = document.createElement("div");
+          details.className = "profile-meta";
+          details.textContent = detailsParts.join(" · ");
+          row.appendChild(details);
+        }
+
+        experiencesList.appendChild(row);
+      });
+    }
+  }
 }
 
 function renderSystemPrompt() {
@@ -326,17 +338,17 @@ async function refreshProfileFromTab() {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs?.[0];
-    if (isLinkedinRecruiterContext(activeTab?.url)) {
-      debugLog("POPUP_CONTEXT", { context: "recruiter", url: activeTab.url });
-    }
     if (!activeTab?.id || !activeTab.url || !isLinkedinProfileContext(activeTab.url)) {
       state.profile = null;
       state.profileStatus = "error";
-      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+      state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
       renderProfileCard(null);
       return;
     }
+
+    state.profileStatus = "loading";
     state.profileStatusMessage = "";
+    renderProfileCard(state.profile);
     debugLog("POPUP_PROFILE_REQUEST", { tabId: activeTab.id, url: activeTab.url });
     const { response: initialResponse, error: initialError } = await requestProfileFromTab(activeTab.id);
 
@@ -356,53 +368,16 @@ async function refreshProfileFromTab() {
       }
     }
 
-    const isPublicProfileUrl = /linkedin\.com\/in\//i.test(activeTab.url || "");
-
-    if (!requestError && response?.status === "unsupported" && isPublicProfileUrl) {
-      debugLog("POPUP_PROFILE_UNSUPPORTED_FALLBACK", { tabId: activeTab.id, url: activeTab.url });
-      const rescrapeTriggered = await new Promise((resolve) => {
-        chrome.tabs.sendMessage(activeTab.id, { type: "FOCALS_FORCE_RESCRAPE" }, () => {
-          if (chrome.runtime.lastError) {
-            resolve(false);
-            return;
-          }
-          resolve(true);
-        });
-      });
-
-      if (rescrapeTriggered) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        const retry = await requestProfileFromTab(activeTab.id);
-        response = retry.response;
-        requestError = retry.error;
-      }
-    }
-
-    if (requestError) {
-      console.warn("[Focals][POPUP] No profile data:", requestError.message || String(requestError));
+    if (requestError || !response || response.status !== "success" || !response.data) {
+      console.warn("[Focals][POPUP] No profile data:", requestError?.message || requestError || response);
       state.profile = null;
       state.profileStatus = "error";
-      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-    } else if (!response) {
-      debugLog("POPUP_PROFILE_NO_RESPONSE", { tabId: activeTab.id });
-      state.profile = null;
-      state.profileStatus = "error";
-      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+      state.profileStatusMessage =
+        "Aucun profil détecté. Assurez-vous d'être sur une page LinkedIn /in/ et réessayez.";
     } else {
-      if (response.status === "unsupported") {
-        state.profile = null;
-        state.profileStatus = "unsupported";
-        state.profileStatusMessage =
-          response.message || "Cette page LinkedIn Recruiter n’est pas encore supportée pour l’aperçu de profil.";
-      } else {
-        state.profile = response?.profile || null;
-        state.profileStatus = response?.status || (state.profile ? "ready" : "error");
-        if (response?.message) state.profileStatusMessage = response.message;
-        if (state.profileStatus === "ready") state.profileStatusMessage = "";
-        if (state.profileStatus === "error" && !state.profileStatusMessage) {
-          state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-        }
-      }
+      state.profile = response.data;
+      state.profileStatus = "ready";
+      state.profileStatusMessage = "";
     }
 
     renderProfileCard(state.profile);
@@ -410,7 +385,7 @@ async function refreshProfileFromTab() {
     console.error("[Focals][POPUP] Profil indisponible", err);
     state.profile = null;
     state.profileStatus = "error";
-    state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+    state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
     renderProfileCard(null);
   }
 }
@@ -435,26 +410,17 @@ async function forceRescrapeProfile() {
     if (!activeTab?.id || !activeTab.url || !isLinkedinProfileContext(activeTab.url)) {
       state.profile = null;
       state.profileStatus = "error";
-      state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+      state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
       renderProfileCard(null);
       return;
     }
     state.profileStatus = "loading";
     renderProfileCard(state.profile);
-    chrome.tabs.sendMessage(activeTab.id, { type: "FOCALS_FORCE_RESCRAPE" }, () => {
-      if (chrome.runtime.lastError) {
-        console.warn("[Focals][POPUP] Force rescrape error:", chrome.runtime.lastError.message);
-        state.profileStatus = "error";
-        state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
-        renderProfileCard(null);
-        return;
-      }
-      setTimeout(() => refreshProfileFromTab(), 200);
-    });
+    await refreshProfileFromTab();
   } catch (err) {
     console.error("[Focals][POPUP] Force rescrape failed", err);
     state.profileStatus = "error";
-    state.profileStatusMessage = "Cette page LinkedIn n’est pas encore supportée par Focals.";
+    state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
     renderProfileCard(null);
   }
 }
@@ -466,7 +432,7 @@ async function handleAssociateProfile() {
     return;
   }
   if (!state.supabaseSession?.access_token) {
-    if (status) status.textContent = "Utilisateur non authentifié — connecte-toi sur l'app web.";
+    if (status) status.textContent = "Utilisateur non authentifié - connecte-toi sur l'app web.";
     return;
   }
   const userId = state.userId || (await getOrCreateUserId());
@@ -507,7 +473,11 @@ function setupProfileActions() {
             }
 
             if (response && response.status === "success" && response.data) {
-              displayProfileData(response.data);
+              state.profile = response.data;
+              state.profileStatus = "ready";
+              state.profileStatusMessage = "";
+              displayProfileData(state.profile);
+              renderProfileCard(state.profile);
               statusEl.innerText = "Scrape V14 terminé ! ✅";
             } else {
               statusEl.innerText = response?.error || "Échec du scrape. ❌";

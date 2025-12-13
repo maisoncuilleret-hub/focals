@@ -1,4 +1,5 @@
 import { API_BASE_URL, IS_DEV } from './config.js';
+import { SUPABASE_ANON_KEY } from '../../supabase-client.js';
 
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
 
@@ -17,7 +18,11 @@ async function postJson(endpoint, payload) {
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    },
     body: JSON.stringify(payload ?? {}),
   });
 
