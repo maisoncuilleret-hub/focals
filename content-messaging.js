@@ -992,6 +992,23 @@ console.log(
           align-items: center;
           gap: 6px;
         }
+        .focals-trigger.is-loading {
+          cursor: wait;
+          opacity: 0.9;
+        }
+        .focals-trigger:disabled {
+          opacity: 0.8;
+          cursor: not-allowed;
+        }
+        .focals-trigger .focals-loader {
+          display: none;
+        }
+        .focals-trigger.is-loading .focals-loader {
+          display: inline-block;
+        }
+        .focals-trigger.is-loading .focals-caret {
+          display: none;
+        }
         .focals-trigger:hover {
           background: #2f7dfc;
         }
@@ -1028,6 +1045,96 @@ console.log(
         .focals-item:hover {
           background: rgba(255, 255, 255, 0.06);
         }
+        .focals-loader {
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          border: 2px solid rgba(255, 255, 255, 0.6);
+          border-top-color: #fff;
+          animation: focals-spin 0.8s linear infinite;
+        }
+        @keyframes focals-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .focals-dialog-backdrop {
+          position: fixed;
+          inset: 0;
+          display: none;
+          align-items: center;
+          justify-content: center;
+          background: rgba(4, 9, 20, 0.55);
+          backdrop-filter: blur(2px);
+          z-index: 2147483647;
+          padding: 16px;
+        }
+        .focals-dialog-backdrop.open {
+          display: flex;
+        }
+        .focals-dialog {
+          width: min(420px, 100%);
+          background: #0f1b32;
+          border: 1px solid #1b2945;
+          border-radius: 16px;
+          padding: 18px 16px;
+          color: #e9edf5;
+          box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+        }
+        .focals-dialog h3 {
+          margin: 0 0 6px;
+          font-size: 16px;
+        }
+        .focals-dialog p {
+          margin: 0 0 12px;
+          color: #b6c2dc;
+          font-size: 14px;
+          line-height: 1.5;
+        }
+        .focals-dialog textarea {
+          width: 100%;
+          min-height: 90px;
+          resize: vertical;
+          background: #0a1328;
+          color: #f6f8ff;
+          border: 1px solid #1f3055;
+          border-radius: 10px;
+          padding: 10px;
+          font-family: inherit;
+          font-size: 14px;
+          outline: none;
+          transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        .focals-dialog textarea:focus {
+          border-color: #2f7dfc;
+          box-shadow: 0 0 0 3px rgba(47, 125, 252, 0.18);
+        }
+        .focals-dialog .focals-actions {
+          margin-top: 14px;
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+        }
+        .focals-dialog .focals-secondary {
+          background: transparent;
+          color: #e9edf5;
+          border: 1px solid #1f3055;
+        }
+        .focals-dialog button {
+          border: none;
+          border-radius: 12px;
+          padding: 10px 14px;
+          font-weight: 600;
+          cursor: pointer;
+          background: #2f7dfc;
+          color: #fff;
+          transition: background 0.2s ease, transform 0.1s ease;
+        }
+        .focals-dialog button:hover {
+          background: #4a8bff;
+        }
+        .focals-dialog button:active {
+          transform: translateY(1px);
+        }
       `;
 
       const wrapper = document.createElement("div");
@@ -1036,31 +1143,132 @@ console.log(
       const trigger = document.createElement("button");
       trigger.className = "focals-trigger";
       trigger.type = "button";
-      trigger.textContent = "Smart Reply";
+      const label = document.createElement("span");
+      label.className = "focals-label";
+      label.textContent = "Smart Reply";
+      trigger.appendChild(label);
 
       const caret = document.createElement("span");
+      caret.className = "focals-caret";
       caret.textContent = "▾";
       trigger.appendChild(caret);
+
+      const loader = document.createElement("span");
+      loader.className = "focals-loader";
+      trigger.appendChild(loader);
 
       const menu = document.createElement("div");
       menu.className = "focals-menu";
 
-      const addItem = (label, handler) => {
+      const setLoading = (isLoading) => {
+        trigger.classList.toggle("is-loading", isLoading);
+        trigger.disabled = isLoading;
+        trigger.setAttribute("aria-busy", isLoading ? "true" : "false");
+      };
+
+      const runWithLoader = async (cb) => {
+        setLoading(true);
+        try {
+          await cb();
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const openCustomReplyDialog = () => {
+        const backdrop = shadowRoot.querySelector(".focals-dialog-backdrop") || (() => {
+          const el = document.createElement("div");
+          el.className = "focals-dialog-backdrop";
+          el.innerHTML = `
+            <div class="focals-dialog" role="dialog" aria-modal="true">
+              <h3>Custom reply</h3>
+              <p>Ajoute des instructions personnalisées pour guider la réponse.</p>
+              <textarea placeholder="Ex: Adopte un ton chaleureux et mentionne notre dernière discussion."></textarea>
+              <div class="focals-actions">
+                <button type="button" class="focals-secondary">Annuler</button>
+                <button type="button" class="focals-primary">Valider</button>
+              </div>
+            </div>
+          `;
+          shadowRoot.appendChild(el);
+          return el;
+        })();
+
+        const textarea = backdrop.querySelector("textarea");
+        const cancelBtn = backdrop.querySelector(".focals-secondary");
+        const submitBtn = backdrop.querySelector(".focals-primary");
+
+        textarea.value = "";
+        backdrop.classList.add("open");
+        setTimeout(() => textarea.focus(), 0);
+
+        return new Promise((resolve) => {
+          const cleanup = () => {
+            backdrop.classList.remove("open");
+            cancelBtn.removeEventListener("click", onCancel);
+            submitBtn.removeEventListener("click", onSubmit);
+            backdrop.removeEventListener("click", onOutsideClick);
+            textarea.removeEventListener("keydown", onKeyDown);
+          };
+
+          const onCancel = () => {
+            cleanup();
+            resolve(null);
+          };
+
+          const onSubmit = () => {
+            const value = textarea.value.trim();
+            cleanup();
+            resolve(value);
+          };
+
+          const onOutsideClick = (event) => {
+            if (event.target === backdrop) {
+              onCancel();
+            }
+          };
+
+          const onKeyDown = (event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              onSubmit();
+            }
+          };
+
+          cancelBtn.addEventListener("click", onCancel);
+          submitBtn.addEventListener("click", onSubmit);
+          backdrop.addEventListener("click", onOutsideClick);
+          textarea.addEventListener("keydown", onKeyDown);
+        });
+      };
+
+      const addItem = (label, handler, { requiresInstructions = false } = {}) => {
         const item = document.createElement("button");
         item.type = "button";
         item.className = "focals-item";
         item.textContent = label;
-        item.addEventListener("click", () => {
+        item.addEventListener("click", async () => {
           menu.classList.remove("open");
           if (typeof handler === "function") {
-            handler(item);
+            if (requiresInstructions) {
+              const instructions = await openCustomReplyDialog();
+              if (instructions === null) return;
+              await runWithLoader(() => handler(trigger, instructions));
+              return;
+            }
+
+            await runWithLoader(() => handler(trigger));
           }
         });
         menu.appendChild(item);
       };
 
       addItem("Standard reply", options.onStandardReply);
-      addItem("Custom reply", options.onCustomReply);
+      addItem("Custom reply", options.onCustomReply, { requiresInstructions: true });
       addItem("Personalized follow-up", options.onPersonalizedFollowup);
 
       trigger.addEventListener("click", (event) => {
@@ -1230,11 +1438,7 @@ console.log(
               editorIndex: 1,
             });
           },
-          onCustomReply: async (buttonEl) => {
-            const instructions = window.prompt(
-              "Add custom reply instructions (optional)",
-              ""
-            );
+          onCustomReply: async (buttonEl, instructions) => {
             await runSuggestReplyPipeline({
               button: buttonEl,
               conversationRoot: conversationRoot || document,
