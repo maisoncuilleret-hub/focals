@@ -10,49 +10,18 @@
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-        const nameEl = await waitForElement("h1, .text-heading-xlarge");
-        if (!nameEl) console.warn("%c[FOCALS] ⚠️ Nom non détecté après timeout. Continuation...", "color:orange;");
-
-        const sduiScraper =
-          window.__FocalsLinkedinSduiScraper && window.__FocalsLinkedinSduiScraper.scrapeFromDom
-            ? window.__FocalsLinkedinSduiScraper.scrapeFromDom
-            : null;
-
-        const sdui = sduiScraper ? await sduiScraper() : null;
-
-        if (sdui && (sdui.fullName || sdui.name)) {
-          const normalizedPhoto = sdui.photoUrl || sdui.photo_url || "";
-          const normalizedLinkedinUrl =
-            sdui.linkedinUrl || sdui.linkedin_url || window.location.href.split("?")[0];
-
-          const normalizedProfile = {
-            ...sdui,
-            name: sdui.fullName || sdui.name || "",
-            headline: sdui.headline || sdui.current_title || "",
-            localisation: sdui.location || sdui.localisation || "",
-            photoUrl: normalizedPhoto,
-            photo_url: normalizedPhoto,
-            profileImageUrl: normalizedPhoto,
-            linkedinUrl: normalizedLinkedinUrl,
-            linkedin_url: normalizedLinkedinUrl,
-            linkedinProfileUrl: normalizedLinkedinUrl,
-            experiences: sdui.experiences || [],
-            current_title: sdui.current_title || sdui.experiences?.[0]?.title || "",
-            current_company: sdui.current_company || sdui.experiences?.[0]?.company || "",
-            source: "focals-sdui-scraper"
-          };
-
-          chrome.storage.local.set({ "FOCALS_LAST_PROFILE": normalizedProfile });
-
-          if (window.updateFocalsPanel && typeof window.updateFocalsPanel === "function") {
-              window.updateFocalsPanel(normalizedProfile);
-          }
-
-          return normalizedProfile;
-        }
-
-        // 1. Trouver la section (Ancrage V13 - Utilise le nouveau waitForExperienceSection)
-        let expSection = await waitForExperienceSection();
+  const uniq = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) {
+      const v = clean(x);
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  };
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const canonicalProfileUrl = (u) => {
@@ -542,137 +511,15 @@
         if (chrome?.storage?.local) {
           chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
         }
-        
-        console.log(`%c[FOCALS] 🔎 ${allItems.length} rôles individuels détectés après traitement d'héritage.`, "color:yellowgreen;");
-        
-        // 3. Parsing Heuristique Final
-        const textSelectors = "h3, .t-bold, .text-body-medium, span[aria-hidden='true'], p, span";
-        
-        const experiences = allItems.map((item, index) => {
-            
-            // 1. Détection d'Entreprise (Logo > Héritage > Fallback)
-            let company = getCompanyFromLogo(item); 
-            if (!company) company = item.getAttribute('data-focals-inherited-company');
-            
-            // Fallback pour Self-employed / Indépendant
-            const texts = item.innerText;
-            if (texts.includes("Self-employed") && !company) company = "Self-employed";
-            if (texts.includes("Indépendant") && !company) company = "Indépendant";
-            if (!company) company = "Non détectée";
+      } catch (err) {
+        warn("Unable to persist profile", err);
+      }
 
-            
-            // 2. Extraction du Texte
-            let title = '';
-            let contract = '';
-            let dates = '';
-            let location = '';
-            const descriptionTexts = []; // Pour stocker les longues descriptions
-
-            const localElements = [...item.querySelectorAll(textSelectors)];
-            const localTexts = localElements.map(p => cleanText(p.innerText)).filter(t => t.length > 0 && t !== company && t !== item.getAttribute('aria-label'));
-            
-            if (localTexts.length === 0) return null;
-
-            // PARSING HEURISTIQUE
-            const candidates = [...localTexts];
-
-            for (let i = 0; i < candidates.length; i++) {
-                const text = candidates[i];
-                const detectedContract = detectContract(text);
-                
-                // Si le texte est très long, c'est une description, on l'ignore pour la metadata
-                if (text.length > 100) {
-                    descriptionTexts.push(text);
-                    continue; 
-                }
-                
-                // Détection de Contrat
-                if (detectedContract && !contract) { 
-                    contract = detectedContract; 
-                    continue; 
-                }
-                
-                // Détection de Date
-                if (isDateRange(text) && !dates) { 
-                    dates = text; 
-                    continue; 
-                }
-                
-                // Détection de Lieu - FIX V14 : Ajout d'une condition de longueur pour éviter la description
-                if (isLocation(text) && !location) { 
-                    if (text.length < 50) { // Un lieu ne devrait pas être trop long
-                        location = text; 
-                    }
-                    continue; 
-                }
-                
-                // Détection de Titre (le plus important)
-                if (!title) {
-                    const isMetadata = isDateRange(text) || detectedContract || text === company;
-                    // Le titre doit être court, apparaître dans les deux premiers éléments
-                    if (i < 2 && !isMetadata && text.length > 5) { 
-                        title = text;
-                        continue;
-                    }
-                }
-            }
-            
-            // Fallback pour le titre
-            if (!title) title = localTexts.find(t => t.length > 5 && !isDateRange(t) && !detectContract(t) && !isLocation(t) && t !== company) || "Titre inconnu";
-
-            // Nettoyage final du titre si c'est la description (pour le cas Freelance Index 1)
-            if (title.length > 100) {
-                 // Si le titre est encore la description, on le tronque pour garder une apparence de titre
-                 title = title.substring(0, 100).trim() + "...";
-            }
-            
-            // Cas spécial où le titre est le nom de la compagnie
-            if (title === company && candidates.length > 1) {
-                 const nextTitle = candidates.find(t => t !== company && !isDateRange(t) && !detectContract(t) && !isLocation(t));
-                 if (nextTitle) title = nextTitle;
-            }
-
-            // Remonter les descriptions longues
-            const finalDescription = descriptionTexts.join('\n\n').trim();
-
-            return {
-                title: title,
-                company: company,
-                contract_type: contract || "Non spécifié",
-                dates: dates,
-                location: location || "Non spécifié",
-                description: finalDescription || item.innerText.substring(0, 150) + "..."
-            };
-
-        }).filter(Boolean);
-
-
-        // --- C. INFOS GLOBALES & IMAGE PROFIL ---
-        const imgEl = document.querySelector("img.pv-top-card-profile-picture__image--show") || 
-                      document.querySelector(".pv-top-card-profile-picture__image") || 
-                      document.querySelector("img[class*='profile-picture']"); 
-                      
-        const mainEl = document.querySelector("main") || document.body;
-
-        const result = {
-          name: nameEl ? cleanText(nameEl.innerText) : cleanText(mainEl.querySelector("h1")?.innerText || document.title.split("|")[0]),
-          headline: document.querySelector(".text-body-medium")?.innerText.trim() || "",
-          localisation: document.querySelector(".text-body-small.inline")?.innerText.trim() || "",
-          profileImageUrl: imgEl ? imgEl.src : "",
-          experiences: experiences,
-          current_job: experiences[0] || {},
-          current_company: experiences[0]?.company || "-",
-          linkedinProfileUrl: window.location.href.split("?")[0],
-          source: "focals-scraper-v14-production" // Mise à jour de la version
-        };
-
-        console.log(`%c[FOCALS] ✅ SCRAPING TERMINÉ. Experiences trouvées: ${experiences.length}`, "background: green; color: white;", result);
-
-        // --- D. ENVOI DES DONNÉES À L'UI ---
-        chrome.storage.local.set({ "FOCALS_LAST_PROFILE": result });
-        
-        if (window.updateFocalsPanel && typeof window.updateFocalsPanel === 'function') {
-            window.updateFocalsPanel(result);
+      if (typeof window.updateFocalsPanel === "function") {
+        try {
+          window.updateFocalsPanel(normalized);
+        } catch (err) {
+          warn("updateFocalsPanel failed", err);
         }
       }
     }

@@ -39,20 +39,34 @@ console.log(
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { type: "API_REQUEST", endpoint, method, body, params },
-        (response) => {
+      const payload = { type: "API_REQUEST", endpoint, method, body, params };
+
+      const sendWithRetry = (attempt = 1) => {
+        chrome.runtime.sendMessage(payload, (response) => {
           if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
+            const message = chrome.runtime.lastError.message || "Runtime messaging failed";
+
+            // The background service worker can be torn down between attempts, which triggers
+            // "Extension context invalidated.". Retry once to give Chrome time to revive it.
+            if (attempt < 2 && /Extension context invalidated/i.test(message)) {
+              setTimeout(() => sendWithRetry(attempt + 1), 75);
+              return;
+            }
+
+            reject(new Error(message));
             return;
           }
+
           if (!response?.ok) {
             reject(new Error(response?.error || "API request failed"));
             return;
           }
+
           resolve(response.data);
-        }
-      );
+        });
+      };
+
+      sendWithRetry();
     });
   }
 
