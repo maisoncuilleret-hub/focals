@@ -174,9 +174,17 @@ function renderProfileCard(profile) {
   const status = document.getElementById("profileStatus");
   const experiencesList = document.getElementById("experiencesList");
   const experiencesMeta = document.getElementById("experiencesMeta");
+  const educationList = document.getElementById("educationList");
+  const educationMeta = document.getElementById("educationMeta");
+  const skillsList = document.getElementById("skillsList");
+  const skillsMeta = document.getElementById("skillsMeta");
   if (status) status.textContent = "";
   if (experiencesList) experiencesList.innerHTML = "";
   if (experiencesMeta) experiencesMeta.textContent = "";
+  if (educationList) educationList.innerHTML = "";
+  if (educationMeta) educationMeta.textContent = "";
+  if (skillsList) skillsList.innerHTML = "";
+  if (skillsMeta) skillsMeta.textContent = "";
   if (!card) return;
   card.innerHTML = "";
 
@@ -307,6 +315,61 @@ function renderProfileCard(profile) {
         }
 
         experiencesList.appendChild(row);
+      });
+    }
+  }
+
+  const education = profile.education || [];
+  if (educationMeta) {
+    educationMeta.textContent = `${education.length || 0} formation(s)`;
+  }
+
+  if (educationList) {
+    if (!education.length) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Aucune formation détectée.";
+      educationList.appendChild(empty);
+    } else {
+      education.forEach((ed) => {
+        const row = document.createElement("div");
+        row.className = "experience-row";
+
+        const header = document.createElement("div");
+        header.className = "profile-sub";
+        const headerParts = [ed.degree, ed.school].filter(Boolean);
+        header.textContent = headerParts.join(" · ");
+        row.appendChild(header);
+
+        if (ed.dates) {
+          const details = document.createElement("div");
+          details.className = "profile-meta";
+          details.textContent = ed.dates;
+          row.appendChild(details);
+        }
+
+        educationList.appendChild(row);
+      });
+    }
+  }
+
+  const skills = profile.skills || [];
+  if (skillsMeta) {
+    skillsMeta.textContent = `${skills.length || 0} compétence(s)`;
+  }
+
+  if (skillsList) {
+    if (!skills.length) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Aucune compétence détectée.";
+      skillsList.appendChild(empty);
+    } else {
+      skills.forEach((skill) => {
+        const chip = document.createElement("span");
+        chip.className = "pill-inline";
+        chip.textContent = skill;
+        skillsList.appendChild(chip);
       });
     }
   }

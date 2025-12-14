@@ -50,6 +50,72 @@
     return parts.join(" <- ");
   }
 
+  function normText(s) {
+    return clean(s || "");
+  }
+
+  const textContent = (el) => normText(el?.textContent);
+
+  const findSectionByAnchorId = (id) => {
+    const anchor = document.querySelector(`#${CSS.escape(id)}`);
+    if (!anchor) return null;
+    return anchor.closest("section") || anchor.parentElement?.closest("section") || null;
+  };
+
+  const findSectionByTitle = (title) => {
+    const h2s = [...document.querySelectorAll("h2")];
+    const h2 = h2s.find((x) => textContent(x).toLowerCase() === title.toLowerCase());
+    return h2?.closest("section") || null;
+  };
+
+  function parseEducation() {
+    const section = findSectionByAnchorId("education") || findSectionByTitle("Formation");
+
+    if (!section) return [];
+
+    const lis = [...section.querySelectorAll("li.artdeco-list__item")];
+    const out = [];
+
+    for (const li of lis) {
+      if (/Afficher les/i.test(textContent(li))) continue;
+
+      const school =
+        textContent(li.querySelector("a[href*='/company/'] .t-bold span[aria-hidden='true']")) ||
+        textContent(li.querySelector("a[href*='/company/'] .t-bold")) ||
+        textContent(li.querySelector(".t-bold span[aria-hidden='true']")) ||
+        "";
+
+      const degree = textContent(li.querySelector(".t-14.t-normal span[aria-hidden='true']")) || "";
+
+      const dates = textContent(li.querySelector(".pvs-entity__caption-wrapper")) || "";
+
+      if (!school) continue;
+
+      out.push({ school, degree, dates });
+    }
+
+    const seen = new Set();
+    return out.filter((e) => {
+      const key = `${e.school}|${e.degree}|${e.dates}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function parseSkills() {
+    const section = findSectionByAnchorId("skills") || findSectionByTitle("Compétences");
+
+    if (!section) return [];
+
+    const links = [...section.querySelectorAll("a[data-field='skill_card_skill_topic']")];
+    const skills = links
+      .map((a) => textContent(a.querySelector("span[aria-hidden='true']")) || textContent(a))
+      .filter(Boolean);
+
+    return [...new Set(skills)];
+  }
+
   // ---------------- Top card ----------------
   function pickBestProfileRoot() {
     return (
@@ -439,6 +505,8 @@
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
     const linkedinUrl = canonicalProfileUrl(href);
+    const education = parseEducation();
+    const skills = parseSkills();
 
     const ready = await waitForExperienceReady(6500);
 
@@ -452,6 +520,8 @@
       linkedinUrl,
       relationDegree,
       experiences: ready.collected.experiences,
+      education,
+      skills,
       debug: {
         experienceRootMode: ready.pick.mode,
         experienceCollectionMode: ready.collected.mode,
@@ -545,6 +615,14 @@
       end: null,
     }));
 
+    const education = (res.education || []).map((ed) => ({
+      school: ed.school || null,
+      degree: ed.degree || null,
+      dates: ed.dates || null,
+    }));
+
+    const skills = uniq(res.skills || []);
+
     const current_title = experiences[0]?.title || null;
     const current_company = experiences[0]?.company || null;
 
@@ -554,6 +632,8 @@
       photoUrl: res.photoUrl || null,
       linkedinUrl: res.linkedinUrl || canonicalProfileUrl(location.href),
       experiences,
+      education,
+      skills,
       name: res.fullName || null,
       headline: null,
       location: null,

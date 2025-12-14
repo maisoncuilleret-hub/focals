@@ -37,6 +37,7 @@
     .experiences-list { margin-top: 6px; max-height: 160px; overflow: auto; font-size: 12px; }
     .experience-row { padding: 6px 0; border-top: 1px solid rgba(0,0,0,0.08); }
     .experience-row:first-child { border-top: 0; }
+    .skills-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -58,6 +59,16 @@
       <div class="label">Expériences</div>
       <div id="experiencesMeta" class="value"></div>
       <div id="experiencesList" class="experiences-list"></div>
+    </div>
+    <div class="section">
+      <div class="label">Formations</div>
+      <div id="educationMeta" class="value"></div>
+      <div id="educationList" class="experiences-list"></div>
+    </div>
+    <div class="section">
+      <div class="label">Compétences</div>
+      <div id="skillsMeta" class="value"></div>
+      <div id="skillsList" class="skills-list"></div>
     </div>
     <div class="row" style="margin-top:10px; gap:8px; align-items:center;">
       <button id="refreshProfile" class="secondary" style="flex:1">Rafraîchir</button>
