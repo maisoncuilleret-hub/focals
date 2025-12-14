@@ -1,20 +1,37 @@
-export const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
-export const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+import BatchSupabaseClient, { loadStoredToken } from "./src/api/supabaseClient.js";
+import { createLogger, redactPayload } from "./src/utils/logger.js";
 
+const logger = createLogger("Supabase");
+export const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
 const SESSION_STORAGE_KEY = "focals_supabase_session";
 const LOCALSTORAGE_SUPABASE_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
+
+const batchClient = new BatchSupabaseClient({
+  url: SUPABASE_URL,
+  anonKeyLoader: async () => {
+    const stored = await loadStoredToken();
+    return stored || "";
+  },
+});
+
+function sanitizeSession(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    access_token: raw.access_token || raw.accessToken || "",
+    refresh_token: raw.refresh_token || raw.refreshToken || "",
+    user: raw.user || null,
+  };
+}
 
 function readLocalStorageSession() {
   try {
     const raw =
       (typeof localStorage !== "undefined" &&
-        (localStorage.getItem(SESSION_STORAGE_KEY) ||
-          localStorage.getItem(LOCALSTORAGE_SUPABASE_KEY))) ||
+        (localStorage.getItem(SESSION_STORAGE_KEY) || localStorage.getItem(LOCALSTORAGE_SUPABASE_KEY))) ||
       null;
-    return raw ? JSON.parse(raw) : null;
+    return raw ? sanitizeSession(JSON.parse(raw)) : null;
   } catch (e) {
-    console.warn("[Focals][Supabase] Unable to read localStorage session", e);
+    logger.warn("Unable to read local storage session", redactPayload(e?.message || e));
     return null;
   }
 }
@@ -24,29 +41,29 @@ async function getStoredSession() {
     return new Promise((resolve) => {
       try {
         chrome.storage.local.get(SESSION_STORAGE_KEY, (res) => {
-          resolve(res?.[SESSION_STORAGE_KEY] || null);
+          resolve(sanitizeSession(res?.[SESSION_STORAGE_KEY]));
         });
       } catch (e) {
-        console.warn("[Focals][Supabase] chrome.storage unavailable", e);
-        resolve(null);
+        logger.warn("chrome.storage unavailable", redactPayload(e?.message || e));
+        resolve(readLocalStorageSession());
       }
     });
   }
-
   return readLocalStorageSession();
 }
 
-function buildHeaders(session, extra = {}) {
-  const token = session?.access_token || SUPABASE_ANON_KEY;
+async function buildHeaders(session, extra = {}) {
+  const fallbackToken = await loadStoredToken();
+  const token = session?.access_token || fallbackToken || "";
   return {
-    apikey: SUPABASE_ANON_KEY,
-    Authorization: `Bearer ${token}`,
+    apikey: token,
+    Authorization: token ? `Bearer ${token}` : "",
     "Content-Type": "application/json",
     ...extra,
   };
 }
 
-async function fetchJson(url, options = {}) {
+async function fetchJson(url, options = {}, attempt = 0) {
   const response = await fetch(url, options);
   const contentType = response.headers.get("content-type") || "";
   const body = contentType.includes("application/json")
@@ -54,6 +71,12 @@ async function fetchJson(url, options = {}) {
     : await response.text().catch(() => "");
 
   if (!response.ok) {
+    const retryable = [429, 503].includes(response.status);
+    if (retryable && attempt < 3) {
+      const delay = Math.min(5000, 500 * 2 ** attempt);
+      await new Promise((r) => setTimeout(r, delay));
+      return fetchJson(url, options, attempt + 1);
+    }
     const message = typeof body === "string" && body ? body : `HTTP ${response.status}`;
     return { ok: false, data: null, error: new Error(message), status: response.status };
   }
@@ -66,7 +89,7 @@ async function rpc(fn, params = {}) {
   const url = `${SUPABASE_URL}/rest/v1/rpc/${fn}`;
   const { ok, data, error } = await fetchJson(url, {
     method: "POST",
-    headers: buildHeaders(session),
+    headers: await buildHeaders(session),
     body: JSON.stringify(params ?? {}),
   });
   return { data: ok ? data : null, error };
@@ -80,9 +103,12 @@ function from(table) {
       const prefer = options?.returning ? `return=${options.returning}` : "return=minimal";
       const { ok, data, error } = await fetchJson(url, {
         method: "POST",
-        headers: buildHeaders(session, { Prefer: prefer }),
+        headers: await buildHeaders(session, { Prefer: prefer }),
         body: JSON.stringify(payload ?? {}),
       });
+      if (ok) {
+        batchClient.enqueue({ path: table, payload });
+      }
       return { data: ok ? data : null, error };
     },
   };
@@ -108,6 +134,7 @@ const supabase = {
   },
   rpc,
   from,
+  queue: batchClient,
 };
 
 export default supabase;
