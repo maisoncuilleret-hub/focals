@@ -224,10 +224,21 @@
     return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
   }
 
+  // FIX: plus strict + garde-fou longueur, pour éviter de prendre une description comme "Lieu"
   function looksLikeLocation(s) {
     const t = clean(s);
     if (!t) return false;
-    return /(sur site|hybride|à distance|remote|on[- ]site|région|region|france|,)/i.test(t);
+    if (t.length > 120) return false;
+
+    // patterns typiques LinkedIn
+    const hasWorkMode = /(sur site|hybride|à distance|remote|on[- ]site)/i.test(t);
+    const hasGeo =
+      /(france|paris|île-de-france|ile-de-france|région|region|london|berlin|madrid|barcelona|bruxelles|brussels|amsterdam|lisbon|lisbonne)/i.test(
+        t
+      );
+
+    // si aucun signal géographique, on rejette
+    return hasWorkMode || hasGeo;
   }
 
   function bestUlForLegacy(expSection) {
@@ -290,10 +301,8 @@
 
     lightSpans = uniq(lightSpans);
 
-    const location =
-      lightSpans.find((t) => looksLikeLocation(t) && t !== dates) ||
-      lightSpans.find((t) => t !== dates) ||
-      null;
+    // FIX: plus de fallback "random span"
+    const location = lightSpans.find((t) => looksLikeLocation(t) && t !== dates) || null;
 
     const ok = !!(title && company && dates);
     return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
