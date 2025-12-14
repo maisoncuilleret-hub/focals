@@ -1,5 +1,6 @@
 import { API_BASE_URL, IS_DEV } from './config';
-import { SUPABASE_ANON_KEY } from '../../supabase-client.js';
+import { loadStoredToken } from './supabaseClient';
+import { createLogger } from '../utils/logger';
 
 export type ToneType = 'very_formal' | 'professional' | 'warm' | 'direct';
 export type LanguageType = 'fr' | 'en';
@@ -79,6 +80,7 @@ export interface GenerateReplyResponse {
 const TALENTBASE_API_URL =
   'https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer';
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
+const logger = createLogger('FocalsApi');
 
 const buildApiUrl = (endpoint = '') => {
   const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
@@ -89,16 +91,16 @@ const buildApiUrl = (endpoint = '') => {
 async function postJson<TResponse>(endpoint: string, payload: unknown): Promise<TResponse> {
   const url = buildApiUrl(endpoint);
 
+  const token = await loadStoredToken();
   if (IS_DEV) {
-    console.log('[FOCALS][API][REQUEST]', { url, payload });
+    logger.debug('REQUEST', { url, hasPayload: Boolean(payload) });
   }
 
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      ...(token ? { apikey: token, Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(payload ?? {}),
   });
@@ -110,13 +112,13 @@ async function postJson<TResponse>(endpoint: string, payload: unknown): Promise<
     const errorDetail = (body as any)?.error || (body as any)?.message || (typeof body === 'string' && body ? body : '');
     const message = errorDetail ? `HTTP ${res.status}: ${errorDetail}` : `HTTP ${res.status}`;
     if (IS_DEV) {
-      console.error('[FOCALS][API][ERROR]', { url, status: res.status, message, payload });
+      logger.debug('ERROR', { url, status: res.status, message });
     }
     throw new Error(message);
   }
 
   if (IS_DEV) {
-    console.log('[FOCALS][API][RESPONSE]', { url, status: res.status });
+    logger.debug('RESPONSE', { url, status: res.status });
   }
 
   return body as TResponse;

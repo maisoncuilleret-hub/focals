@@ -1,11 +1,17 @@
-(() => {
+(async () => {
   if (window !== window.top) return;
-  const TAG = "🧪 FOCALS CONSOLE";
-  const DEBUG = false;
+  const { createLogger } = await import(chrome.runtime.getURL("src/utils/logger.js"));
+  const { ScrapeController, ScrapeState } = await import(
+    chrome.runtime.getURL("src/scrape/ScrapeController.js")
+  );
+  const { createDomObserver, listenToNavigation } = await import(
+    chrome.runtime.getURL("src/scrape/domObservers.js")
+  );
 
-  const log = (...a) => console.log(TAG, ...a);
-  const dlog = (...a) => DEBUG && console.log(TAG, ...a);
-  const warn = (...a) => console.warn(TAG, ...a);
+  const logger = createLogger("FocalsContent");
+  const log = (...a) => logger.info(...a);
+  const dlog = (...a) => logger.debug(...a);
+  const warn = (...a) => logger.warn(...a);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -521,7 +527,7 @@
 
     window.__FOCALS_LAST = result;
 
-    log(`AUTORUN (${reason})`, {
+    dlog(`SCRAPE (${reason})`, {
       fullName: result.fullName,
       relationDegree: result.relationDegree,
       photoUrl: result.photoUrl,
@@ -530,9 +536,10 @@
     });
 
     if (!result.experiences.length) {
-      warn("No experiences parsed. Debug:", result.debug);
+      warn("No experiences parsed");
     } else {
-      console.table(
+      dlog(
+        "EXPERIENCES",
         result.experiences.map((e) => ({
           Titre: e.Titre,
           Entreprise: e.Entreprise,
@@ -602,61 +609,101 @@
     return normalized || raw;
   }
 
-  function scheduleRun(reason) {
-    if (window.__FOCALS_TIMER) clearTimeout(window.__FOCALS_TIMER);
-    window.__FOCALS_TIMER = setTimeout(() => handleScrape(reason), 350);
+  const controller = new ScrapeController({
+    onScrape: (reason) => handleScrape(reason),
+    onStateChange: (state) => updateControls(state),
+  });
+
+  let domObserver = null;
+
+  function updateControls(state) {
+    updateButton(state);
+    if (state === ScrapeState.RUNNING) {
+      startObserver();
+    } else {
+      stopObserver();
+    }
   }
 
-  function installSpaWatcher() {
-    if (window.__FOCALS_WATCHER_INSTALLED) return;
-    window.__FOCALS_WATCHER_INSTALLED = true;
-
-    let lastHref = location.href;
-
-    const patch = (fnName) => {
-      const orig = history[fnName];
-      if (!orig || orig.__FOCALS_PATCHED) return;
-      history[fnName] = function () {
-        const ret = orig.apply(this, arguments);
-        window.dispatchEvent(new Event("focals:navigation"));
-        return ret;
-      };
-      history[fnName].__FOCALS_PATCHED = true;
-    };
-    patch("pushState");
-    patch("replaceState");
-
-    window.addEventListener("popstate", () => window.dispatchEvent(new Event("focals:navigation")));
-    window.addEventListener("focals:navigation", () => {
-      if (location.href !== lastHref) {
-        lastHref = location.href;
-        scheduleRun("spa_navigation");
-      }
+  function startObserver() {
+    stopObserver();
+    domObserver = createDomObserver({
+      targetSelector: "main",
+      debounceMs: 600,
+      onStable: (reason) => controller.trigger(reason || "mutation"),
     });
-
-    const obs = new MutationObserver(() => {
-      if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-
-    log("SPA watcher installed");
+    domObserver.start();
   }
+
+  function stopObserver() {
+    if (domObserver) domObserver.stop();
+    domObserver = null;
+  }
+
+  listenToNavigation((reason) => controller.trigger(reason || "navigation"));
 
   function dump() {
     const v = window.__FOCALS_LAST || null;
-    log("Last JSON:", v);
+    log("Last JSON:", v ? "cached" : "none");
     return v;
   }
 
+  function updateButton(state) {
+    const btn = document.getElementById("focals-control-btn");
+    if (!btn) return;
+    const labels = {
+      [ScrapeState.IDLE]: "Focals: prêt",
+      [ScrapeState.RUNNING]: "Focals: scraping…",
+      [ScrapeState.PAUSED]: "Focals: en pause",
+      [ScrapeState.STOPPED]: "Focals: stoppé",
+      [ScrapeState.ERROR]: "Focals: erreur",
+    };
+    btn.textContent = labels[state] || "Focals";
+  }
+
+  function installButton() {
+    if (document.getElementById("focals-control-btn")) return;
+    const btn = document.createElement("button");
+    btn.id = "focals-control-btn";
+    btn.type = "button";
+    btn.textContent = "Focals: prêt";
+    btn.style.position = "fixed";
+    btn.style.bottom = "16px";
+    btn.style.right = "16px";
+    btn.style.zIndex = 2147483646;
+    btn.style.padding = "8px 12px";
+    btn.style.background = "#0a66c2";
+    btn.style.color = "#fff";
+    btn.style.border = "none";
+    btn.style.borderRadius = "8px";
+    btn.style.boxShadow = "0 2px 6px rgba(0,0,0,0.2)";
+    btn.style.cursor = "pointer";
+    btn.onclick = () => {
+      if (controller.state === ScrapeState.RUNNING) {
+        controller.stop();
+      } else {
+        controller.start();
+        controller.trigger("user");
+      }
+      updateButton(controller.state);
+    };
+    document.body.appendChild(btn);
+  }
+
   window.FOCALS = {
-    run: () => scheduleRun("manual_call"),
+    run: () => {
+      controller.start();
+      controller.trigger("manual_call");
+    },
     dump,
+    stop: () => controller.stop(),
   };
 
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request?.action === "SCRAPE_PROFILE") {
-        handleScrape("message_request").then((data) => sendResponse({ status: "success", data }));
+        controller.start();
+        controller.trigger("message_request").then((data) => sendResponse({ status: "success", data }));
         return true;
       }
       if (request?.action === "PING") {
@@ -666,7 +713,6 @@
     });
   }
 
-  log("Ready. Autorun enabled. Also available:", "FOCALS.dump()", "FOCALS.run()");
-  installSpaWatcher();
-  scheduleRun("init");
+  log("Ready. Click the Focals button to scrape.");
+  installButton();
 })();

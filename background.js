@@ -1,19 +1,13 @@
-import supabase, { SUPABASE_ANON_KEY } from "./supabase-client.js";
+import supabase from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
+import { createLogger } from "./src/utils/logger.js";
 
+const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
-  try {
-    if (typeof details === "string") {
-      console.log(`[Focals][${stage}]`, details);
-    } else {
-      console.log(`[Focals][${stage}]`, JSON.stringify(details, null, 2));
-    }
-  } catch (e) {
-    console.log(`[Focals][${stage}]`, details);
-  }
+  logger.debug(stage, details);
 }
 
 const buildApiUrl = (endpoint = "") => {
@@ -30,15 +24,13 @@ async function resolveAuthHeaders(headers = {}) {
     const sessionToken = data?.session?.access_token || null;
 
     return {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: headers.Authorization || `Bearer ${sessionToken || SUPABASE_ANON_KEY}`,
+      Authorization: headers.Authorization || (sessionToken ? `Bearer ${sessionToken}` : ""),
       ...headers,
     };
   } catch (err) {
-    console.warn("[Focals][AUTH] Unable to resolve Supabase session, falling back to anon", err);
+    logger.warn("AUTH fallback", err?.message || err);
     return {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: headers.Authorization || `Bearer ${SUPABASE_ANON_KEY}`,
+      Authorization: headers.Authorization || "",
       ...headers,
     };
   }
