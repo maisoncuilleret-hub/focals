@@ -2,6 +2,11 @@
   const TAG = "🧪 FOCALS CONSOLE";
   const DEBUG = false;
 
+  // Ignore execution in iframes to avoid responding from ad/auxiliary frames
+  // when the popup asks for profile data. The top frame will still handle
+  // scraping and messaging.
+  if (window !== window.top) return;
+
   const log = (...a) => console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
