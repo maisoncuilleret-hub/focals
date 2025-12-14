@@ -2,6 +2,8 @@ import { API_BASE_URL, IS_DEV } from './config.js';
 import { SUPABASE_ANON_KEY } from '../../supabase-client.js';
 
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
+const TALENTBASE_API_URL =
+  'https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer';
 
 const buildApiUrl = (endpoint = '') => {
   const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
@@ -98,6 +100,36 @@ async function associateProfile(profile, accessToken, userId) {
   return res.json();
 }
 
+async function exportProfileToTalentBase(payload) {
+  const body = {
+    ...payload,
+    exportedAt: payload?.exportedAt || new Date().toISOString(),
+  };
+
+  const res = await fetch(TALENTBASE_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const responseBody = contentType.includes('application/json')
+    ? await res.json().catch(() => ({}))
+    : await res.text();
+
+  if (!res.ok) {
+    const errorMessage =
+      (responseBody && responseBody.error) ||
+      (typeof responseBody === 'string' && responseBody) ||
+      `HTTP ${res.status}`;
+    throw new Error(errorMessage);
+  }
+
+  return responseBody;
+}
+
 export {
   bootstrapUser,
   getAllData,
@@ -107,4 +139,5 @@ export {
   generateReply,
   generateFollowup,
   associateProfile,
+  exportProfileToTalentBase,
 };
