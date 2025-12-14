@@ -1,5 +1,4 @@
 (() => {
-  if (window !== window.top) return;
   const TAG = "🧪 FOCALS CONSOLE";
   const DEBUG = false;
 
@@ -290,21 +289,41 @@
     return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
   }
 
-  // FIX: plus strict + garde-fou longueur, pour éviter de prendre une description comme "Lieu"
+  function looksLikeEmploymentType(s) {
+    const t = clean(s);
+    if (!t) return false;
+    return /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i.test(
+      t
+    );
+  }
+
+  // strict, pour éviter de prendre une description comme "Lieu"
   function looksLikeLocation(s) {
     const t = clean(s);
     if (!t) return false;
     if (t.length > 120) return false;
 
-    // patterns typiques LinkedIn
     const hasWorkMode = /(sur site|hybride|à distance|remote|on[- ]site)/i.test(t);
     const hasGeo =
       /(france|paris|île-de-france|ile-de-france|région|region|london|berlin|madrid|barcelona|bruxelles|brussels|amsterdam|lisbon|lisbonne)/i.test(
         t
       );
 
-    // si aucun signal géographique, on rejette
     return hasWorkMode || hasGeo;
+  }
+
+  // fallback safe: "Six-fours les plages", "Nice", etc
+  function looksLikePlainLocationFallback(s) {
+    const t = clean(s);
+    if (!t) return false;
+    if (t.length > 80) return false;
+    if (looksLikeDates(t)) return false;
+    if (looksLikeEmploymentType(t)) return false;
+    if (/compétences|competences|skills/i.test(t)) return false;
+
+    // lettres + espaces + ponctuation "adresse" très simple
+    // exclut la plupart des descriptions (":", "+", chiffres, etc)
+    return /^[\p{L}\s,'’.\-]+$/u.test(t);
   }
 
   function bestUlForLegacy(expSection) {
@@ -324,54 +343,94 @@
     return { ul: best, score: bestScore };
   }
 
-  function parseLegacyExperienceLi(li, index) {
-    const entity = li.querySelector('div[data-view-name="profile-component-entity"]');
-    if (!entity)
-      return { _idx: index, _ok: false, Titre: null, Entreprise: null, Dates: null, Lieu: null };
-
-    const mainLink =
+  // ---------- Legacy parsing (support grouped experiences like "Amadeus" with nested roles) ----------
+  function pickMainEntityLink(entity) {
+    return (
       entity.querySelector('a.optional-action-target-wrapper.display-flex.flex-column.full-width[href]') ||
       Array.from(entity.querySelectorAll('a[href]')).find((a) => a.querySelector(".hoverable-link-text.t-bold")) ||
       entity.querySelector('a[href]') ||
-      null;
+      null
+    );
+  }
 
-    if (!mainLink)
-      return { _idx: index, _ok: false, Titre: null, Entreprise: null, Dates: null, Lieu: null };
+  function extractCompanyFromEntity(entity) {
+    const c1 = clean(entity.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent);
+    if (c1) return c1;
+    const c2 = clean(entity.querySelector(".hoverable-link-text.t-bold")?.textContent);
+    return c2 || null;
+  }
+
+  function parseLegacyRoleEntity(entity, index, companyOverride) {
+    const link = pickMainEntityLink(entity);
+    if (!link)
+      return { _idx: index, _ok: false, Titre: null, Entreprise: companyOverride || null, Dates: null, Lieu: null };
 
     const title =
-      clean(mainLink.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
-      clean(mainLink.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
-      null;
-
-    const company =
-      clean(mainLink.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-      clean(mainLink.querySelector("span.t-14.t-normal")?.textContent) ||
+      clean(link.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+      clean(link.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
       null;
 
     const dates =
-      clean(mainLink.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
-      clean(mainLink.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+      clean(link.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
+      clean(link.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
       null;
 
     let lightSpans = Array.from(
-      mainLink.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
+      link.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
     )
       .map((n) => clean(n.textContent))
       .filter(Boolean);
 
     if (!lightSpans.length) {
-      lightSpans = Array.from(mainLink.querySelectorAll("span.t-14.t-normal.t-black--light"))
+      lightSpans = Array.from(link.querySelectorAll("span.t-14.t-normal.t-black--light"))
         .map((n) => clean(n.textContent))
         .filter(Boolean);
     }
 
     lightSpans = uniq(lightSpans);
 
-    // FIX: plus de fallback "random span"
-    const location = lightSpans.find((t) => looksLikeLocation(t) && t !== dates) || null;
+    // FIX: sur legacy, le "lieu" est presque toujours un t-black--light
+    // donc on accepte aussi un fallback "plain text" (ex: "Six-fours les plages")
+    const location =
+      lightSpans.find(
+        (t) =>
+          t &&
+          t !== dates &&
+          !looksLikeEmploymentType(t) &&
+          (looksLikeLocation(t) || looksLikePlainLocationFallback(t))
+      ) || null;
+
+    const companyFlat =
+      clean(link.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+      clean(link.querySelector("span.t-14.t-normal")?.textContent) ||
+      null;
+
+    const company = companyOverride || companyFlat || null;
 
     const ok = !!(title && company && dates);
     return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
+  }
+
+  function parseLegacyExperienceLiExpanded(li, index) {
+    const entity = li.querySelector('div[data-view-name="profile-component-entity"]');
+    if (!entity) return [];
+
+    const innerRoleEntities = Array.from(
+      li.querySelectorAll('.pvs-entity__sub-components div[data-view-name="profile-component-entity"]')
+    ).filter((e) => e.querySelector(".pvs-entity__caption-wrapper"));
+
+    if (innerRoleEntities.length) {
+      const outerCompany = extractCompanyFromEntity(entity) || null;
+      const out = [];
+      for (let i = 0; i < innerRoleEntities.length; i++) {
+        const parsed = parseLegacyRoleEntity(innerRoleEntities[i], `${index}.${i}`, outerCompany);
+        if (parsed._ok) out.push(parsed);
+      }
+      return out;
+    }
+
+    const parsed = parseLegacyRoleEntity(entity, index, null);
+    return parsed._ok ? [parsed] : [];
   }
 
   function bestSduiLinkForItem(item) {
@@ -411,7 +470,7 @@
     let ps = Array.from(pNodes)
       .map((p) => clean(p.textContent))
       .filter(Boolean)
-      .filter((t) => !/compétences de plus|skills|programming language/i.test(t));
+      .filter((t) => !/compétences de plus|competences de plus|skills|programming language/i.test(t));
 
     ps = uniq(ps);
 
@@ -422,7 +481,18 @@
 
     const dates = ps.find((t) => looksLikeDates(t)) || null;
 
-    const location = ps.find((t) => looksLikeLocation(t) && t !== dates) || null;
+    // FIX: SDUI peut contenir des lieux "ville seule" pas dans la regex, donc fallback plain text
+    const locationCandidates = ps
+      .filter(Boolean)
+      .filter((t) => t !== title)
+      .filter((t) => t !== company)
+      .filter((t) => t !== dates)
+      .filter((t) => !looksLikeEmploymentType(t));
+
+    const location =
+      locationCandidates.find((t) => looksLikeLocation(t)) ||
+      locationCandidates.find((t) => looksLikePlainLocationFallback(t)) ||
+      null;
 
     const ok = !!(title && company && dates);
     return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
@@ -458,7 +528,7 @@
     }
 
     if (legacyLis.length) {
-      const parsed = legacyLis.map((li, i) => parseLegacyExperienceLi(li, i));
+      const parsed = legacyLis.flatMap((li, i) => parseLegacyExperienceLiExpanded(li, i));
       const ok = parsed.filter((x) => x._ok);
       return { mode: "LEGACY_LIS", experiences: ok, counts };
     }
