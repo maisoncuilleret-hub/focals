@@ -525,9 +525,33 @@ async function handleAssociateProfile() {
   }
 }
 
+async function handleCopyProfileJson() {
+  const status = document.getElementById("profileStatus");
+
+  if (!state.profile) {
+    if (status) status.textContent = "Aucun profil LinkedIn détecté.";
+    return;
+  }
+
+  try {
+    const payload = {
+      userId: state.userId,
+      profile: state.profile,
+      exportedAt: new Date().toISOString(),
+    };
+    const json = JSON.stringify(payload, null, 2);
+    await navigator.clipboard.writeText(json);
+    if (status) status.textContent = "Profil copié dans le presse-papiers 📋";
+  } catch (err) {
+    console.error("[Focals][POPUP] Impossible de copier le profil", err);
+    if (status) status.textContent = "Copie impossible. Réessaie.";
+  }
+}
+
 function setupProfileActions() {
   const refreshBtn = document.getElementById("refreshProfile");
   const associateBtn = document.getElementById("associateProfile");
+  const copyJsonBtn = document.getElementById("copyProfileJson");
   const statusEl = document.getElementById("profileStatus");
 
   if (refreshBtn) {
@@ -570,6 +594,10 @@ function setupProfileActions() {
 
   if (associateBtn) {
     associateBtn.addEventListener("click", () => handleAssociateProfile());
+  }
+
+  if (copyJsonBtn) {
+    copyJsonBtn.addEventListener("click", () => handleCopyProfileJson());
   }
 }
 
