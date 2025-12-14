@@ -76,6 +76,10 @@ export interface GenerateReplyResponse {
   replyText?: string;
 }
 
+const TALENTBASE_API_URL =
+  'https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer';
+const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
+
 const buildApiUrl = (endpoint = '') => {
   const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -156,6 +160,64 @@ export async function deleteTemplate(
 
 export async function generateReply(request: GenerateReplyRequest): Promise<GenerateReplyResponse> {
   return postJson('focals-generate-reply', request);
+}
+
+export async function generateFollowup(
+  request: GenerateReplyRequest
+): Promise<GenerateReplyResponse> {
+  return postJson('focals-generate-reply', request);
+}
+
+export async function associateProfile(profile: unknown, accessToken: string, userId: string) {
+  const res = await fetch(`${FOCALS_APP_BASE}/api/associate-profile`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ profile, userId }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function exportProfileToTalentBase(payload: {
+  userId?: string;
+  profile: unknown;
+  exportedAt?: string;
+}): Promise<unknown> {
+  const body = {
+    ...payload,
+    exportedAt: payload?.exportedAt || new Date().toISOString(),
+  };
+
+  const res = await fetch(TALENTBASE_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const contentType = res.headers.get('content-type') || '';
+  const responseBody = contentType.includes('application/json')
+    ? await res.json().catch(() => ({}))
+    : await res.text();
+
+  if (!res.ok) {
+    const errorMessage =
+      (responseBody && (responseBody as any).error) ||
+      (typeof responseBody === 'string' && responseBody) ||
+      `HTTP ${res.status}`;
+    throw new Error(errorMessage as string);
+  }
+
+  return responseBody;
 }
 
 export const __private = { postJson, API_BASE_URL };

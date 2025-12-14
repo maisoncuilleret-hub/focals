@@ -506,22 +506,25 @@ async function handleAssociateProfile() {
     if (status) status.textContent = "Aucun profil LinkedIn détecté.";
     return;
   }
-  if (!state.supabaseSession?.access_token) {
-    if (status) status.textContent = "Utilisateur non authentifié - connecte-toi sur l'app web.";
-    return;
-  }
   const userId = state.userId || (await getOrCreateUserId());
   try {
-    if (status) status.textContent = "Association en cours...";
-    const payload = { ...state.profile, userId };
-    debugLog("PROFILE_ASSOCIATE", payload);
-    const res = await apiModule.associateProfile(payload, state.supabaseSession.access_token, userId);
-    debugLog("PROFILE_ASSOCIATE_RESPONSE", res || {});
-    if (status) status.textContent = "Profil associé avec succès ✅";
+    if (status) status.textContent = "Export en cours...";
+    const payload = {
+      userId,
+      profile: state.profile,
+      exportedAt: new Date().toISOString(),
+    };
+    debugLog("PROFILE_EXPORT", payload);
+    const res = await apiModule.exportProfileToTalentBase(payload);
+    debugLog("PROFILE_EXPORT_RESPONSE", res || {});
+    if (res?.success) {
+      status.textContent = "Profil exporté vers TalentBase ✅";
+    } else {
+      status.textContent = res?.error || "Export terminé (réponse inattendue).";
+    }
   } catch (err) {
     console.error(err);
-    if (status)
-      status.textContent = err?.message || "Association impossible. Connecte-toi sur l'app web.";
+    if (status) status.textContent = err?.message || "Export impossible. Réessaie.";
   }
 }
 
