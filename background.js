@@ -142,6 +142,79 @@ async function ensureContentScript(tabId) {
   }
 }
 
+async function getSupabaseSession() {
+  try {
+    const stored = await promisify(chrome.storage.local, "get", "focals_supabase_session");
+    return stored?.focals_supabase_session || null;
+  } catch (error) {
+    console.warn("[Focals] Impossible de récupérer la session Supabase", error?.message || error);
+    return null;
+  }
+}
+
+async function scrapeLinkedinProfile(linkedinUrl) {
+  let tabId;
+
+  try {
+    const tab = await promisify(chrome.tabs, "create", { url: linkedinUrl, active: false });
+    tabId = tab?.id;
+
+    if (!tabId) {
+      throw new Error("Impossible d'ouvrir l'onglet");
+    }
+
+    await waitForComplete(tabId);
+    await wait(randomBetween(2000, 3500));
+    await ensureContentScript(tabId);
+
+    const profileData = await promisify(chrome.tabs, "sendMessage", tabId, {
+      type: "GET_CANDIDATE_DATA",
+    });
+
+    if (!profileData || profileData.error) {
+      throw new Error(profileData?.error || "Échec du scraping");
+    }
+
+    return profileData;
+  } finally {
+    if (tabId) {
+      try {
+        await promisify(chrome.tabs, "remove", tabId);
+      } catch (closeError) {
+        console.warn("[Focals] Impossible de fermer l'onglet temporaire", closeError);
+      }
+    }
+  }
+}
+
+async function saveEngineerProfile(profile, { source = "extension-update" } = {}) {
+  if (!profile) {
+    throw new Error("Profil manquant pour l'envoi Supabase");
+  }
+
+  const session = await getSupabaseSession();
+
+  const response = await fetch(
+    "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session?.access_token || ""}`,
+      },
+      body: JSON.stringify({
+        userId: session?.user?.id || "extension-anon",
+        profile,
+        exportedAt: new Date().toISOString(),
+        source,
+      }),
+    }
+  );
+
+  const data = await response.json();
+  return { ok: response.ok, data };
+}
+
 async function scrapeProfile(linkedinUrl) {
   if (!linkedinUrl) {
     throw new Error("linkedinUrl manquant");
@@ -642,15 +715,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  // ========================================
-  // Handler SCRAPE_PROFILE - Mise à jour d'un seul profil
-  // ========================================
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "SCRAPE_PROFILE") {
-    console.log("[Focals] Requête SCRAPE_PROFILE:", message.linkedinUrl);
+    console.log("[Focals] Requête interne SCRAPE_PROFILE:", message.linkedinUrl);
 
     (async () => {
-      let tabId;
       try {
         const { linkedinUrl } = message || {};
 
@@ -659,77 +728,118 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
           return;
         }
 
-        const tab = await promisify(chrome.tabs, "create", {
-          url: linkedinUrl,
-          active: false,
-        });
+        const profileData = await scrapeLinkedinProfile(linkedinUrl);
+        const payload = {
+          ...profileData,
+          linkedinProfileUrl: profileData.linkedinProfileUrl || linkedinUrl,
+          linkedin_url: profileData.linkedin_url || linkedinUrl,
+        };
 
-        tabId = tab?.id;
+        const result = await saveEngineerProfile(payload, { source: "extension-scrape" });
 
-        if (!tabId) {
-          sendResponse({ success: false, error: "Impossible d'ouvrir l'onglet" });
+        if (!result.ok) {
+          sendResponse({ success: false, error: result.data?.error || "Erreur Supabase" });
           return;
         }
 
-        await waitForComplete(tabId);
-        await wait(2500);
+        sendResponse({ success: true, profile: result.data });
+      } catch (error) {
+        console.error("[Focals] Erreur interne SCRAPE_PROFILE:", error);
+        sendResponse({ success: false, error: error?.message || "Erreur lors du scraping" });
+      }
+    })();
 
-        await ensureContentScript(tabId);
+    return true;
+  }
 
-        const profileData = await promisify(chrome.tabs, "sendMessage", tabId, {
-          type: "GET_CANDIDATE_DATA",
-        });
+  if (message?.type === "SCRAPE_PROFILES_BATCH") {
+    console.log(
+      "[Focals] Requête interne SCRAPE_PROFILES_BATCH:",
+      message.linkedinUrls?.length,
+      "profils"
+    );
 
-        await promisify(chrome.tabs, "remove", tabId);
-        tabId = undefined;
+    (async () => {
+      try {
+        const { linkedinUrls } = message || {};
 
-        if (!profileData || profileData.error) {
-          sendResponse({ success: false, error: profileData?.error || "Échec du scraping" });
+        if (!linkedinUrls || !Array.isArray(linkedinUrls) || linkedinUrls.length === 0) {
+          sendResponse({ success: false, error: "Liste d'URLs vide" });
           return;
         }
 
-        const storage = await promisify(chrome.storage.sync, "get", ["userId"]);
-        const userId = storage.userId || "extension-anon";
+        sendResponse({ success: true, message: `Scraping de ${linkedinUrls.length} profils en cours...` });
 
-        const response = await fetch(
-          "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              userId,
-              profile: {
-                ...profileData,
-                linkedinProfileUrl: linkedinUrl,
-                linkedin_url: linkedinUrl,
-              },
-              exportedAt: new Date().toISOString(),
-            }),
+        for (const linkedinUrl of linkedinUrls) {
+          try {
+            const profileData = await scrapeLinkedinProfile(linkedinUrl);
+
+            if (profileData && !profileData.error) {
+              const result = await saveEngineerProfile(
+                {
+                  ...profileData,
+                  linkedinProfileUrl: profileData.linkedinProfileUrl || linkedinUrl,
+                  linkedin_url: profileData.linkedin_url || linkedinUrl,
+                },
+                { source: "extension-scrape-batch" }
+              );
+
+              if (!result.ok) {
+                console.error("[Focals] Erreur Supabase pour:", linkedinUrl, result.data?.error);
+              }
+            }
+          } catch (profileError) {
+            console.error("[Focals] Erreur pour profil:", linkedinUrl, profileError);
           }
-        );
 
-        const result = await response.json();
+          await wait(randomBetween(2000, 4000));
+        }
+      } catch (error) {
+        console.error("[Focals] Erreur SCRAPE_PROFILES_BATCH:", error);
+      }
+    })();
 
-        if (!response.ok) {
-          sendResponse({ success: false, error: result?.error || "Erreur Supabase" });
+    return true;
+  }
+
+  return false;
+});
+
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  // ========================================
+  // Handler SCRAPE_PROFILE - Mise à jour d'un seul profil
+  // ========================================
+  if (message?.type === "SCRAPE_PROFILE") {
+    console.log("[Focals] Requête SCRAPE_PROFILE:", message.linkedinUrl);
+
+    (async () => {
+      try {
+        const { linkedinUrl } = message || {};
+
+        if (!linkedinUrl) {
+          sendResponse({ success: false, error: "URL LinkedIn manquante" });
+          return;
+        }
+
+        const profileData = await scrapeLinkedinProfile(linkedinUrl);
+        const payload = {
+          ...profileData,
+          linkedinProfileUrl: profileData.linkedinProfileUrl || linkedinUrl,
+          linkedin_url: profileData.linkedin_url || linkedinUrl,
+        };
+
+        const result = await saveEngineerProfile(payload, { source: "extension-update" });
+
+        if (!result.ok) {
+          sendResponse({ success: false, error: result.data?.error || "Erreur Supabase" });
           return;
         }
 
         console.log("[Focals] Profil mis à jour:", linkedinUrl);
-        sendResponse({ success: true, profile: result });
+        sendResponse({ success: true, profile: result.data });
       } catch (error) {
         console.error("[Focals] Erreur SCRAPE_PROFILE:", error);
         sendResponse({ success: false, error: error?.message || "Erreur lors du scraping" });
-      } finally {
-        if (tabId) {
-          try {
-            await promisify(chrome.tabs, "remove", tabId);
-          } catch (closeError) {
-            console.warn("[Focals] Impossible de fermer l'onglet temporaire", closeError);
-          }
-        }
       }
     })();
 
@@ -751,62 +861,28 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
           return;
         }
 
-        sendResponse({ success: true, message: `Scraping de ${linkedinUrls.length} profils en cours...` });
-
-        const storage = await promisify(chrome.storage.sync, "get", ["userId"]);
-        const userId = storage.userId || "extension-anon";
+        sendResponse({ success: true, status: "started", total: linkedinUrls.length });
 
         let successCount = 0;
         let errorCount = 0;
 
         for (const linkedinUrl of linkedinUrls) {
-          let tabId;
           try {
             console.log("[Focals] Scraping:", linkedinUrl);
 
-            const tab = await promisify(chrome.tabs, "create", {
-              url: linkedinUrl,
-              active: false,
-            });
-
-            tabId = tab?.id;
-            if (!tabId) {
-              throw new Error("Impossible d'ouvrir l'onglet");
-            }
-
-            await waitForComplete(tabId);
-            await wait(randomBetween(2000, 3500));
-
-            await ensureContentScript(tabId);
-
-            const profileData = await promisify(chrome.tabs, "sendMessage", tabId, {
-              type: "GET_CANDIDATE_DATA",
-            });
-
-            await promisify(chrome.tabs, "remove", tabId);
-            tabId = undefined;
+            const profileData = await scrapeLinkedinProfile(linkedinUrl);
 
             if (profileData && !profileData.error) {
-              const response = await fetch(
-                "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer",
+              const result = await saveEngineerProfile(
                 {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify({
-                    userId,
-                    profile: {
-                      ...profileData,
-                      linkedinProfileUrl: linkedinUrl,
-                      linkedin_url: linkedinUrl,
-                    },
-                    exportedAt: new Date().toISOString(),
-                  }),
-                }
+                  ...profileData,
+                  linkedinProfileUrl: profileData.linkedinProfileUrl || linkedinUrl,
+                  linkedin_url: profileData.linkedin_url || linkedinUrl,
+                },
+                { source: "extension-update" }
               );
 
-              if (response.ok) {
+              if (result.ok) {
                 successCount++;
                 console.log("[Focals] Profil mis à jour:", linkedinUrl);
               } else {
@@ -822,14 +898,6 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
           } catch (profileError) {
             errorCount++;
             console.error("[Focals] Erreur pour profil:", linkedinUrl, profileError);
-          } finally {
-            if (tabId) {
-              try {
-                await promisify(chrome.tabs, "remove", tabId);
-              } catch (closeError) {
-                console.warn("[Focals] Impossible de fermer l'onglet temporaire", closeError);
-              }
-            }
           }
         }
 
