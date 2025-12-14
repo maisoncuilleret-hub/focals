@@ -83,6 +83,24 @@ const STORAGE_KEYS = {
 
 const DEFAULT_TONE = "professional";
 
+async function scrapeProfile(linkedinUrl) {
+  if (!linkedinUrl) {
+    throw new Error("linkedinUrl manquant");
+  }
+
+  console.log("[Focals][BG] External scrape request", { linkedinUrl });
+}
+
+async function scrapeProfilesBatch(linkedinUrls = []) {
+  if (!Array.isArray(linkedinUrls) || !linkedinUrls.length) {
+    throw new Error("Aucune URL LinkedIn fournie pour le batch");
+  }
+
+  for (const url of linkedinUrls) {
+    await scrapeProfile(url);
+  }
+}
+
 const toBackendMessage = (msg = {}) => ({
   text: msg.text || "",
   fromMe: msg.fromMe ?? msg.senderType === "me",
@@ -560,6 +578,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     default:
       break;
+  }
+
+  return false;
+});
+
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+  if (request?.type === "SCRAPE_PROFILE") {
+    scrapeProfile(request.linkedinUrl)
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
+    return true;
+  }
+
+  if (request?.type === "SCRAPE_PROFILES_BATCH") {
+    scrapeProfilesBatch(request.linkedinUrls)
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err?.message || String(err) }));
+    return true;
   }
 
   return false;
