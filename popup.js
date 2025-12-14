@@ -172,6 +172,8 @@ function renderTone() {
 function renderProfileCard(profile) {
   const card = document.getElementById("profileCard");
   const status = document.getElementById("profileStatus");
+  const infosContent = document.getElementById("infosContent");
+  const infosMeta = document.getElementById("infosMeta");
   const experiencesList = document.getElementById("experiencesList");
   const experiencesMeta = document.getElementById("experiencesMeta");
   const educationList = document.getElementById("educationList");
@@ -179,6 +181,8 @@ function renderProfileCard(profile) {
   const skillsList = document.getElementById("skillsList");
   const skillsMeta = document.getElementById("skillsMeta");
   if (status) status.textContent = "";
+  if (infosContent) infosContent.innerHTML = "";
+  if (infosMeta) infosMeta.textContent = "";
   if (experiencesList) experiencesList.innerHTML = "";
   if (experiencesMeta) experiencesMeta.textContent = "";
   if (educationList) educationList.innerHTML = "";
@@ -201,6 +205,13 @@ function renderProfileCard(profile) {
     info.appendChild(subtitle);
     card.appendChild(info);
     if (status) status.textContent = "";
+    if (infosMeta) infosMeta.textContent = "Chargement des infos...";
+    if (infosContent) {
+      const placeholder = document.createElement("div");
+      placeholder.className = "muted";
+      placeholder.textContent = "La section Infos s'affichera dès que le profil sera prêt.";
+      infosContent.appendChild(placeholder);
+    }
     return;
   }
 
@@ -218,6 +229,13 @@ function renderProfileCard(profile) {
     card.appendChild(info);
     if (status && state.profileStatus === "error") {
       status.textContent = state.profileStatusMessage || "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
+    }
+    if (infosMeta) infosMeta.textContent = "Aucune info disponible";
+    if (infosContent) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Chargez un profil pour afficher la section Infos.";
+      infosContent.appendChild(empty);
     }
     return;
   }
@@ -285,6 +303,29 @@ function renderProfileCard(profile) {
   info.appendChild(chips);
 
   const experiences = profile.experiences || [];
+  const infosText = profile.infos || profile.about || "";
+
+  if (infosMeta) {
+    infosMeta.textContent = infosText ? "Section Infos détectée" : "Aucune info détectée.";
+  }
+
+  if (infosContent) {
+    if (!infosText) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Aucune information disponible sur le profil.";
+      infosContent.appendChild(empty);
+    } else {
+      const paragraphs = infosText.split(/\n{2,}/).filter(Boolean);
+      paragraphs.forEach((para) => {
+        const block = document.createElement("div");
+        block.className = "infos-content";
+        block.textContent = para;
+        infosContent.appendChild(block);
+      });
+    }
+  }
+
   if (experiencesMeta) {
     experiencesMeta.textContent = `${experiences.length || 0} expérience(s)`;
   }

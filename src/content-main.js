@@ -51,6 +51,65 @@
     return parts.join(" <- ");
   }
 
+  const normalizeInfosText = (s) =>
+    (s || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+  const fixSpacedUrls = (t) => t.replace(/\bhttps?:\/\/[^\s)]+/gi, (url) => url.replace(/\s+/g, ""));
+
+  const dedupeSentences = (text) => {
+    const paras = normalizeInfosText(text).split(/\n{2,}/).filter(Boolean);
+    const seen = new Set();
+    const out = [];
+
+    for (const para of paras) {
+      const chunks = (para.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+      const kept = [];
+      for (const c of chunks) {
+        const key = c.replace(/\s+/g, " ").toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          kept.push(c);
+        }
+      }
+      if (kept.length) out.push(kept.join(" "));
+    }
+    return out.join("\n\n").trim();
+  };
+
+  const findAboutSection = () => {
+    const anchor = document.getElementById("about");
+    if (anchor) return anchor.closest("section") || anchor.parentElement?.closest("section") || null;
+
+    const headings = Array.from(document.querySelectorAll("h2, h3, span")).filter((el) =>
+      /^(Infos|About|À propos)$/i.test((el.innerText || "").trim())
+    );
+    return headings[0]?.closest("section") || null;
+  };
+
+  const scrapeInfosSection = () => {
+    const section = findAboutSection();
+    if (!section) return null;
+
+    const el =
+      section.querySelector('div[class*="inline-show-more-text"] span[aria-hidden="true"]') ||
+      section.querySelector('.pv-shared-text-with-see-more span[aria-hidden="true"]');
+
+    let text = normalizeInfosText(el?.textContent || el?.innerText || "");
+    text = text.replace(/…\s*(voir plus|see more)\s*$/i, "").trim();
+    text = dedupeSentences(text);
+    text = fixSpacedUrls(text);
+
+    return text || null;
+  };
+
   // ---------------- Top card ----------------
   function pickBestProfileRoot() {
     return (
@@ -437,6 +496,7 @@
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
     const linkedinUrl = canonicalProfileUrl(href);
+    const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
 
@@ -449,6 +509,7 @@
       photoUrl,
       linkedinUrl,
       relationDegree,
+      infos,
       experiences: ready.collected.experiences,
       debug: {
         experienceRootMode: ready.pick.mode,
@@ -495,6 +556,8 @@
       location: exp.Lieu || "",
     }));
 
+    const infos = result.infos || "";
+
     return {
       name: result.fullName || "",
       headline: "",
@@ -503,6 +566,8 @@
       photoUrl: result.photoUrl || "",
       photo_url: result.photoUrl || "",
       experiences,
+      infos,
+      about: infos,
       current_job: experiences[0] || {},
       current_company: experiences[0]?.company || "",
       linkedinProfileUrl: result.linkedinUrl || "",
