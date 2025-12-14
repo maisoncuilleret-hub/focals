@@ -803,6 +803,12 @@
 
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request?.type === "GET_CANDIDATE_DATA") {
+        handleScrape("get_candidate_data")
+          .then((profileData) => sendResponse(profileData))
+          .catch((error) => sendResponse({ error: error?.message || "Erreur scraping" }));
+        return true;
+      }
       if (request?.action === "SCRAPE_PROFILE") {
         handleScrape("message_request").then((data) => sendResponse({ status: "success", data }));
         return true;
