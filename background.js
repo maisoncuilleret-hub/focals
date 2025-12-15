@@ -242,9 +242,10 @@ function waitForComplete(tabId) {
 async function ensureContentScript(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, { type: "FOCALS_PING" });
+    console.log("[Focals] Content script déjà présent");
     return;
   } catch (err) {
-    console.log("[Focals] Injecting content script...");
+    console.log("[Focals] Injection du content script...");
   }
 
   await chrome.scripting.executeScript({
@@ -258,6 +259,11 @@ async function saveProfileToSupabaseExternal(profileData) {
   const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
   const SUPABASE_ANON_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+  console.log(
+    "[Focals] Sauvegarde vers Supabase:",
+    profileData.linkedin_url || profileData.linkedinProfileUrl
+  );
 
   const response = await fetch(`${SUPABASE_URL}/functions/v1/save-engineer`, {
     method: "POST",
@@ -631,6 +637,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  console.log("[Focals] Message externe reçu:", message?.type, "depuis:", sender?.origin);
+
+  if (message?.type === "PING_TEST" || message?.type === "PING") {
+    console.log("[Focals] PING reçu, réponse PONG");
+    sendResponse({ status: "pong", version: chrome.runtime.getManifest().version });
+    return true;
+  }
+
   if (message?.type === "SCRAPE_PROFILE") {
     console.log("[Focals] SCRAPE_PROFILE reçu:", message.linkedinUrl);
 
@@ -644,33 +658,42 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
         }
 
         const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
+        console.log("[Focals] Onglet créé:", tab.id);
 
         await waitForComplete(tab.id);
+        console.log("[Focals] Page chargée");
+
         await wait(2500);
 
         await ensureContentScript(tab.id);
         await wait(500);
 
+        console.log("[Focals] Demande GET_CANDIDATE_DATA...");
         const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
 
         await chrome.tabs.remove(tab.id);
+        console.log("[Focals] Onglet fermé");
 
         if (response?.error) {
+          console.error("[Focals] Erreur scraping:", response.error);
           sendResponse({ success: false, error: response.error });
           return;
         }
 
         if (!response?.data) {
+          console.error("[Focals] Aucune donnée récupérée");
           sendResponse({ success: false, error: "Aucune donnée récupérée" });
           return;
         }
 
-        console.log("[Focals] Données scrapées:", response.data);
+        console.log("[Focals] Données scrapées:", response.data.name || response.data.fullName);
+
         await saveProfileToSupabaseExternal(response.data);
+        console.log("[Focals] ✅ Profil sauvegardé");
 
         sendResponse({ success: true, profile: response.data });
       } catch (error) {
-        console.error("[Focals] Erreur SCRAPE_PROFILE:", error);
+        console.error("[Focals] ❌ Erreur SCRAPE_PROFILE:", error);
         sendResponse({ success: false, error: error.message });
       }
     })();
@@ -679,11 +702,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   }
 
   if (message?.type === "SCRAPE_PROFILES_BATCH") {
-    console.log(
-      "[Focals] SCRAPE_PROFILES_BATCH reçu:",
-      message.linkedinUrls?.length,
-      "URLs"
-    );
+    console.log("[Focals] SCRAPE_PROFILES_BATCH reçu:", message.linkedinUrls?.length, "URLs");
 
     const { linkedinUrls } = message;
 
@@ -741,5 +760,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     return true;
   }
 
-  return undefined;
+  return false;
 });
+
+console.log("[Focals] External message handlers registered");
