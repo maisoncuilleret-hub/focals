@@ -2,10 +2,25 @@
   const TAG = "🧪 FOCALS CONSOLE";
   const DEBUG = false;
 
-  // Ignore execution in iframes to avoid responding from ad/auxiliary frames
-  // when the popup asks for profile data. The top frame will still handle
-  // scraping and messaging.
-  if (window !== window.top) return;
+  const isLinkedInHost = /(^|\.)linkedin\.com$/i.test(window.location.hostname);
+
+  // If a LinkedIn page is being loaded in an iframe (e.g. from the SaaS), force
+  // it to open in the top window to avoid the browser block screen.
+  if (window !== window.top && isLinkedInHost) {
+    try {
+      const topHost = window.top?.location?.hostname || "";
+      if (/linkedin\.com$/i.test(topHost)) return;
+    } catch (err) {
+      // Cross-origin access can throw; fallback to opening a new tab below.
+    }
+
+    try {
+      window.top.location.href = window.location.href;
+    } catch (err) {
+      window.open(window.location.href, "_blank", "noopener,noreferrer");
+    }
+    return;
+  }
 
   const log = (...a) => console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);

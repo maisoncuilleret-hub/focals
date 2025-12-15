@@ -1,5 +1,21 @@
 (async () => {
-  if (window !== window.top) return;
+  const isLinkedInHost = /(^|\.)linkedin\.com$/i.test(window.location.hostname);
+
+  if (window !== window.top && isLinkedInHost) {
+    try {
+      const topHost = window.top?.location?.hostname || "";
+      if (/linkedin\.com$/i.test(topHost)) return;
+    } catch (err) {
+      // Accessing window.top can throw with cross-origin iframes; ignore and continue fallback.
+    }
+
+    try {
+      window.top.location.href = window.location.href;
+    } catch (err) {
+      window.open(window.location.href, "_blank", "noopener,noreferrer");
+    }
+    return;
+  }
   const { createLogger } = await import(chrome.runtime.getURL("src/utils/logger.js"));
   const { ScrapeController, ScrapeState } = await import(
     chrome.runtime.getURL("src/scrape/ScrapeController.js")
