@@ -497,7 +497,6 @@
       return out;
     }
 
-    const profileRoot = pickBestProfileRoot();
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
