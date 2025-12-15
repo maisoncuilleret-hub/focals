@@ -22,25 +22,7 @@
     return out;
   };
 
-  const looksLikeProfileDom = () =>
-    Boolean(
-      document.querySelector('section[componentkey*="Topcard"]') ||
-        document.querySelector('[data-view-name="profile-top-card"]') ||
-        document.querySelector(".pv-top-card")
-    );
-
-  const isProfileUrl = (u) => {
-    try {
-      const url = new URL(u);
-      const hostLooksLinkedIn = /(^|\.)linkedin\.com$/i.test(url.hostname);
-      const pathLooksProfile = /\/in\//i.test(url.pathname);
-      if (hostLooksLinkedIn && pathLooksProfile) return true;
-    } catch {
-      // fall back to DOM heuristic
-    }
-
-    return looksLikeProfileDom();
-  };
+  const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const canonicalProfileUrl = (u) => {
     try {
       const url = new URL(u);
@@ -647,6 +629,7 @@
       return out;
     }
 
+    const profileRoot = pickBestProfileRoot();
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
