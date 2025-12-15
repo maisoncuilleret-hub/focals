@@ -26,7 +26,9 @@
     "matches": [
       "https://*.lovable.app/*",
       "https://*.lovableproject.com/*",
-      "https://ppawceknsedxaejpeylu.supabase.co/*"
+      "https://ppawceknsedxaejpeylu.supabase.co/*",
+      "http://localhost:*/*",
+      "https://localhost:*/*"
     ]
   },
   "background": {
