@@ -1,21 +1,5 @@
 (async () => {
-  const isLinkedInHost = /(^|\.)linkedin\.com$/i.test(window.location.hostname);
-
-  if (window !== window.top && isLinkedInHost) {
-    try {
-      const topHost = window.top?.location?.hostname || "";
-      if (/linkedin\.com$/i.test(topHost)) return;
-    } catch (err) {
-      // Accessing window.top can throw with cross-origin iframes; ignore and continue fallback.
-    }
-
-    try {
-      window.top.location.href = window.location.href;
-    } catch (err) {
-      window.open(window.location.href, "_blank", "noopener,noreferrer");
-    }
-    return;
-  }
+  if (window !== window.top) return;
   const { createLogger } = await import(chrome.runtime.getURL("src/utils/logger.js"));
   const { ScrapeController, ScrapeState } = await import(
     chrome.runtime.getURL("src/scrape/ScrapeController.js")
@@ -55,27 +39,6 @@
     } catch {
       return u;
     }
-  };
-
-  const getCanonicalProfileHref = () => {
-    const candidates = [];
-
-    try {
-      const linkCanonical = document.querySelector('link[rel="canonical"]')?.href;
-      if (linkCanonical) candidates.push(linkCanonical);
-    } catch (err) {
-      dlog("Unable to read canonical link", err);
-    }
-
-    try {
-      const ogUrl = document.querySelector('meta[property="og:url"]')?.content;
-      if (ogUrl) candidates.push(ogUrl);
-    } catch (err) {
-      dlog("Unable to read og:url", err);
-    }
-
-    const canonicalCandidate = candidates.find((u) => isProfileUrl(u)) || candidates[0] || location.href;
-    return canonicalProfileUrl(canonicalCandidate);
   };
 
   function elementPath(el) {
@@ -526,13 +489,9 @@
   async function runOnce(reason) {
     const startedAt = new Date().toISOString();
     const href = location.href;
-    const canonicalHref = getCanonicalProfileHref();
 
-    const profileRoot = pickBestProfileRoot();
-    const isProfileContext = isProfileUrl(href) || isProfileUrl(canonicalHref) || !!profileRoot;
-
-    if (!isProfileContext) {
-      warn("Not on /in/ profile page. Skipping.", href, canonicalHref);
+    if (!isProfileUrl(href)) {
+      warn("Not on /in/ profile page. Skipping.", href);
       const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
       window.__FOCALS_LAST = out;
       return out;
@@ -541,7 +500,7 @@
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalHref || canonicalProfileUrl(href);
+    const linkedinUrl = canonicalProfileUrl(href);
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
