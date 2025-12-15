@@ -34,6 +34,27 @@
     }
   };
 
+  const getCanonicalProfileHref = () => {
+    const candidates = [];
+
+    try {
+      const linkCanonical = document.querySelector('link[rel="canonical"]')?.href;
+      if (linkCanonical) candidates.push(linkCanonical);
+    } catch (err) {
+      dlog("Unable to read canonical link", err);
+    }
+
+    try {
+      const ogUrl = document.querySelector('meta[property="og:url"]')?.content;
+      if (ogUrl) candidates.push(ogUrl);
+    } catch (err) {
+      dlog("Unable to read og:url", err);
+    }
+
+    const canonicalCandidate = candidates.find((u) => isProfileUrl(u)) || candidates[0] || location.href;
+    return canonicalProfileUrl(canonicalCandidate);
+  };
+
   function elementPath(el) {
     if (!el) return null;
     const parts = [];
@@ -621,9 +642,10 @@
   async function runOnce(reason) {
     const startedAt = new Date().toISOString();
     const href = location.href;
+    const canonicalHref = getCanonicalProfileHref();
 
-    if (!isProfileUrl(href)) {
-      warn("Not on /in/ profile page. Skipping.", href);
+    if (!isProfileUrl(href) && !isProfileUrl(canonicalHref)) {
+      warn("Not on /in/ profile page. Skipping.", href, canonicalHref);
       const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
       window.__FOCALS_LAST = out;
       return out;
@@ -633,7 +655,7 @@
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalProfileUrl(href);
+    const linkedinUrl = canonicalHref || canonicalProfileUrl(href);
     const education = parseEducation();
     const skills = parseSkills();
     const infos = scrapeInfosSection();
@@ -721,7 +743,8 @@
     });
 
     const obs = new MutationObserver(() => {
-      if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
+      const canonicalHref = getCanonicalProfileHref();
+      if (isProfileUrl(location.href) || isProfileUrl(canonicalHref)) scheduleRun("dom_mutation");
     });
     obs.observe(document.body, { childList: true, subtree: true });
 
