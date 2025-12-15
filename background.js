@@ -218,6 +218,70 @@ async function askGPT(prompt, { system, temperature = 0.2, maxTokens = 500 } = {
   }
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function waitForComplete(tabId) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error("Tab load timeout"));
+    }, 30000);
+
+    function listener(updatedTabId, info) {
+      if (updatedTabId === tabId && info.status === "complete") {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "FOCALS_PING" });
+    return;
+  } catch (err) {
+    console.log("[Focals] Injecting content script...");
+  }
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content-main.js"],
+  });
+  await wait(500);
+}
+
+async function saveProfileToSupabaseExternal(profileData) {
+  const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
+  const SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/save-engineer`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify({
+      userId: "extension-update",
+      profile: profileData,
+      exportedAt: new Date().toISOString(),
+      source: "extension-update",
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Supabase error: ${error}`);
+  }
+
+  return response.json();
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const syncStore = withStorage("sync");
   const localStore = withStorage("local");
@@ -563,4 +627,119 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   return false;
+});
+
+// ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
+chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
+  if (message?.type === "SCRAPE_PROFILE") {
+    console.log("[Focals] SCRAPE_PROFILE reçu:", message.linkedinUrl);
+
+    (async () => {
+      try {
+        const { linkedinUrl } = message;
+
+        if (!linkedinUrl) {
+          sendResponse({ success: false, error: "URL LinkedIn manquante" });
+          return;
+        }
+
+        const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
+
+        await waitForComplete(tab.id);
+        await wait(2500);
+
+        await ensureContentScript(tab.id);
+        await wait(500);
+
+        const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
+
+        await chrome.tabs.remove(tab.id);
+
+        if (response?.error) {
+          sendResponse({ success: false, error: response.error });
+          return;
+        }
+
+        if (!response?.data) {
+          sendResponse({ success: false, error: "Aucune donnée récupérée" });
+          return;
+        }
+
+        console.log("[Focals] Données scrapées:", response.data);
+        await saveProfileToSupabaseExternal(response.data);
+
+        sendResponse({ success: true, profile: response.data });
+      } catch (error) {
+        console.error("[Focals] Erreur SCRAPE_PROFILE:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    })();
+
+    return true;
+  }
+
+  if (message?.type === "SCRAPE_PROFILES_BATCH") {
+    console.log(
+      "[Focals] SCRAPE_PROFILES_BATCH reçu:",
+      message.linkedinUrls?.length,
+      "URLs"
+    );
+
+    const { linkedinUrls } = message;
+
+    if (!linkedinUrls || !Array.isArray(linkedinUrls) || linkedinUrls.length === 0) {
+      sendResponse({ success: false, error: "URLs LinkedIn manquantes" });
+      return true;
+    }
+
+    sendResponse({ success: true, status: "started", total: linkedinUrls.length });
+
+    (async () => {
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < linkedinUrls.length; i++) {
+        const url = linkedinUrls[i];
+        console.log(`[Focals] Batch scraping ${i + 1}/${linkedinUrls.length}: ${url}`);
+
+        try {
+          const tab = await chrome.tabs.create({ url, active: true });
+
+          await waitForComplete(tab.id);
+          await wait(2500);
+
+          await ensureContentScript(tab.id);
+          await wait(500);
+
+          const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
+
+          await chrome.tabs.remove(tab.id);
+
+          if (response?.data) {
+            await saveProfileToSupabaseExternal(response.data);
+            successCount++;
+            console.log(`[Focals] ✅ Profil ${i + 1} sauvegardé`);
+          } else {
+            errorCount++;
+            console.warn(`[Focals] ⚠️ Profil ${i + 1}: pas de données`);
+          }
+
+          if (i < linkedinUrls.length - 1) {
+            const delay = 2000 + Math.random() * 2000;
+            console.log(`[Focals] Attente ${Math.round(delay)}ms avant prochain profil...`);
+            await wait(delay);
+          }
+        } catch (error) {
+          console.error(`[Focals] ❌ Erreur profil ${i + 1}:`, error);
+          errorCount++;
+        }
+      }
+
+      console.log(`[Focals] Batch terminé: ${successCount} succès, ${errorCount} erreurs`);
+    })();
+
+    return true;
+  }
+
+  return undefined;
 });

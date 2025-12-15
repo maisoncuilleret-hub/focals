@@ -718,10 +718,50 @@
       about: infos,
       current_job: experiences[0] || {},
       current_company: experiences[0]?.company || "",
+      current_title: experiences[0]?.title || "",
       linkedinProfileUrl: result.linkedinUrl || "",
       linkedin_url: result.linkedinUrl || "",
       relationDegree: result.relationDegree || null,
       source: "focals-scraper-robust",
+    };
+  }
+
+  function mapConnectionStatus(relationDegree) {
+    const rel = (relationDegree || "").toString().toLowerCase();
+    if (!rel) return "not_connected";
+    if (rel.includes("pending")) return "pending";
+    if (rel.includes("1")) return "connected";
+    return "not_connected";
+  }
+
+  async function buildCandidateData() {
+    const profile = await handleScrape("message_request");
+    if (!profile) return null;
+
+    const linkedin_url =
+      profile.linkedin_url ||
+      profile.linkedinProfileUrl ||
+      profile.linkedinProfileURL ||
+      profile.linkedinUrl ||
+      "";
+
+    const name = profile.name || profile.fullName || "";
+    const [firstName, ...lastParts] = name.split(/\s+/).filter(Boolean);
+
+    const current_job = profile.current_job || profile.experiences?.[0] || {};
+
+    return {
+      ...profile,
+      name,
+      current_title: profile.current_title || current_job.title || "",
+      current_company: profile.current_company || current_job.company || "",
+      localisation: profile.localisation || current_job.location || "",
+      linkedin_url,
+      photo_url: profile.photo_url || profile.photoUrl || profile.profileImageUrl || "",
+      firstName: firstName || "",
+      lastName: lastParts.join(" "),
+      headline: profile.headline || profile.about || "",
+      connection_status: mapConnectionStatus(profile.relationDegree || profile.relation_degree),
     };
   }
 
@@ -803,6 +843,24 @@
 
   if (chrome?.runtime?.onMessage?.addListener) {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request?.type === "FOCALS_PING") {
+        sendResponse({ status: "pong" });
+        return true;
+      }
+
+      if (request?.type === "GET_CANDIDATE_DATA") {
+        (async () => {
+          try {
+            const data = await buildCandidateData();
+            sendResponse({ data });
+          } catch (error) {
+            sendResponse({ error: error?.message || "Scraping failed" });
+          }
+        })();
+
+        return true;
+      }
+
       if (request?.action === "SCRAPE_PROFILE") {
         handleScrape("message_request").then((data) => sendResponse({ status: "success", data }));
         return true;
