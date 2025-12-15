@@ -528,14 +528,16 @@
     const href = location.href;
     const canonicalHref = getCanonicalProfileHref();
 
-    if (!isProfileUrl(href) && !isProfileUrl(canonicalHref)) {
+    const profileRoot = pickBestProfileRoot();
+    const isProfileContext = isProfileUrl(href) || isProfileUrl(canonicalHref) || !!profileRoot;
+
+    if (!isProfileContext) {
       warn("Not on /in/ profile page. Skipping.", href, canonicalHref);
       const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
       window.__FOCALS_LAST = out;
       return out;
     }
 
-    const profileRoot = pickBestProfileRoot();
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
