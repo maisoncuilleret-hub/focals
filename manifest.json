@@ -23,7 +23,11 @@
     "https://*.lovableproject.com/*"
   ],
   "externally_connectable": {
-    "matches": ["https://*.lovable.app/*", "http://localhost:*/*"]
+    "matches": [
+      "https://*.lovable.app/*",
+      "https://*.lovableproject.com/*",
+      "https://ppawceknsedxaejpeylu.supabase.co/*"
+    ]
   },
   "background": {
     "service_worker": "background.js",

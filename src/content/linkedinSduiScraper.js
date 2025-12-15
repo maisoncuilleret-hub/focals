@@ -22,7 +22,25 @@
     return out;
   };
 
-  const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const looksLikeProfileDom = () =>
+    Boolean(
+      document.querySelector('section[componentkey*="Topcard"]') ||
+        document.querySelector('[data-view-name="profile-top-card"]') ||
+        document.querySelector(".pv-top-card")
+    );
+
+  const isProfileUrl = (u) => {
+    try {
+      const url = new URL(u);
+      const hostLooksLinkedIn = /(^|\.)linkedin\.com$/i.test(url.hostname);
+      const pathLooksProfile = /\/in\//i.test(url.pathname);
+      if (hostLooksLinkedIn && pathLooksProfile) return true;
+    } catch {
+      // fall back to DOM heuristic
+    }
+
+    return looksLikeProfileDom();
+  };
   const canonicalProfileUrl = (u) => {
     try {
       const url = new URL(u);
@@ -32,27 +50,6 @@
     } catch {
       return u;
     }
-  };
-
-  const getCanonicalProfileHref = () => {
-    const candidates = [];
-
-    try {
-      const linkCanonical = document.querySelector('link[rel="canonical"]')?.href;
-      if (linkCanonical) candidates.push(linkCanonical);
-    } catch (err) {
-      dlog("Unable to read canonical link", err);
-    }
-
-    try {
-      const ogUrl = document.querySelector('meta[property="og:url"]')?.content;
-      if (ogUrl) candidates.push(ogUrl);
-    } catch (err) {
-      dlog("Unable to read og:url", err);
-    }
-
-    const canonicalCandidate = candidates.find((u) => isProfileUrl(u)) || candidates[0] || location.href;
-    return canonicalProfileUrl(canonicalCandidate);
   };
 
   function elementPath(el) {
@@ -642,10 +639,9 @@
   async function runOnce(reason) {
     const startedAt = new Date().toISOString();
     const href = location.href;
-    const canonicalHref = getCanonicalProfileHref();
 
-    if (!isProfileUrl(href) && !isProfileUrl(canonicalHref)) {
-      warn("Not on /in/ profile page. Skipping.", href, canonicalHref);
+    if (!isProfileUrl(href)) {
+      warn("Not on /in/ profile page. Skipping.", href);
       const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
       window.__FOCALS_LAST = out;
       return out;
@@ -655,7 +651,7 @@
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalHref || canonicalProfileUrl(href);
+    const linkedinUrl = canonicalProfileUrl(href);
     const education = parseEducation();
     const skills = parseSkills();
     const infos = scrapeInfosSection();
@@ -743,8 +739,7 @@
     });
 
     const obs = new MutationObserver(() => {
-      const canonicalHref = getCanonicalProfileHref();
-      if (isProfileUrl(location.href) || isProfileUrl(canonicalHref)) scheduleRun("dom_mutation");
+      if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
     });
     obs.observe(document.body, { childList: true, subtree: true });
 
