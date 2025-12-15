@@ -1,23 +1,14 @@
 import supabase from "./supabase-client.js";
 
-const WEBAPP_EXTENSION_ID = "kekhkaclmlnmijnpekcpppnnoooodaca";
-const SAAS_API_BASE = "https://api.my-saas.com";
-const GENERATE_REPLY_URL = `${SAAS_API_BASE}/linkedin/generate-reply`;
-const SYNC_CONVERSATION_URL = `${SAAS_API_BASE}/linkedin/conversations`;
-
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
 const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 const pipelinePorts = new Set();
 const pipelineState = {
   active: null,
   lastResult: null,
 };
-
-// Cache des profils pour matching rapide
-let profilesCache = [];
-let lastCacheRefresh = 0;
-const CACHE_TTL_MS = 60000; // Rafraîchir le cache toutes les minutes
 
 const broadcastPipeline = (message) => {
   for (const port of pipelinePorts) {
@@ -30,183 +21,6 @@ const broadcastPipeline = (message) => {
 };
 
 const createRequestId = () => `pipe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-async function refreshProfilesCache() {
-  const now = Date.now();
-  if (now - lastCacheRefresh < CACHE_TTL_MS && profilesCache.length > 0) {
-    return profilesCache;
-  }
-
-  try {
-    const { data: userResult } = await supabase.auth.getUser();
-    if (!userResult?.user) return [];
-
-    const { data: clientId } = await supabase.rpc("get_user_client_id");
-    if (!clientId) return [];
-
-    const { data: profiles, error } = await supabase
-      .from("profiles")
-      .select("id, name, linkedin_url")
-      .eq("client_id", clientId)
-      .not("linkedin_url", "is", null);
-
-    if (error) throw error;
-
-    profilesCache = profiles || [];
-    lastCacheRefresh = now;
-    console.log(`[Focals] Cache profils rafraîchi: ${profilesCache.length} profils`);
-
-    return profilesCache;
-  } catch (err) {
-    console.error("[Focals] Erreur rafraîchissement cache:", err);
-    return profilesCache;
-  }
-}
-
-function normalizeLinkedInUrl(url) {
-  if (!url) return "";
-  try {
-    const parsed = new URL(url);
-    const match = parsed.pathname.match(/\/in\/([^\/]*)/);
-    return match ? match[1].toLowerCase() : "";
-  } catch {
-    return "";
-  }
-}
-
-function normalizeText(text) {
-  if (!text) return "";
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s*-\s*.*$/, "")
-    .replace(/[^a-z0-9\s]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function extractLinkedinSlug(url) {
-  if (!url) return "";
-  const normalizedUrl = normalizeLinkedInUrl(url);
-  return normalizedUrl || "";
-}
-
-function findMatchingProfile(name, profileUrl) {
-  const inputSlug = extractLinkedinSlug(profileUrl);
-  if (inputSlug) {
-    const matchByUrl = profilesCache.find((p) => {
-      const cachedSlug = extractLinkedinSlug(p.linkedin_url);
-      return cachedSlug && (inputSlug === cachedSlug || profileUrl.includes(cachedSlug));
-    });
-    if (matchByUrl) return matchByUrl;
-  }
-
-  const normalizedName = normalizeText(name);
-  if (normalizedName) {
-    const exactMatch = profilesCache.find((p) => normalizeText(p.name) === normalizedName);
-    if (exactMatch) return exactMatch;
-
-    const nameParts = normalizedName.split(" ");
-    if (nameParts.length >= 2) {
-      const partialMatch = profilesCache.find((p) => {
-        const profileName = normalizeText(p.name);
-        return nameParts.every((part) => profileName.includes(part));
-      });
-      if (partialMatch) return partialMatch;
-    }
-  }
-
-  return null;
-}
-
-async function saveActivityToSupabase(activity) {
-  const { error } = await supabase.from("activities").insert(activity);
-  if (error) throw error;
-  return true;
-}
-
-async function checkRecentReply(profileId) {
-  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-
-  const { data, error } = await supabase
-    .from("activities")
-    .select("id")
-    .eq("profile_id", profileId)
-    .eq("type", "linkedin_reply")
-    .gte("created_at", oneHourAgo)
-    .limit(1);
-
-  if (error) throw error;
-  return Array.isArray(data) && data.length > 0;
-}
-
-async function handleNewLinkedInMessage(payload, { skipCacheRefresh = false } = {}) {
-  const { name, profileUrl, timestamp } = payload || {};
-
-  if (!skipCacheRefresh) {
-    await refreshProfilesCache();
-  }
-
-  const match = findMatchingProfile(name, profileUrl);
-
-  if (!match) {
-    console.log("[Focals] ℹ️ Profil non trouvé:", name || profileUrl || "<inconnu>");
-    return { matched: false };
-  }
-
-  const duplicate = await checkRecentReply(match.id);
-  if (duplicate) {
-    console.log("[Focals] ⏭️ Réponse déjà enregistrée récemment");
-    return { matched: true, duplicate: true };
-  }
-
-  await saveActivityToSupabase({
-    profile_id: match.id,
-    type: "linkedin_reply",
-    content: `Réponse reçue de ${name || match.name}`,
-    date: new Date().toISOString().split("T")[0],
-    created_at: timestamp || new Date().toISOString(),
-  });
-
-  try {
-    chrome.runtime.sendMessage(WEBAPP_EXTENSION_ID, {
-      type: "LINKEDIN_REPLY_DETECTED",
-      profile: match,
-    });
-  } catch (err) {
-    console.warn("[Focals] Impossible de notifier l'app web:", err?.message || err);
-  }
-
-  console.log("[Focals] ✅ Réponse LinkedIn enregistrée pour:", match.name);
-  return { matched: true, duplicate: false };
-}
-
-async function recordLinkedInReply(profile, conversation) {
-  try {
-    const { error } = await supabase.from("activities").insert({
-      profile_id: profile.id,
-      type: "linkedin_reply",
-      comment: `Message reçu de ${conversation.name}: "${conversation.messageSnippet?.substring(0, 100)}..."`,
-    });
-
-    if (error) throw error;
-
-    console.log(`[Focals] ✅ Activité linkedin_reply créée pour ${profile.name}`);
-
-    chrome.notifications.create({
-      type: "basic",
-      title: "💬 Réponse LinkedIn",
-      message: `${conversation.name} vous a répondu !`,
-      priority: 2,
-    });
-
-    return true;
-  } catch (err) {
-    console.error("[Focals] Erreur enregistrement réponse:", err);
-    return false;
-  }
-}
 
 async function hydrateSupabaseSession(sessionPayload) {
   console.log("[Focals] 🔄 hydrateSupabaseSession appelée");
@@ -509,64 +323,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  if (msg?.type === "GENERATE_REPLY") {
-    (async () => {
-      try {
-        const response = await fetch(GENERATE_REPLY_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            lastMessage: msg.lastMessage || "",
-            source: "linkedin",
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`API error ${response.status}`);
-        }
-
-        const data = await response.json();
-        sendResponse({ reply: data?.reply || "" });
-      } catch (err) {
-        console.error("[Focals] Error generating reply:", err);
-        sendResponse({ reply: "" });
-      }
-    })();
-
-    return true; // Keep the message channel open for async response
-  }
-
-  if (msg?.type === "SYNC_CONVERSATION") {
-    (async () => {
-      try {
-        const response = await fetch(SYNC_CONVERSATION_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            url: msg.url || "",
-            messages: Array.isArray(msg.messages) ? msg.messages : [],
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`API error ${response.status}`);
-        }
-
-        const data = await response.json();
-        sendResponse({ ok: true, data });
-      } catch (err) {
-        console.error("[Focals] Error syncing conversation:", err);
-        sendResponse({ ok: false });
-      }
-    })();
-
-    return true; // Keep the message channel open for async response
-  }
-
   if (msg?.type === "SCRAPE_PUBLIC_PROFILE" && msg.url) {
     (async () => {
       try {
@@ -658,13 +414,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // Keep channel open
   }
 
-  if (msg?.type === "LINKEDIN_NEW_MESSAGES_DETECTED" || msg?.type === "NEW_LINKEDIN_MESSAGE") {
-    // Removed: previous automatic sync on incoming messages (no longer needed)
-    console.log("[Focals] Ignoring incoming message sync request");
-    sendResponse?.({ disabled: true });
-    return false;
-  }
-
   if (msg?.type === "PIPELINE_EXPORT_PROGRESS") {
     handlePipelineProgress(msg);
   } else if (msg?.type === "PIPELINE_EXPORT_COMPLETE") {
@@ -677,41 +426,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (message?.type === "FORCE_LINKEDIN_MESSAGE_SCAN") {
-    (async () => {
-      try {
-        const tabs = await chrome.tabs.query({ url: "*://www.linkedin.com/messaging/*" });
-
-        if (tabs.length === 0) {
-          const tab = await chrome.tabs.create({
-            url: "https://www.linkedin.com/messaging/",
-            active: false,
-          });
-
-          await wait(5000);
-
-          const response = await chrome.tabs.sendMessage(tab.id, {
-            type: "FORCE_SCAN_MESSAGES",
-          });
-
-          await wait(2000);
-          await chrome.tabs.remove(tab.id);
-
-          sendResponse({ success: true, ...response });
-        } else {
-          const response = await chrome.tabs.sendMessage(tabs[0].id, {
-            type: "FORCE_SCAN_MESSAGES",
-          });
-          sendResponse({ success: true, ...response });
-        }
-      } catch (err) {
-        sendResponse({ error: err.message });
-      }
-    })();
-
-    return true;
-  }
-
   // Gestionnaire pour CHECK_LINKEDIN_CONNECTION_STATUS depuis l'app web
   if (message?.type === "CHECK_LINKEDIN_CONNECTION_STATUS") {
     console.log("[Focals] Requête de vérification statut LinkedIn:", message);
@@ -752,48 +466,6 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
       } catch (error) {
         console.error("[Focals] Erreur vérification statut:", error);
         sendResponse({ success: false, error: error?.message || "Erreur lors de la vérification" });
-      }
-    })();
-
-    return true; // Keep channel open for async response
-  }
-
-  // Handler pour ENVOYER une demande de connexion LinkedIn
-  if (message?.type === "SEND_LINKEDIN_CONNECTION") {
-    console.log("[Focals] Requête envoi connexion LinkedIn:", message);
-
-    (async () => {
-      try {
-        const { linkedinUrl, connectionMessage } = message || {};
-
-        if (!linkedinUrl) {
-          sendResponse({ success: false, error: "URL LinkedIn manquante" });
-          return;
-        }
-
-        const tab = await chrome.tabs.create({
-          url: linkedinUrl,
-          active: false,
-        });
-
-        await waitForComplete(tab.id);
-        await wait(2500);
-
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "SEND_CONNECTION_ON_PAGE",
-          message: connectionMessage || "",
-        });
-
-        await chrome.tabs.remove(tab.id);
-
-        console.log("[Focals] Résultat envoi connexion:", response);
-        sendResponse({
-          success: response?.success || false,
-          error: response?.error,
-        });
-      } catch (error) {
-        console.error("[Focals] Erreur envoi connexion:", error);
-        sendResponse({ success: false, error: error?.message || "Erreur lors de l'envoi" });
       }
     })();
 
