@@ -208,8 +208,7 @@
     win.__FOCALS_FETCH_PATCHED__ = true;
 
     const originalFetch = win.fetch.bind(win);
-
-    function patchedFetch(...args) {
+    win.fetch = function patchedFetch(...args) {
       const response = originalFetch(...args);
       try {
         const url = args?.[0]?.url || args?.[0] || "";
@@ -227,18 +226,7 @@
         // Swallow errors to avoid breaking the page
       }
       return response;
-    }
-
-    // Preserve native properties so LinkedIn and other sites relying on
-    // fetch.Response/Request/Headers don't crash when the interceptor is
-    // installed.
-    patchedFetch.Response = win.Response;
-    patchedFetch.Request = win.Request;
-    patchedFetch.Headers = win.Headers;
-    patchedFetch.name = originalFetch.name;
-    patchedFetch.toString = () => originalFetch.toString();
-
-    win.fetch = patchedFetch;
+    };
   };
 
   const installXhrInterceptor = (win) => {
