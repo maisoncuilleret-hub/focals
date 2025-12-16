@@ -1394,7 +1394,9 @@ console.log(
       const root = getLinkedinMessagingRoot();
 
       const formCandidates = Array.from(
-        root.querySelectorAll("form.msg-form, form[data-test-msg-form]")
+        root.querySelectorAll(
+          "form.msg-form, form[data-test-msg-form], form[data-test-msg-ui-compose-form]"
+        )
       );
 
       // LinkedIn peut encapsuler le footer dans des layouts variés. On ajoute un
@@ -1403,20 +1405,38 @@ console.log(
         root.querySelectorAll(".msg-form__footer")
       ).map((footer) => footer.closest("form") || footer.closest(".msg-form") || footer);
 
-      const composers = Array.from(new Set([...formCandidates, ...footerCandidates])).filter(
-        Boolean
+      const rightActionCandidates = Array.from(
+        root.querySelectorAll(".msg-form__right-actions")
+      ).map((actions) =>
+        actions.closest("form") || actions.closest(".msg-form") || actions.closest(".msg-form__footer")
+      );
+
+      const composers = Array.from(
+        new Set([...formCandidates, ...footerCandidates, ...rightActionCandidates])
+      ).filter(Boolean);
+
+      console.log(
+        `[FOCALS DEBUG] injectSmartReplyButtons: found ${composers.length} composer candidates`
       );
 
       composers.forEach((composer, i) => {
         const footerRightActions = composer.querySelector(".msg-form__right-actions");
 
         // Si pas de footer d'actions, on ne peut rien faire pour ce form
-        if (!footerRightActions) return;
+        if (!footerRightActions) {
+          console.log(
+            `[FOCALS DEBUG] composer[${i}] skipped: no .msg-form__right-actions found`
+          );
+          return;
+        }
 
         // 1. Vérifie si le bouton est DÉJÀ dans le footer (le bon endroit)
         const btnInFooter = footerRightActions.querySelector(`.${BUTTON_CLASS}`);
         if (btnInFooter) {
           // Tout est bon, le bouton est là où il faut
+          console.log(
+            `[FOCALS DEBUG] composer[${i}] already has smart reply button in footer`
+          );
           return;
         }
 
