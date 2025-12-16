@@ -1391,75 +1391,100 @@ console.log(
 
     // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
     const injectSmartReplyButtons = () => {
-      const root = getLinkedinMessagingRoot();
+      try {
+        const root = getLinkedinMessagingRoot();
 
-      const formCandidates = Array.from(
-        root.querySelectorAll("form.msg-form, form[data-test-msg-form]")
-      );
+        const formCandidates = Array.from(
+          root.querySelectorAll(
+            "form.msg-form, form[data-test-msg-form], form[data-test-msg-ui-compose-form]"
+          )
+        );
 
-      // LinkedIn peut encapsuler le footer dans des layouts variés. On ajoute un
-      // fallback sur le footer lui-même pour ne pas dépendre uniquement de la classe du form.
-      const footerCandidates = Array.from(
-        root.querySelectorAll(".msg-form__footer")
-      ).map((footer) => footer.closest("form") || footer.closest(".msg-form") || footer);
+        // LinkedIn peut encapsuler le footer dans des layouts variés. On ajoute un
+        // fallback sur le footer lui-même pour ne pas dépendre uniquement de la classe du form.
+        const footerCandidates = Array.from(
+          root.querySelectorAll(".msg-form__footer")
+        ).map((footer) => footer.closest("form") || footer.closest(".msg-form") || footer);
 
-      const composers = Array.from(new Set([...formCandidates, ...footerCandidates])).filter(
-        Boolean
-      );
+        const rightActionCandidates = Array.from(
+          root.querySelectorAll(".msg-form__right-actions")
+        ).map((actions) =>
+          actions.closest("form") || actions.closest(".msg-form") || actions.closest(".msg-form__footer")
+        );
 
-      composers.forEach((composer, i) => {
-        const footerRightActions = composer.querySelector(".msg-form__right-actions");
+        const composers = Array.from(
+          new Set([...formCandidates, ...footerCandidates, ...rightActionCandidates])
+        ).filter(Boolean);
 
-        // Si pas de footer d'actions, on ne peut rien faire pour ce form
-        if (!footerRightActions) return;
+        console.log(
+          `[FOCALS DEBUG] injectSmartReplyButtons: found ${composers.length} composer candidates`
+        );
 
-        // 1. Vérifie si le bouton est DÉJÀ dans le footer (le bon endroit)
-        const btnInFooter = footerRightActions.querySelector(`.${BUTTON_CLASS}`);
-        if (btnInFooter) {
-          // Tout est bon, le bouton est là où il faut
-          return;
-        }
+        composers.forEach((composer, i) => {
+          const footerRightActions =
+            composer.querySelector(".msg-form__right-actions") || composer;
 
-        // 2. Vérifie si un bouton "fantôme" traîne ailleurs dans le form (ex: ancien container)
-        // et supprime-le pour éviter les conflits
-        const strayBtn = composer.querySelector(`.${BUTTON_CLASS}`);
-        if (strayBtn) {
-          console.log(`[FOCALS DEBUG] Removing stray button from form[${i}]`);
-          strayBtn.remove();
-        }
+          // Si pas de footer d'actions, on ne peut rien faire pour ce form
+          if (!footerRightActions) {
+            console.log(
+              `[FOCALS DEBUG] composer[${i}] skipped: no .msg-form__right-actions found`
+            );
+            return;
+          }
 
-        // 3. Injection propre dans le footer visible
-        const host = document.createElement("div");
-        host.className = BUTTON_CLASS;
-        footerRightActions.appendChild(host);
+          // 1. Vérifie si le bouton est DÉJÀ dans le footer (le bon endroit)
+          const btnInFooter = footerRightActions.querySelector(`.${BUTTON_CLASS}`);
+          if (btnInFooter) {
+            // Tout est bon, le bouton est là où il faut
+            console.log(
+              `[FOCALS DEBUG] composer[${i}] already has smart reply button in footer`
+            );
+            return;
+          }
 
-        const shadowRoot = host.attachShadow({ mode: "open" });
-        const conversationRoot = resolveConversationRoot(composer);
-        const conversationName = resolveConversationName(conversationRoot);
+          // 2. Vérifie si un bouton "fantôme" traîne ailleurs dans le form (ex: ancien container)
+          // et supprime-le pour éviter les conflits
+          const strayBtn = composer.querySelector(`.${BUTTON_CLASS}`);
+          if (strayBtn) {
+            console.log(`[FOCALS DEBUG] Removing stray button from form[${i}]`);
+            strayBtn.remove();
+          }
 
-        renderSmartReplyMenu(shadowRoot, {
-          onStandardReply: async (buttonEl) => {
-            await runSuggestReplyPipeline({
-              button: buttonEl,
-              conversationRoot: conversationRoot || document,
-              composer,
-              conversationName,
-              editorIndex: 1,
-            });
-          },
-          onCustomReply: async (buttonEl, instructions) => {
-            await runSuggestReplyPipeline({
-              button: buttonEl,
-              conversationRoot: conversationRoot || document,
-              composer,
-              conversationName,
-              editorIndex: 1,
-              customInstructions: instructions || "",
-            });
-          },
-          onPersonalizedFollowup: handlePersonalizedFollowup,
+          // 3. Injection propre dans le footer visible
+          const host = document.createElement("div");
+          host.className = BUTTON_CLASS;
+          footerRightActions.appendChild(host);
+
+          const shadowRoot = host.attachShadow({ mode: "open" });
+          const conversationRoot = resolveConversationRoot(composer);
+          const conversationName = resolveConversationName(conversationRoot);
+
+          renderSmartReplyMenu(shadowRoot, {
+            onStandardReply: async (buttonEl) => {
+              await runSuggestReplyPipeline({
+                button: buttonEl,
+                conversationRoot: conversationRoot || document,
+                composer,
+                conversationName,
+                editorIndex: 1,
+              });
+            },
+            onCustomReply: async (buttonEl, instructions) => {
+              await runSuggestReplyPipeline({
+                button: buttonEl,
+                conversationRoot: conversationRoot || document,
+                composer,
+                conversationName,
+                editorIndex: 1,
+                customInstructions: instructions || "",
+              });
+            },
+            onPersonalizedFollowup: handlePersonalizedFollowup,
+          });
         });
-      });
+      } catch (err) {
+        console.warn("[FOCALS DEBUG] injectSmartReplyButtons failed", err);
+      }
     };
 
     const setupMessagingObserver = () => {

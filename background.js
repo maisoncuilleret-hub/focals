@@ -49,27 +49,32 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 
   const resolvedHeaders = await resolveAuthHeaders(headers);
 
-  const response = await fetch(url.toString(), {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      ...resolvedHeaders,
-    },
-    body: method && method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
-  });
+  try {
+    const response = await fetch(url.toString(), {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        ...resolvedHeaders,
+      },
+      body: method && method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
+    });
 
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json")
-    ? await response.json().catch(() => null)
-    : await response.text().catch(() => "");
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => null)
+      : await response.text().catch(() => "");
 
-  if (!response.ok) {
-    const errorMessage =
-      typeof payload === "string" && payload ? payload : `HTTP ${response.status}`;
-    return { ok: false, status: response.status, error: errorMessage, data: payload };
+    if (!response.ok) {
+      const errorMessage =
+        typeof payload === "string" && payload ? payload : `HTTP ${response.status}`;
+      return { ok: false, status: response.status, error: errorMessage, data: payload };
+    }
+
+    return { ok: true, status: response.status, data: payload };
+  } catch (err) {
+    debugLog("API_FETCH_ERROR", err?.message || err);
+    return { ok: false, status: 0, error: err?.message || "Network error", data: null };
   }
-
-  return { ok: true, status: response.status, data: payload };
 }
 
 const STORAGE_KEYS = {
