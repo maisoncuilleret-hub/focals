@@ -1390,15 +1390,57 @@ console.log(
     };
 
     // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
-    const injectSmartReplyButtons = () => {
+    const FOCALS_SR_ATTR = "data-focals-smart-reply";
+
+    const injectSmartReplyIntoForm = (composer) => {
+      const footerRightActions = composer.querySelector(".msg-form__right-actions");
+
+      if (!footerRightActions) return false;
+
+      if (footerRightActions.querySelector(`[${FOCALS_SR_ATTR}="1"]`)) return false;
+
+      const host = document.createElement("div");
+      host.className = BUTTON_CLASS;
+      host.setAttribute(FOCALS_SR_ATTR, "1");
+      footerRightActions.appendChild(host);
+
+      const shadowRoot = host.attachShadow({ mode: "open" });
+      const conversationRoot = resolveConversationRoot(composer);
+      const conversationName = resolveConversationName(conversationRoot);
+
+      renderSmartReplyMenu(shadowRoot, {
+        onStandardReply: async (buttonEl) => {
+          await runSuggestReplyPipeline({
+            button: buttonEl,
+            conversationRoot: conversationRoot || document,
+            composer,
+            conversationName,
+            editorIndex: 1,
+          });
+        },
+        onCustomReply: async (buttonEl, instructions) => {
+          await runSuggestReplyPipeline({
+            button: buttonEl,
+            conversationRoot: conversationRoot || document,
+            composer,
+            conversationName,
+            editorIndex: 1,
+            customInstructions: instructions || "",
+          });
+        },
+        onPersonalizedFollowup: handlePersonalizedFollowup,
+      });
+
+      return true;
+    };
+
+    const injectAllSmartReplyButtons = () => {
       const root = getLinkedinMessagingRoot();
 
       const formCandidates = Array.from(
         root.querySelectorAll("form.msg-form, form[data-test-msg-form]")
       );
 
-      // LinkedIn peut encapsuler le footer dans des layouts variés. On ajoute un
-      // fallback sur le footer lui-même pour ne pas dépendre uniquement de la classe du form.
       const footerCandidates = Array.from(
         root.querySelectorAll(".msg-form__footer")
       ).map((footer) => footer.closest("form") || footer.closest(".msg-form") || footer);
@@ -1407,62 +1449,21 @@ console.log(
         Boolean
       );
 
-      composers.forEach((composer, i) => {
-        const footerRightActions = composer.querySelector(".msg-form__right-actions");
+      let count = 0;
+      for (const composer of composers) {
+        if (injectSmartReplyIntoForm(composer)) count++;
+      }
 
-        // Si pas de footer d'actions, on ne peut rien faire pour ce form
-        if (!footerRightActions) return;
-
-        // 1. Vérifie si le bouton est DÉJÀ dans le footer (le bon endroit)
-        const btnInFooter = footerRightActions.querySelector(`.${BUTTON_CLASS}`);
-        if (btnInFooter) {
-          // Tout est bon, le bouton est là où il faut
-          return;
-        }
-
-        // 2. Vérifie si un bouton "fantôme" traîne ailleurs dans le form (ex: ancien container)
-        // et supprime-le pour éviter les conflits
-        const strayBtn = composer.querySelector(`.${BUTTON_CLASS}`);
-        if (strayBtn) {
-          console.log(`[FOCALS DEBUG] Removing stray button from form[${i}]`);
-          strayBtn.remove();
-        }
-
-        // 3. Injection propre dans le footer visible
-        const host = document.createElement("div");
-        host.className = BUTTON_CLASS;
-        footerRightActions.appendChild(host);
-
-        const shadowRoot = host.attachShadow({ mode: "open" });
-        const conversationRoot = resolveConversationRoot(composer);
-        const conversationName = resolveConversationName(conversationRoot);
-
-        renderSmartReplyMenu(shadowRoot, {
-          onStandardReply: async (buttonEl) => {
-            await runSuggestReplyPipeline({
-              button: buttonEl,
-              conversationRoot: conversationRoot || document,
-              composer,
-              conversationName,
-              editorIndex: 1,
-            });
-          },
-          onCustomReply: async (buttonEl, instructions) => {
-            await runSuggestReplyPipeline({
-              button: buttonEl,
-              conversationRoot: conversationRoot || document,
-              composer,
-              conversationName,
-              editorIndex: 1,
-              customInstructions: instructions || "",
-            });
-          },
-          onPersonalizedFollowup: handlePersonalizedFollowup,
-        });
-      });
+      if (count) console.log("[FOCALS SR] injected on forms:", count);
     };
 
+    let focalsSrObsStarted = false;
+    let focalsSrTimer = null;
+
     const setupMessagingObserver = () => {
+      if (focalsSrObsStarted) return;
+      focalsSrObsStarted = true;
+
       const root = getLinkedinMessagingRoot();
 
       console.log(
@@ -1470,13 +1471,18 @@ console.log(
         root === document ? "document" : "interop-shadow-root"
       );
 
-      const observer = new MutationObserver(() => {
-        injectSmartReplyButtons();
-      });
+      const schedule = () => {
+        clearTimeout(focalsSrTimer);
+        focalsSrTimer = setTimeout(injectAllSmartReplyButtons, 80);
+      };
+
+      const observer = new MutationObserver(schedule);
 
       observer.observe(root, { childList: true, subtree: true });
 
-      injectSmartReplyButtons();
+      injectAllSmartReplyButtons();
+
+      console.log("[FOCALS SR] observer ON");
     };
 
     const initMessagingWatcher = () => {
