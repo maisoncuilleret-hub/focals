@@ -1392,12 +1392,23 @@ console.log(
     // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
     const injectSmartReplyButtons = () => {
       const root = getLinkedinMessagingRoot();
-      const forms = root.querySelectorAll("form.msg-form");
 
-      // console.log("[FOCALS DEBUG] forms scan:", forms.length);
+      const formCandidates = Array.from(
+        root.querySelectorAll("form.msg-form, form[data-test-msg-form]")
+      );
 
-      forms.forEach((form, i) => {
-        const footerRightActions = form.querySelector(".msg-form__right-actions");
+      // LinkedIn peut encapsuler le footer dans des layouts variés. On ajoute un
+      // fallback sur le footer lui-même pour ne pas dépendre uniquement de la classe du form.
+      const footerCandidates = Array.from(
+        root.querySelectorAll(".msg-form__footer")
+      ).map((footer) => footer.closest("form") || footer.closest(".msg-form") || footer);
+
+      const composers = Array.from(new Set([...formCandidates, ...footerCandidates])).filter(
+        Boolean
+      );
+
+      composers.forEach((composer, i) => {
+        const footerRightActions = composer.querySelector(".msg-form__right-actions");
 
         // Si pas de footer d'actions, on ne peut rien faire pour ce form
         if (!footerRightActions) return;
@@ -1411,21 +1422,19 @@ console.log(
 
         // 2. Vérifie si un bouton "fantôme" traîne ailleurs dans le form (ex: ancien container)
         // et supprime-le pour éviter les conflits
-        const strayBtn = form.querySelector(`.${BUTTON_CLASS}`);
+        const strayBtn = composer.querySelector(`.${BUTTON_CLASS}`);
         if (strayBtn) {
           console.log(`[FOCALS DEBUG] Removing stray button from form[${i}]`);
           strayBtn.remove();
         }
 
         // 3. Injection propre dans le footer visible
-        // console.log(`[FOCALS] Injecting button into form[${i}]`);
-        
         const host = document.createElement("div");
         host.className = BUTTON_CLASS;
         footerRightActions.appendChild(host);
 
         const shadowRoot = host.attachShadow({ mode: "open" });
-        const conversationRoot = resolveConversationRoot(form);
+        const conversationRoot = resolveConversationRoot(composer);
         const conversationName = resolveConversationName(conversationRoot);
 
         renderSmartReplyMenu(shadowRoot, {
@@ -1433,7 +1442,7 @@ console.log(
             await runSuggestReplyPipeline({
               button: buttonEl,
               conversationRoot: conversationRoot || document,
-              composer: form,
+              composer,
               conversationName,
               editorIndex: 1,
             });
@@ -1442,7 +1451,7 @@ console.log(
             await runSuggestReplyPipeline({
               button: buttonEl,
               conversationRoot: conversationRoot || document,
-              composer: form,
+              composer,
               conversationName,
               editorIndex: 1,
               customInstructions: instructions || "",
