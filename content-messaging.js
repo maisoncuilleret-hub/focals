@@ -127,6 +127,28 @@ console.log(
 
   try {
 
+    const hashText = (text = "") => {
+      let hash = 0;
+      for (let i = 0; i < text.length; i++) {
+        hash = (hash << 5) - hash + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return (hash >>> 0).toString(16).padStart(8, "0");
+    };
+
+    const containsEmailLike = (text = "") => /@[\w.-]+\.[A-Za-z]{2,}/.test(text);
+
+    const cleanMessageText = (text = "") => {
+      if (!text) return "";
+      return text
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    };
+
     const EDITOR_SELECTOR = "div.msg-form__contenteditable";
     const BUTTON_CLASS = "focals-suggest-reply-button";
     const FOCALS_GENERATE_REPLY_ENDPOINT = "/focals-generate-reply";
@@ -650,86 +672,170 @@ console.log(
       return "Unknown conversation";
     };
 
+    const resolveConversationId = (rootElement) => {
+      if (!rootElement) return null;
+
+      const attributeCandidates = [
+        "data-conversation-id",
+        "data-convo-id",
+        "data-entity-urn",
+      ];
+
+      for (const attr of attributeCandidates) {
+        const value = rootElement.getAttribute?.(attr);
+        if (value) return value;
+      }
+
+      const nodeWithId = rootElement.querySelector?.(
+        "[data-conversation-id],[data-convo-id],[data-entity-urn]"
+      );
+      if (nodeWithId) {
+        for (const attr of attributeCandidates) {
+          const value = nodeWithId.getAttribute?.(attr);
+          if (value) return value;
+        }
+      }
+
+      return null;
+    };
+
     const extractLinkedInMessages = (rootElement = document) => {
       const usingDocument = rootElement === document;
-      log(
-        `[SCRAPE] Using ${usingDocument ? "document" : "scoped root"} for messages`
-      );
+      const candidateRoots = [rootElement];
 
-      const messageNodes = Array.from(
-        rootElement.querySelectorAll(
-          'div.msg-s-event-listitem[data-view-name="message-list-item"]'
-        )
-      );
-
-      log(
-        `[SCRAPE] Found ${messageNodes.length} message items${
-          usingDocument ? "" : " in scoped conversation root"
-        }`
-      );
-
-      if (!messageNodes.length && !usingDocument) {
-        warn("[SCRAPE] No messages found in scoped root, not falling back to document");
+      if (usingDocument) {
+        const shadowRoot = getLinkedinMessagingRoot();
+        if (shadowRoot && shadowRoot !== document) {
+          candidateRoots.push(shadowRoot);
+        }
       }
 
       const allMessages = [];
+      let inspectedSelector =
+        'div.msg-s-event-listitem[data-view-name="message-list-item"]';
 
-      messageNodes.forEach((container) => {
-        const body = container.querySelector("p.msg-s-event-listitem__body");
-        const text = normalizeText(body?.innerText || "");
+      for (const scope of candidateRoots) {
+        const scopeLabel = scope === document ? "document" : "shadow-root";
+        const messageNodes = Array.from(scope.querySelectorAll(inspectedSelector));
 
-        if (!text) {
-          log("[SCRAPE] No body text for this message, skipping");
-          return;
-        }
+        log(`[SCRAPE] Using ${scopeLabel} for messages, found ${messageNodes.length}`);
 
-        const fromMe = !container.classList.contains("msg-s-event-listitem--other");
-        log(`[SCRAPE] Message role resolved: fromMe = ${fromMe}`);
+        if (!messageNodes.length) continue;
 
-        const senderName = normalizeText(
-          container.querySelector(".msg-s-message-group__name")?.textContent || ""
-        );
+        messageNodes.forEach((container, index) => {
+          const body = container.querySelector("p.msg-s-event-listitem__body");
 
-        let timestampRaw = "";
-        const titleNode = container.querySelector(
-          "span.msg-s-event-with-indicator__sending-indicator[title]"
-        );
-        if (titleNode?.getAttribute("title")) {
-          timestampRaw = titleNode.getAttribute("title") || "";
-          log(`[SCRAPE] Timestamp title found: "${timestampRaw}"`);
-        }
-
-        if (!timestampRaw) {
-          const fallbackTime = container.querySelector("time.msg-s-message-group__timestamp");
-          const fallbackText = normalizeText(fallbackTime?.innerText || "");
-          if (fallbackText) {
-            timestampRaw = fallbackText;
-            log(`[SCRAPE] Using fallback timestamp from <time>: "${timestampRaw}"`);
+          const seeMoreButton = body?.querySelector(
+            'button.msg-s-event-listitem__show-more-text, button[aria-label*="See more" i], button[aria-label*="Voir plus" i]'
+          );
+          if (seeMoreButton && !seeMoreButton.dataset?.focalsExpanded) {
+            try {
+              seeMoreButton.dataset.focalsExpanded = "1";
+              seeMoreButton.click();
+              log("[SCRAPE] Clicked See more on message", index);
+            } catch (err) {
+              warn("[SCRAPE] Unable to expand See more", err?.message || err);
+            }
           }
-        }
 
-        const message = {
-          text,
-          fromMe,
-          timestampRaw,
-        };
+          const rawInnerText = (body?.innerText || "").trim();
+          const rawTextContent = (body?.textContent || "").trim();
+          const prefersTextContent = rawTextContent.length >= rawInnerText.length;
+          let text = cleanMessageText(
+            prefersTextContent ? rawTextContent : rawInnerText
+          );
 
-        if (senderName) {
-          message.senderName = senderName;
-        }
+          const rawMaxLength = Math.max(rawInnerText.length, rawTextContent.length);
+          const rawHasEmail = containsEmailLike(rawInnerText) || containsEmailLike(rawTextContent);
+          const rawHash = hashText(
+            rawTextContent.length >= rawInnerText.length ? rawTextContent : rawInnerText
+          );
 
-        log("[SCRAPE] Built message object:", {
-          fromMe,
-          length: text.length,
-          timestampRaw,
+          if (text.length < rawTextContent.length * 0.6) {
+            text = cleanMessageText(rawTextContent || rawInnerText);
+            log("[SCRAPE] Fallback to textContent due to short text length");
+          }
+
+          if (!text) {
+            log("[SCRAPE] No body text for this message, skipping");
+            return;
+          }
+
+          const fromMe = !container.classList.contains("msg-s-event-listitem--other");
+          log(`[SCRAPE] Message role resolved: fromMe = ${fromMe}`);
+
+          const senderName = normalizeText(
+            container.querySelector(".msg-s-message-group__name")?.textContent || ""
+          );
+
+          let timestampRaw = "";
+          const titleNode = container.querySelector(
+            "span.msg-s-event-with-indicator__sending-indicator[title]"
+          );
+          if (titleNode?.getAttribute("title")) {
+            timestampRaw = titleNode.getAttribute("title") || "";
+            log(`[SCRAPE] Timestamp title found: "${timestampRaw}"`);
+          }
+
+          if (!timestampRaw) {
+            const fallbackTime = container.querySelector("time.msg-s-message-group__timestamp");
+            const fallbackText = normalizeText(fallbackTime?.innerText || "");
+            if (fallbackText) {
+              timestampRaw = fallbackText;
+              log(`[SCRAPE] Using fallback timestamp from <time>: "${timestampRaw}"`);
+            }
+          }
+
+          const message = {
+            text,
+            fromMe,
+            timestampRaw,
+            __debug: {
+              rawLength: rawMaxLength,
+              rawHash,
+              rawHadEmail: rawHasEmail,
+              source: prefersTextContent ? "textContent" : "innerText",
+            },
+          };
+
+          if (senderName) {
+            message.senderName = senderName;
+          }
+
+          log("[SCRAPE] Built message object:", {
+            fromMe,
+            length: text.length,
+            timestampRaw,
+            source: message.__debug.source,
+            hash: hashText(text),
+          });
+
+          if (message.__debug.rawHadEmail && !containsEmailLike(text)) {
+            warn("[SCRAPE] possible truncation: raw text hinted email but extracted text does not", {
+              extractedLength: text.length,
+              rawLength: rawMaxLength,
+            });
+          }
+
+          allMessages.push(message);
         });
 
-        allMessages.push(message);
-      });
+        break;
+      }
 
       if (!allMessages.length) {
         warn("[SCRAPE] No messages found after parsing");
         return [];
+      }
+
+      const lastInbound = [...allMessages].reverse().find((m) => !m.fromMe) || null;
+      if (lastInbound) {
+        debugLog("LAST_INBOUND", {
+          length: lastInbound.text?.length || 0,
+          hash: hashText(lastInbound.text || ""),
+          rawLength: lastInbound.__debug?.rawLength || null,
+          rawHash: lastInbound.__debug?.rawHash || null,
+        });
       }
 
       return allMessages;
@@ -737,7 +843,7 @@ console.log(
 
     const generateReplyFromAPI = async (
       messages,
-      { context = {}, systemPromptOverride = null } = {}
+      { context = {}, systemPromptOverride = null, conversationName = null, conversationRoot = null } = {}
     ) => {
       if (!messages?.length) {
         warn("PIPELINE extract_messages: no messages found, aborting");
@@ -766,7 +872,39 @@ console.log(
         },
       };
 
-      log("PIPELINE api_call: prepared payload", payload);
+      const conversationId = resolveConversationId(conversationRoot);
+      const lastInbound = [...messages].reverse().find((m) => !m.fromMe) || null;
+
+      debugLog("PAYLOAD_DIAGNOSTICS", {
+        conversationId: conversationId || null,
+        conversationName: conversationName || null,
+        messageCount: messages.length,
+        lastInbound: lastInbound
+          ? {
+              length: lastInbound.text?.length || 0,
+              hash: hashText(lastInbound.text || ""),
+              rawLength: lastInbound.__debug?.rawLength || null,
+            }
+          : null,
+        payloadMessages: payload.messages.map((m) => ({
+          length: m.text?.length || 0,
+          hash: hashText(m.text || ""),
+          fromMe: m.fromMe,
+        })),
+      });
+
+      if (lastInbound?.__debug?.rawHadEmail && !containsEmailLike(lastInbound.text)) {
+        warn("[PAYLOAD] possible truncation: inbound message lost email-like pattern", {
+          payloadLength: lastInbound.text?.length || 0,
+          rawLength: lastInbound.__debug.rawLength,
+        });
+      }
+
+      log("PIPELINE api_call: prepared payload", {
+        conversationId: conversationId || "n/a",
+        messageCount: payload.messages.length,
+        payloadLengths: payload.messages.map((m) => m.text?.length || 0),
+      });
 
       try {
         const data = await sendApiRequest({
@@ -945,6 +1083,8 @@ console.log(
         const reply = await generateReplyFromAPI(messages, {
           context: payloadContext,
           systemPromptOverride,
+          conversationName,
+          conversationRoot,
         });
         console.log("[Focals][MSG] Réponse reçue", {
           hasReply: !!reply,
