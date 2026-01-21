@@ -378,6 +378,8 @@ console.log(
           start: exp.start || "",
           end: exp.end || "",
           location: exp.location || "",
+          description: exp.description || null,
+          descriptionBullets: exp.descriptionBullets || null,
         }));
 
       const headline = profile?.headline || profile?.current_title || profile?.title || "";
