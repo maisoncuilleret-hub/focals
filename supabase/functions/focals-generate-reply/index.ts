@@ -6,6 +6,8 @@ type LinkedInExperience = {
   company?: string;
   start?: string;
   end?: string;
+  description?: string;
+  descriptionBullets?: string[];
 };
 type LinkedInProfile = {
   url?: string;

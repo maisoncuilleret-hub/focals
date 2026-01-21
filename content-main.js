@@ -89,6 +89,91 @@
     return out.join("\n\n").trim();
   };
 
+  const SEE_MORE_REGEX = /(voir plus|see more|show more|afficher la suite)/i;
+
+  const extractTextWithBreaks = (node) => {
+    if (!node) return "";
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
+    return clone.textContent || "";
+  };
+
+  const normalizeDescriptionText = (text) => {
+    let normalized = normalizeInfosText(text || "");
+    normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
+    normalized = fixSpacedUrls(normalized);
+    if (!normalized) return null;
+
+    const lines = normalized
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    const seen = new Set();
+    const deduped = [];
+    for (const line of lines) {
+      const key = line.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(line);
+    }
+
+    return deduped.join("\n").trim() || null;
+  };
+
+  const extractDescriptionBullets = (text) => {
+    if (!text) return null;
+    const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+    const bullets = lines
+      .filter((line) => /^[-•]\s+/.test(line))
+      .map((line) => line.replace(/^[-•]\s+/, "").trim())
+      .filter(Boolean);
+    return bullets.length ? bullets : null;
+  };
+
+  const clickSeeMoreInItem = (item) => {
+    if (!item) return false;
+    const scope = item.querySelector(".pvs-entity__sub-components") || item;
+    const buttons = Array.from(scope.querySelectorAll("button, a"))
+      .map((el) => ({
+        el,
+        label: `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.trim(),
+      }))
+      .filter(({ label }) => SEE_MORE_REGEX.test(label));
+    const target = buttons.find(({ el }) => !el.disabled)?.el;
+    if (target) {
+      target.click();
+      dlog("Clicked see more for experience description");
+      return true;
+    }
+    return false;
+  };
+
+  const extractExperienceDescription = (item) => {
+    if (!item) return { description: null, descriptionBullets: null };
+    const subComponents = item.querySelector(".pvs-entity__sub-components");
+    if (!subComponents) return { description: null, descriptionBullets: null };
+
+    clickSeeMoreInItem(item);
+
+    const candidates = [];
+    const inlineNodes = subComponents.querySelectorAll(
+      'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
+    );
+    if (inlineNodes.length) {
+      inlineNodes.forEach((node) => candidates.push(node));
+    } else {
+      subComponents.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
+      subComponents.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
+    }
+
+    const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
+    const description = normalizeDescriptionText(raw);
+    if (!description) return { description: null, descriptionBullets: null };
+
+    return { description, descriptionBullets: extractDescriptionBullets(description) };
+  };
+
   const findAboutSection = () => {
     const anchor = document.getElementById("about");
     if (anchor) return anchor.closest("section") || anchor.parentElement?.closest("section") || null;
@@ -419,7 +504,7 @@
     return c2 || null;
   }
 
-  function parseLegacyRoleEntity(entity, index, companyOverride) {
+  function parseLegacyRoleEntity(entity, index, companyOverride, scopeItem) {
     const link = pickMainEntityLink(entity);
     if (!link)
       return { _idx: index, _ok: false, Titre: null, Entreprise: companyOverride || null, Dates: null, Lieu: null };
@@ -466,8 +551,21 @@
 
     const company = companyOverride || companyFlat || null;
 
+    const { description, descriptionBullets } = extractExperienceDescription(
+      scopeItem || entity.closest("li") || entity
+    );
+
     const ok = !!(title && company && dates);
-    return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
+    return {
+      _idx: index,
+      _ok: ok,
+      Titre: title,
+      Entreprise: company,
+      Dates: dates,
+      Lieu: location,
+      Description: description,
+      DescriptionBullets: descriptionBullets,
+    };
   }
 
   function parseLegacyExperienceLiExpanded(li, index) {
@@ -482,13 +580,14 @@
       const outerCompany = extractCompanyFromEntity(entity) || null;
       const out = [];
       for (let i = 0; i < innerRoleEntities.length; i++) {
-        const parsed = parseLegacyRoleEntity(innerRoleEntities[i], `${index}.${i}`, outerCompany);
+        const scopeItem = innerRoleEntities[i].closest("li") || li;
+        const parsed = parseLegacyRoleEntity(innerRoleEntities[i], `${index}.${i}`, outerCompany, scopeItem);
         if (parsed._ok) out.push(parsed);
       }
       return out;
     }
 
-    const parsed = parseLegacyRoleEntity(entity, index, null);
+    const parsed = parseLegacyRoleEntity(entity, index, null, li);
     return parsed._ok ? [parsed] : [];
   }
 
@@ -553,8 +652,19 @@
       locationCandidates.find((t) => looksLikePlainLocationFallback(t)) ||
       null;
 
+    const { description, descriptionBullets } = extractExperienceDescription(item);
+
     const ok = !!(title && company && dates);
-    return { _idx: index, _ok: ok, Titre: title, Entreprise: company, Dates: dates, Lieu: location };
+    return {
+      _idx: index,
+      _ok: ok,
+      Titre: title,
+      Entreprise: company,
+      Dates: dates,
+      Lieu: location,
+      Description: description,
+      DescriptionBullets: descriptionBullets,
+    };
   }
 
   function collectExperiences(expSection) {
@@ -677,6 +787,7 @@
           Entreprise: e.Entreprise,
           Dates: e.Dates,
           Lieu: e.Lieu,
+          Description: e.Description ? `${e.Description.slice(0, 120)}…` : null,
         }))
       );
     }
@@ -693,6 +804,8 @@
       company: exp.Entreprise || "",
       dates: exp.Dates || "",
       location: exp.Lieu || "",
+      description: exp.Description || null,
+      descriptionBullets: exp.DescriptionBullets || null,
     }));
 
     const education = (result.education || []).map((ed) => ({
@@ -836,9 +949,21 @@
     return v;
   }
 
+  function logExperienceDescriptions(maxLen = 120) {
+    const experiences = window.__FOCALS_LAST?.experiences || [];
+    const rows = experiences.map((exp) => ({
+      Titre: exp.Titre || null,
+      Entreprise: exp.Entreprise || null,
+      Description: exp.Description ? exp.Description.slice(0, maxLen) : null,
+    }));
+    console.table(rows);
+    return rows;
+  }
+
   window.FOCALS = {
     run: () => scheduleRun("manual_call"),
     dump,
+    logExperienceDescriptions,
   };
 
   if (chrome?.runtime?.onMessage?.addListener) {
@@ -872,7 +997,12 @@
     });
   }
 
-  log("Ready. Autorun enabled. Also available:", "FOCALS.dump()", "FOCALS.run()");
+  log(
+    "Ready. Autorun enabled. Also available:",
+    "FOCALS.dump()",
+    "FOCALS.run()",
+    "FOCALS.logExperienceDescriptions()"
+  );
   installSpaWatcher();
   scheduleRun("init");
 })();
