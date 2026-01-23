@@ -378,6 +378,7 @@ console.log(
           start: exp.start || "",
           end: exp.end || "",
           location: exp.location || "",
+          workplaceType: exp.workplaceType || null,
           description: exp.description || null,
           descriptionBullets: exp.descriptionBullets || null,
         }));

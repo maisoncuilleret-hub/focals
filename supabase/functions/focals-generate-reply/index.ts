@@ -6,6 +6,7 @@ type LinkedInExperience = {
   company?: string;
   start?: string;
   end?: string;
+  workplaceType?: string | null;
   description?: string;
   descriptionBullets?: string[];
 };
