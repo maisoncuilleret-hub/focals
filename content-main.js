@@ -1,6 +1,12 @@
 (() => {
   const TAG = "🧪 FOCALS CONSOLE";
-  const DEBUG = false;
+  const DEBUG = (() => {
+    try {
+      return localStorage.getItem("FOCALS_DEBUG") === "true";
+    } catch (err) {
+      return false;
+    }
+  })();
 
   const log = (...a) => console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
@@ -33,6 +39,52 @@
       return u;
     }
   };
+
+  const getExperienceDetailsUrl = (root = document) => {
+    const anchor = root.querySelector('a[href*="/details/experience/"]');
+    const href = anchor?.getAttribute("href") || anchor?.href || "";
+    if (href) {
+      try {
+        return new URL(href, window.location.origin).toString();
+      } catch (err) {
+        return href;
+      }
+    }
+
+    const { origin, pathname } = window.location;
+    if (/^\/in\//i.test(pathname)) {
+      const normalizedPath = pathname.replace(/\/$/, "");
+      return `${origin}${normalizedPath}/details/experience/`;
+    }
+
+    return null;
+  };
+
+  const requestExperienceDetailsScrape = (detailsUrl) =>
+    new Promise((resolve, reject) => {
+      if (!detailsUrl) {
+        resolve([]);
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage(
+          { type: "FOCALS_SCRAPE_DETAILS_EXPERIENCE", detailsUrl },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message || "Messaging failed"));
+              return;
+            }
+            if (!response?.ok) {
+              reject(new Error(response?.error || "Background scrape failed"));
+              return;
+            }
+            resolve(Array.isArray(response.experiences) ? response.experiences : []);
+          }
+        );
+      } catch (err) {
+        reject(err);
+      }
+    });
 
   function elementPath(el) {
     if (!el) return null;
@@ -867,6 +919,36 @@
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
+    const detailsUrl = getExperienceDetailsUrl();
+    if (detailsUrl) {
+      dlog("Experience details URL detected", detailsUrl);
+    }
+
+    let detailsExperiences = [];
+    if (detailsUrl) {
+      try {
+        detailsExperiences = await requestExperienceDetailsScrape(detailsUrl);
+        dlog("Experience details scraped", { count: detailsExperiences.length });
+      } catch (err) {
+        warn("Experience details scrape failed", err?.message || err);
+      }
+    }
+
+    const detailsNormalized = detailsExperiences
+      .map((exp) => ({
+        _idx: exp._idx ?? null,
+        _ok: true,
+        Titre: exp.title || "",
+        Entreprise: exp.company || "",
+        Dates: exp.dates || "",
+        Lieu: exp.location || "",
+        WorkplaceType: exp.workplaceType || null,
+        Description: exp.description || null,
+        DescriptionBullets: exp.descriptionBullets || null,
+      }))
+      .filter((exp) => exp.Titre && exp.Entreprise);
+
+    const finalExperiences = detailsNormalized.length ? detailsNormalized : ready.collected.experiences;
 
     const result = {
       ok: true,
@@ -877,7 +959,7 @@
       photoUrl,
       linkedinUrl,
       relationDegree,
-      experiences: ready.collected.experiences,
+      experiences: finalExperiences,
       education,
       skills,
       infos,
@@ -886,6 +968,8 @@
         experienceCollectionMode: ready.collected.mode,
         experienceCounts: ready.collected.counts,
         experienceRootPath: elementPath(ready.pick.root),
+        experienceDetailsUrl: detailsUrl || null,
+        experienceDetailsCount: detailsNormalized.length,
       },
     };
 

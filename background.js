@@ -4,6 +4,7 @@ import { createLogger } from "./src/utils/logger.js";
 
 const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
+const DEBUG_KEEP_DETAILS_TAB = false;
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -220,12 +221,12 @@ async function askGPT(prompt, { system, temperature = 0.2, maxTokens = 500 } = {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function waitForComplete(tabId) {
+function waitForComplete(tabId, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       reject(new Error("Tab load timeout"));
-    }, 30000);
+    }, timeoutMs);
 
     function listener(updatedTabId, info) {
       if (updatedTabId === tabId && info.status === "complete") {
@@ -253,6 +254,229 @@ async function ensureContentScript(tabId) {
     files: ["content-main.js"],
   });
   await wait(500);
+}
+
+async function detailsExperienceScraper() {
+  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const WORKPLACE_TYPE_RULES = [
+    { regex: /\bsur site\b/i, value: "Sur site" },
+    { regex: /\bhybride\b/i, value: "Hybride" },
+    { regex: /\bt[ée]l[ée]travail\b/i, value: "Télétravail" },
+    { regex: /\bà distance\b/i, value: "À distance" },
+    { regex: /\bon[- ]site\b/i, value: "On-site" },
+    { regex: /\bhybrid\b/i, value: "Hybrid" },
+    { regex: /\bremote\b/i, value: "Remote" },
+  ];
+
+  const normalizeWorkplaceType = (text) => {
+    const t = clean(text);
+    if (!t) return null;
+    const rule = WORKPLACE_TYPE_RULES.find((entry) => entry.regex.test(t));
+    return rule ? rule.value : null;
+  };
+
+  const looksLikeDates = (text) => {
+    const t = clean(text);
+    if (!t) return false;
+    return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
+  };
+
+  const looksLikeEmploymentType = (text) =>
+    /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i.test(
+      text || ""
+    );
+
+  const isRelationDegree = (text) => /\b(1er|2e|3e|1st|2nd|3rd)\b/i.test(text || "");
+
+  const extractDescription = (item) => {
+    if (!item) return null;
+    const scope = item.querySelector(".pvs-entity__sub-components") || item;
+    const candidates = [];
+    const inlineNodes = scope.querySelectorAll(
+      'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
+    );
+    if (inlineNodes.length) {
+      inlineNodes.forEach((node) => candidates.push(node));
+    } else {
+      scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
+      scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
+    }
+    const raw = candidates.map((node) => node?.innerText || node?.textContent || "").join("\n");
+    const normalized = clean(raw.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n"));
+    return normalized.length >= 30 ? normalized : null;
+  };
+
+  const splitCompanyLine = (line) => {
+    if (!line) return { company: null, extras: [] };
+    const parts = line
+      .split("·")
+      .map(clean)
+      .filter(Boolean)
+      .filter((part) => !isRelationDegree(part));
+    return { company: parts[0] || null, extras: parts.slice(1) };
+  };
+
+  const extractLocationAndWorkplaceType = (lines) => {
+    let location = null;
+    let workplaceType = null;
+
+    for (const line of lines) {
+      const parts = line.split("·").map(clean).filter(Boolean);
+      for (const part of parts.length ? parts : [clean(line)]) {
+        if (!part || isRelationDegree(part)) continue;
+        if (!workplaceType) {
+          const detected = normalizeWorkplaceType(part);
+          if (detected) {
+            workplaceType = detected;
+            continue;
+          }
+        }
+        if (!location && !looksLikeDates(part) && !looksLikeEmploymentType(part)) {
+          location = part;
+        }
+      }
+    }
+
+    return { location, workplaceType };
+  };
+
+  const collectMetaLines = (container) => {
+    if (!container) return [];
+    let spans = Array.from(
+      container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
+    )
+      .map((n) => clean(n.textContent))
+      .filter(Boolean);
+    if (!spans.length) {
+      spans = Array.from(container.querySelectorAll("span.t-14.t-normal.t-black--light"))
+        .map((n) => clean(n.textContent))
+        .filter(Boolean);
+    }
+    return spans.filter((line) => !isRelationDegree(line));
+  };
+
+  const extractTitleFromContainer = (container) =>
+    clean(container?.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
+    clean(container?.querySelector("div.t-bold span")?.textContent) ||
+    clean(container?.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+    clean(container?.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+    null;
+
+  const extractCompanyLineFromContainer = (container) =>
+    clean(container?.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+    clean(container?.querySelector("span.t-14.t-normal")?.textContent) ||
+    null;
+
+  const extractDatesFromContainer = (container) =>
+    clean(container?.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
+    clean(container?.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+    null;
+
+  const scrollToLoad = async () => {
+    let lastHeight = 0;
+    let stableCount = 0;
+    for (let i = 0; i < 40; i++) {
+      window.scrollTo(0, document.body.scrollHeight);
+      await sleep(450);
+      const height = document.body.scrollHeight;
+      if (height === lastHeight) {
+        stableCount += 1;
+        if (stableCount >= 3) break;
+      } else {
+        stableCount = 0;
+        lastHeight = height;
+      }
+    }
+  };
+
+  await scrollToLoad();
+
+  const main =
+    document.querySelector('main[role="main"]') ||
+    document.querySelector("main") ||
+    document.querySelector('[role="main"]') ||
+    document.body;
+  const sections = Array.from(main.querySelectorAll("section"));
+  const experienceSection = sections.find((section) => {
+    const heading = section.querySelector("h1, h2, h3");
+    const headingText = clean(heading?.textContent || section.getAttribute("aria-label") || "");
+    return /expérience|experience/i.test(headingText);
+  });
+
+  const scope = experienceSection || main;
+  const entities = Array.from(scope.querySelectorAll('div[data-view-name="profile-component-entity"]'));
+  const items = entities.length
+    ? entities
+    : Array.from(scope.querySelectorAll("li")).filter((li) => li.querySelector("div.t-bold"));
+
+  const results = [];
+  const seen = new Set();
+
+  for (const entity of items) {
+    const container = entity.closest("li") || entity;
+    const title = extractTitleFromContainer(container) || extractTitleFromContainer(entity);
+    const dates = extractDatesFromContainer(container) || extractDatesFromContainer(entity);
+    const companyLine = extractCompanyLineFromContainer(container) || extractCompanyLineFromContainer(entity);
+    const { company, extras } = splitCompanyLine(companyLine);
+    const metaLines = [...collectMetaLines(container), ...extras].filter(Boolean);
+    const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
+    const description = extractDescription(container);
+
+    if (!title || !company) continue;
+
+    const record = {
+      title,
+      company,
+      dates: dates || "",
+      location: location || "",
+      workplaceType: workplaceType || null,
+      description: description || null,
+    };
+
+    const key = [record.title, record.company, record.dates, record.location, record.workplaceType || ""]
+      .map((v) => clean(v))
+      .join("|")
+      .toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    results.push(record);
+  }
+
+  return results;
+}
+
+async function scrapeExperienceDetailsInBackground(detailsUrl) {
+  const tab = await chrome.tabs.create({ url: detailsUrl, active: false });
+  if (!tab?.id) {
+    throw new Error("Failed to open details tab");
+  }
+
+  debugLog("DETAILS_TAB_CREATED", { tabId: tab.id, detailsUrl });
+
+  try {
+    await waitForComplete(tab.id, 15000);
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: detailsExperienceScraper,
+    });
+    const experiences = Array.isArray(results) ? results?.[0]?.result : [];
+    debugLog("DETAILS_SCRAPE_RESULT", { count: experiences?.length || 0 });
+    return Array.isArray(experiences) ? experiences : [];
+  } catch (err) {
+    debugLog("DETAILS_SCRAPE_ERROR", err?.message || err);
+    throw err;
+  } finally {
+    if (!DEBUG_KEEP_DETAILS_TAB) {
+      try {
+        await chrome.tabs.remove(tab.id);
+        debugLog("DETAILS_TAB_CLOSED", { tabId: tab.id });
+      } catch (err) {
+        debugLog("DETAILS_TAB_CLOSE_FAILED", err?.message || err);
+      }
+    }
+  }
 }
 
 async function saveProfileToSupabaseExternal(profileData) {
@@ -357,6 +581,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         sendResponse({ ok: true, tabId: tab.id });
       });
+      return true;
+    }
+    case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
+      const { detailsUrl } = message || {};
+      if (!detailsUrl) {
+        sendResponse({ ok: false, error: "Missing detailsUrl" });
+        return false;
+      }
+
+      scrapeExperienceDetailsInBackground(detailsUrl)
+        .then((experiences) => sendResponse({ ok: true, experiences }))
+        .catch((error) =>
+          sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
+        );
       return true;
     }
     case "FOCALS_CLOSE_TAB": {
