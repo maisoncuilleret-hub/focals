@@ -355,6 +355,32 @@ function renderProfileCard(profile) {
           row.appendChild(details);
         }
 
+        if (exp.workplaceType) {
+          const badge = document.createElement("span");
+          badge.className = "experience-badge";
+          badge.textContent = exp.workplaceType;
+          row.appendChild(badge);
+        }
+
+        if (exp.description) {
+          const description = document.createElement("div");
+          description.className = "experience-description";
+          description.textContent = exp.description;
+          row.appendChild(description);
+
+          const shouldToggle = exp.description.length > 140 || exp.description.includes("\n");
+          if (shouldToggle) {
+            const toggle = document.createElement("button");
+            toggle.className = "experience-toggle";
+            toggle.textContent = "Afficher plus";
+            toggle.addEventListener("click", () => {
+              const expanded = description.classList.toggle("expanded");
+              toggle.textContent = expanded ? "Afficher moins" : "Afficher plus";
+            });
+            row.appendChild(toggle);
+          }
+        }
+
         experiencesList.appendChild(row);
       });
     }

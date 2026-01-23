@@ -93,9 +93,9 @@
 
   const extractTextWithBreaks = (node) => {
     if (!node) return "";
-    const clone = node.cloneNode(true);
-    clone.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
-    return clone.textContent || "";
+    const html = node.innerHTML || "";
+    const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
+    return withBreaks.replace(/<[^>]*>/g, "");
   };
 
   const normalizeDescriptionText = (text) => {
@@ -118,7 +118,9 @@
       deduped.push(line);
     }
 
-    return deduped.join("\n").trim() || null;
+    const finalText = deduped.join("\n").trim();
+    if (!finalText || finalText.length < 30) return null;
+    return finalText;
   };
 
   const extractDescriptionBullets = (text) => {
@@ -134,6 +136,7 @@
   const clickSeeMoreInItem = (item) => {
     if (!item) return false;
     const scope = item.querySelector(".pvs-entity__sub-components") || item;
+    if (!scope || scope.dataset?.focalsSeeMoreClicked) return false;
     const buttons = Array.from(scope.querySelectorAll("button, a"))
       .map((el) => ({
         el,
@@ -143,6 +146,7 @@
     const target = buttons.find(({ el }) => !el.disabled)?.el;
     if (target) {
       target.click();
+      scope.dataset.focalsSeeMoreClicked = "true";
       dlog("Clicked see more for experience description");
       return true;
     }
@@ -151,20 +155,20 @@
 
   const extractExperienceDescription = (item) => {
     if (!item) return { description: null, descriptionBullets: null };
-    const subComponents = item.querySelector(".pvs-entity__sub-components");
-    if (!subComponents) return { description: null, descriptionBullets: null };
+    const scope = item.querySelector(".pvs-entity__sub-components") || item;
+    if (!scope) return { description: null, descriptionBullets: null };
 
     clickSeeMoreInItem(item);
 
     const candidates = [];
-    const inlineNodes = subComponents.querySelectorAll(
+    const inlineNodes = scope.querySelectorAll(
       'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
     );
     if (inlineNodes.length) {
       inlineNodes.forEach((node) => candidates.push(node));
     } else {
-      subComponents.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
-      subComponents.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
+      scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
+      scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
     }
 
     const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
@@ -433,6 +437,22 @@
     return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
   }
 
+  const WORKPLACE_TYPE_RULES = [
+    { regex: /\bsur site\b/i, value: "Sur site" },
+    { regex: /\bhybride\b/i, value: "Hybride" },
+    { regex: /\bt[ée]l[ée]travail\b/i, value: "Télétravail" },
+    { regex: /\bon[- ]site\b/i, value: "On-site" },
+    { regex: /\bhybrid\b/i, value: "Hybrid" },
+    { regex: /\bremote\b/i, value: "Remote" },
+  ];
+
+  function normalizeWorkplaceType(s) {
+    const t = clean(s);
+    if (!t) return null;
+    const rule = WORKPLACE_TYPE_RULES.find((entry) => entry.regex.test(t));
+    return rule ? rule.value : null;
+  }
+
   function looksLikeEmploymentType(s) {
     const t = clean(s);
     if (!t) return false;
@@ -446,14 +466,14 @@
     const t = clean(s);
     if (!t) return false;
     if (t.length > 120) return false;
+    if (normalizeWorkplaceType(t)) return false;
 
-    const hasWorkMode = /(sur site|hybride|à distance|remote|on[- ]site)/i.test(t);
     const hasGeo =
       /(france|paris|île-de-france|ile-de-france|région|region|london|berlin|madrid|barcelona|bruxelles|brussels|amsterdam|lisbon|lisbonne)/i.test(
         t
       );
 
-    return hasWorkMode || hasGeo;
+    return hasGeo;
   }
 
   // fallback safe: "Six-fours les plages", "Nice", etc
@@ -468,6 +488,91 @@
     // lettres + espaces + ponctuation "adresse" très simple
     // exclut la plupart des descriptions (":", "+", chiffres, etc)
     return /^[\p{L}\s,'’.\-]+$/u.test(t);
+  }
+
+  function splitCompanyLine(line) {
+    if (!line) return { company: null, extras: [] };
+    const parts = line.split("·").map(clean).filter(Boolean);
+    return { company: parts[0] || null, extras: parts.slice(1) };
+  }
+
+  function extractTitleFromContainer(container) {
+    if (!container) return null;
+    return (
+      clean(container.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
+      clean(container.querySelector("div.t-bold span")?.textContent) ||
+      clean(container.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+      clean(container.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+      null
+    );
+  }
+
+  function extractCompanyLineFromContainer(container) {
+    if (!container) return null;
+    return (
+      clean(container.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+      clean(container.querySelector("span.t-14.t-normal")?.textContent) ||
+      null
+    );
+  }
+
+  function extractDatesFromContainer(container) {
+    if (!container) return null;
+    const caption =
+      clean(container.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
+      clean(container.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+      null;
+    if (caption) return caption;
+    const fallback = Array.from(
+      container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
+    )
+      .map((n) => clean(n.textContent))
+      .find((t) => looksLikeDates(t));
+    return fallback || null;
+  }
+
+  function collectMetaLines(container) {
+    if (!container) return [];
+    let spans = Array.from(
+      container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
+    )
+      .map((n) => clean(n.textContent))
+      .filter(Boolean);
+
+    if (!spans.length) {
+      spans = Array.from(container.querySelectorAll("span.t-14.t-normal.t-black--light"))
+        .map((n) => clean(n.textContent))
+        .filter(Boolean);
+    }
+
+    return uniq(spans);
+  }
+
+  function extractLocationAndWorkplaceType(lines) {
+    let location = null;
+    let workplaceType = null;
+
+    for (const line of lines) {
+      const parts = line.split("·").map(clean).filter(Boolean);
+      const candidates = parts.length ? parts : [clean(line)];
+
+      for (const part of candidates) {
+        if (!part) continue;
+        if (!workplaceType) {
+          const detected = normalizeWorkplaceType(part);
+          if (detected) {
+            workplaceType = detected;
+            continue;
+          }
+        }
+
+        if (!location && (looksLikeLocation(part) || looksLikePlainLocationFallback(part))) {
+          location = part;
+        }
+      }
+    }
+
+    return { location, workplaceType };
   }
 
   function bestUlForLegacy(expSection) {
@@ -507,49 +612,28 @@
   function parseLegacyRoleEntity(entity, index, companyOverride, scopeItem) {
     const link = pickMainEntityLink(entity);
     if (!link)
-      return { _idx: index, _ok: false, Titre: null, Entreprise: companyOverride || null, Dates: null, Lieu: null };
+      return {
+        _idx: index,
+        _ok: false,
+        Titre: null,
+        Entreprise: companyOverride || null,
+        Dates: null,
+        Lieu: null,
+        WorkplaceType: null,
+      };
 
-    const title =
-      clean(link.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
-      clean(link.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
-      null;
+    const title = extractTitleFromContainer(entity) || extractTitleFromContainer(link) || null;
+    const dates = extractDatesFromContainer(entity) || extractDatesFromContainer(link) || null;
 
-    const dates =
-      clean(link.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
-      clean(link.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
-      null;
+    const companyLine = extractCompanyLineFromContainer(entity) || extractCompanyLineFromContainer(link);
+    const { company: companyFromLine, extras } = splitCompanyLine(companyLine);
+    const metaLines = uniq([...collectMetaLines(entity), ...extras]);
 
-    let lightSpans = Array.from(
-      link.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
-    )
-      .map((n) => clean(n.textContent))
-      .filter(Boolean);
+    const { location, workplaceType } = extractLocationAndWorkplaceType(
+      metaLines.filter((t) => t && t !== dates && t !== title && t !== companyFromLine)
+    );
 
-    if (!lightSpans.length) {
-      lightSpans = Array.from(link.querySelectorAll("span.t-14.t-normal.t-black--light"))
-        .map((n) => clean(n.textContent))
-        .filter(Boolean);
-    }
-
-    lightSpans = uniq(lightSpans);
-
-    // FIX: sur legacy, le "lieu" est presque toujours un t-black--light
-    // donc on accepte aussi un fallback "plain text" (ex: "Six-fours les plages")
-    const location =
-      lightSpans.find(
-        (t) =>
-          t &&
-          t !== dates &&
-          !looksLikeEmploymentType(t) &&
-          (looksLikeLocation(t) || looksLikePlainLocationFallback(t))
-      ) || null;
-
-    const companyFlat =
-      clean(link.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-      clean(link.querySelector("span.t-14.t-normal")?.textContent) ||
-      null;
-
-    const company = companyOverride || companyFlat || null;
+    const company = companyOverride || companyFromLine || null;
 
     const { description, descriptionBullets } = extractExperienceDescription(
       scopeItem || entity.closest("li") || entity
@@ -563,6 +647,7 @@
       Entreprise: company,
       Dates: dates,
       Lieu: location,
+      WorkplaceType: workplaceType,
       Description: description,
       DescriptionBullets: descriptionBullets,
     };
@@ -577,11 +662,13 @@
     ).filter((e) => e.querySelector(".pvs-entity__caption-wrapper"));
 
     if (innerRoleEntities.length) {
-      const outerCompany = extractCompanyFromEntity(entity) || null;
+      const headerTitle = extractTitleFromContainer(entity);
+      const headerCompanyLine = extractCompanyLineFromContainer(entity);
+      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
       const out = [];
       for (let i = 0; i < innerRoleEntities.length; i++) {
         const scopeItem = innerRoleEntities[i].closest("li") || li;
-        const parsed = parseLegacyRoleEntity(innerRoleEntities[i], `${index}.${i}`, outerCompany, scopeItem);
+        const parsed = parseLegacyRoleEntity(innerRoleEntities[i], `${index}.${i}`, headerCompany, scopeItem);
         if (parsed._ok) out.push(parsed);
       }
       return out;
@@ -614,6 +701,48 @@
   }
 
   function parseSduiExperienceItem(item, index) {
+    const subComponents = item.querySelector(".pvs-entity__sub-components");
+    const groupedRoles = subComponents
+      ? Array.from(subComponents.querySelectorAll("li")).filter(
+          (li) => li.querySelector("div.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
+        )
+      : [];
+
+    if (groupedRoles.length > 1) {
+      const headerTitle = extractTitleFromContainer(item);
+      const headerCompanyLine = extractCompanyLineFromContainer(item);
+      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+
+      return groupedRoles
+        .map((roleItem, roleIndex) => {
+          const title = extractTitleFromContainer(roleItem);
+          const dates = extractDatesFromContainer(roleItem);
+          const { company: companyFromLine, extras } = splitCompanyLine(extractCompanyLineFromContainer(roleItem));
+          const metaLines = uniq([...collectMetaLines(roleItem), ...extras]);
+          const { location, workplaceType } = extractLocationAndWorkplaceType(
+            metaLines.filter((t) => t && t !== dates && t !== title && t !== companyFromLine)
+          );
+
+          const { description, descriptionBullets } = extractExperienceDescription(roleItem);
+
+          const company = headerCompany || companyFromLine || null;
+          const ok = !!(title && company && dates);
+
+          return {
+            _idx: `${index}.${roleIndex}`,
+            _ok: ok,
+            Titre: title,
+            Entreprise: company,
+            Dates: dates,
+            Lieu: location,
+            WorkplaceType: workplaceType,
+            Description: description,
+            DescriptionBullets: descriptionBullets,
+          };
+        })
+        .filter((x) => x._ok);
+    }
+
     const link =
       bestSduiLinkForItem(item) ||
       item.querySelector('a[href*="/company/"]') ||
@@ -624,6 +753,11 @@
       item.querySelector('a[href^="https://www.linkedin.com/school/"]') ||
       null;
 
+    const title = extractTitleFromContainer(item) || extractTitleFromContainer(link);
+    const dates = extractDatesFromContainer(item) || extractDatesFromContainer(link);
+    const companyLine = extractCompanyLineFromContainer(item) || extractCompanyLineFromContainer(link);
+    const { company, extras } = splitCompanyLine(companyLine);
+
     const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
     let ps = Array.from(pNodes)
       .map((p) => clean(p.textContent))
@@ -632,25 +766,11 @@
 
     ps = uniq(ps);
 
-    const title = ps[0] || null;
+    const metaCandidates = uniq([...collectMetaLines(item), ...extras, ...ps]).filter(
+      (t) => t && t !== title && t !== company && t !== dates && !looksLikeEmploymentType(t)
+    );
 
-    let company = null;
-    if (ps[1]) company = clean(ps[1].split("·")[0]);
-
-    const dates = ps.find((t) => looksLikeDates(t)) || null;
-
-    // FIX: SDUI peut contenir des lieux "ville seule" pas dans la regex, donc fallback plain text
-    const locationCandidates = ps
-      .filter(Boolean)
-      .filter((t) => t !== title)
-      .filter((t) => t !== company)
-      .filter((t) => t !== dates)
-      .filter((t) => !looksLikeEmploymentType(t));
-
-    const location =
-      locationCandidates.find((t) => looksLikeLocation(t)) ||
-      locationCandidates.find((t) => looksLikePlainLocationFallback(t)) ||
-      null;
+    const { location, workplaceType } = extractLocationAndWorkplaceType(metaCandidates);
 
     const { description, descriptionBullets } = extractExperienceDescription(item);
 
@@ -662,6 +782,7 @@
       Entreprise: company,
       Dates: dates,
       Lieu: location,
+      WorkplaceType: workplaceType,
       Description: description,
       DescriptionBullets: descriptionBullets,
     };
@@ -691,7 +812,7 @@
     };
 
     if (sduiLikely.length) {
-      const parsed = sduiLikely.map((it, i) => parseSduiExperienceItem(it, i));
+      const parsed = sduiLikely.flatMap((it, i) => parseSduiExperienceItem(it, i));
       const ok = parsed.filter((x) => x._ok);
       return { mode: "SDUI_ITEMS", experiences: ok, counts };
     }
@@ -804,6 +925,7 @@
       company: exp.Entreprise || "",
       dates: exp.Dates || "",
       location: exp.Lieu || "",
+      workplaceType: exp.WorkplaceType || null,
       description: exp.Description || null,
       descriptionBullets: exp.DescriptionBullets || null,
     }));
@@ -960,10 +1082,17 @@
     return rows;
   }
 
+  function debugScrapeExperiences() {
+    const experiences = window.__FOCALS_LAST?.experiences || [];
+    log("Experiences JSON:", experiences);
+    return experiences;
+  }
+
   window.FOCALS = {
     run: () => scheduleRun("manual_call"),
     dump,
     logExperienceDescriptions,
+    debugScrapeExperiences,
   };
 
   if (chrome?.runtime?.onMessage?.addListener) {
@@ -1001,7 +1130,8 @@
     "Ready. Autorun enabled. Also available:",
     "FOCALS.dump()",
     "FOCALS.run()",
-    "FOCALS.logExperienceDescriptions()"
+    "FOCALS.logExperienceDescriptions()",
+    "FOCALS.debugScrapeExperiences()"
   );
   installSpaWatcher();
   scheduleRun("init");
