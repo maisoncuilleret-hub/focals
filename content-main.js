@@ -12,6 +12,11 @@
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
 
+  const EXP_TAG = "[FOCALS][EXPERIENCE]";
+  const expLog = (...a) => console.log(EXP_TAG, ...a);
+  const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
+  const expWarn = (...a) => console.warn(EXP_TAG, ...a);
+
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -29,48 +34,58 @@
   };
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const normalizeProfilePath = (pathname = "") => {
+    const normalized = pathname.replace(/\/$/, "");
+    const match = normalized.match(/^\/in\/[^/]+/i);
+    return match ? match[0] : null;
+  };
   const canonicalProfileUrl = (u) => {
     try {
-      const url = new URL(u);
+      const url = new URL(u, window.location.origin);
       url.search = "";
       url.hash = "";
-      return url.toString();
+      const basePath = normalizeProfilePath(url.pathname);
+      if (!basePath) return null;
+      return `${url.origin}${basePath}`;
     } catch {
-      return u;
+      return null;
     }
   };
   const getProfileKey = (u = location.href) => {
     try {
       const url = new URL(u, window.location.origin);
-      const path = url.pathname.replace(/\/$/, "");
-      if (!/^\/in\//i.test(path)) return null;
-      return path;
+      return normalizeProfilePath(url.pathname);
     } catch {
       return null;
     }
   };
+  const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
 
   let lastScrapedProfileKey = null;
   let lastScrapeAt = 0;
   let lastSeenProfileKey = getProfileKey(location.href);
   let scrapeInFlight = false;
   let urlChangeTimer = null;
+  const profileScrapeCache = new Map();
+  const detailsScrapeInFlight = new Map();
 
   const getExperienceDetailsUrl = (root = document) => {
     const anchor = root.querySelector('a[href*="/details/experience/"]');
     const href = anchor?.getAttribute("href") || anchor?.href || "";
     if (href) {
       try {
-        return new URL(href, window.location.origin).toString();
+        const resolved = new URL(href, window.location.origin);
+        const basePath = normalizeProfilePath(resolved.pathname);
+        return basePath ? `${resolved.origin}${basePath}/details/experience/` : resolved.toString();
       } catch (err) {
         return href;
       }
     }
 
     const { origin, pathname } = window.location;
-    if (/^\/in\//i.test(pathname)) {
-      const normalizedPath = pathname.replace(/\/$/, "");
-      return `${origin}${normalizedPath}/details/experience/`;
+    const basePath = normalizeProfilePath(pathname);
+    if (basePath) {
+      return `${origin}${basePath}/details/experience/`;
     }
 
     return null;
@@ -176,7 +191,7 @@
   const shouldUseExperienceDetails = (root = document) =>
     evaluateExperienceDetailsNeed(root).shouldUse;
 
-  const requestExperienceDetailsScrape = (detailsUrl) =>
+  const requestExperienceDetailsScrape = (detailsUrl, profileKey) =>
     new Promise((resolve, reject) => {
       if (!detailsUrl) {
         resolve([]);
@@ -184,7 +199,7 @@
       }
       try {
         chrome.runtime.sendMessage(
-          { type: "FOCALS_SCRAPE_DETAILS_EXPERIENCE", detailsUrl },
+          { type: "FOCALS_SCRAPE_DETAILS_EXPERIENCE", detailsUrl, profileKey },
           (response) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message || "Messaging failed"));
@@ -345,6 +360,128 @@
 
     return { description, descriptionBullets: extractDescriptionBullets(description) };
   };
+
+  const monthTokenRegex =
+    /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|septembre|october|november|dec|january|february|march|april|june|july|august|september|october|november|december)/i;
+
+  function looksLikeDateRange(text) {
+    const t = clean(text).toLowerCase();
+    if (!t) return false;
+    if (/\b(19\d{2}|20\d{2})\b/.test(t) && (t.includes(" - ") || t.includes("–") || t.includes("—"))) {
+      return true;
+    }
+    if (/\baujourd/i.test(t)) return true;
+    return monthTokenRegex.test(t);
+  }
+
+  function isMostlyDatesText(text) {
+    const t = clean(text).toLowerCase();
+    if (!t) return false;
+    if (
+      /^(du|de)\s+.+\s+(au|a|à)\s+.+/i.test(t) &&
+      (monthTokenRegex.test(t) || /\b(19\d{2}|20\d{2})\b/.test(t))
+    ) {
+      return true;
+    }
+    if (!looksLikeDateRange(t)) return false;
+    const stripped = t
+      .replace(monthTokenRegex, "")
+      .replace(/\b(19\d{2}|20\d{2})\b/g, "")
+      .replace(/\b(aujourd'hui|aujourd’hui|present|présent)\b/g, "")
+      .replace(/[0-9]/g, "")
+      .replace(/[\s·\-–—]+/g, "")
+      .trim();
+    return stripped.length < 6;
+  }
+
+  function isTrivialMetaDescription(desc, ctx) {
+    if (!desc) return true;
+    const normalized = clean(desc).toLowerCase();
+    if (!normalized) return true;
+    const title = clean(ctx?.title || "").toLowerCase();
+    const companyLine = clean(ctx?.companyLine || "").toLowerCase();
+    const company = clean(ctx?.company || "").toLowerCase();
+    const dates = clean(ctx?.dates || "").toLowerCase();
+    const location = clean(ctx?.location || "").toLowerCase();
+    const workplaceType = clean(ctx?.workplaceType || "").toLowerCase();
+
+    const same = (value) => value && normalized === value;
+    const combo = [location, workplaceType].filter(Boolean).join(" · ");
+
+    if (same(title) || normalized === `${title} ${title}`.trim()) return true;
+    if (same(company) || same(companyLine)) return true;
+    if (same(dates) || isMostlyDatesText(desc)) return true;
+    if (same(location) || same(workplaceType) || (combo && normalized === combo)) return true;
+    return false;
+  }
+
+  function normalizeDetailsDescription(text, ctx) {
+    let normalized = normalizeInfosText(text || "");
+    normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
+    normalized = fixSpacedUrls(normalized);
+    if (!normalized) return null;
+
+    const lines = normalized
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((line) => !/comp[ée]tences|skills/i.test(line));
+
+    const filtered = lines.filter((line) => !isTrivialMetaDescription(line, ctx));
+    const finalText = filtered.join("\n").trim();
+    if (!finalText || isTrivialMetaDescription(finalText, ctx)) return null;
+    return finalText;
+  }
+
+  function extractDetailsDescription(root, ctx) {
+    if (!root) return null;
+    clickSeeMoreInItem(root);
+
+    const preferredNodes = Array.from(
+      root.querySelectorAll(
+        'div[class*="inline-show-more-text"] span[aria-hidden="true"], .pv-shared-text-with-see-more span[aria-hidden="true"]'
+      )
+    );
+    const inlineNodes = preferredNodes.length
+      ? preferredNodes
+      : Array.from(
+          root.querySelectorAll('div[class*="inline-show-more-text"], .pv-shared-text-with-see-more')
+        );
+
+    const inlineText = inlineNodes.map(extractTextWithBreaks).filter(Boolean).join("\n");
+    const normalizedInline = normalizeDetailsDescription(inlineText, ctx);
+    if (normalizedInline) return normalizedInline;
+
+    const fallbackNodes = Array.from(
+      root.querySelectorAll("div.t-14, div.t-normal, span.t-14, span.t-normal, p")
+    ).filter((node) => {
+      if (!node) return false;
+      if (node.closest("h1, h2, h3")) return false;
+      if (node.closest("button, a")) return false;
+      return true;
+    });
+
+    let best = null;
+    let bestScore = 0;
+    for (const node of fallbackNodes) {
+      const raw = extractTextWithBreaks(node);
+      const cleaned = normalizeDetailsDescription(raw, ctx);
+      if (!cleaned) continue;
+      const scoreBase = cleaned.length;
+      const className = node.className || "";
+      const classBonus =
+        (className.includes("t-black") ? 12 : 0) +
+        (className.includes("t-normal") ? 8 : 0) +
+        (className.includes("t-14") ? 6 : 0);
+      const score = scoreBase + classBonus;
+      if (score > bestScore) {
+        best = cleaned;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
 
   const findAboutSection = () => {
     const anchor = document.getElementById("about");
@@ -994,6 +1131,187 @@
     return { mode: "EMPTY", experiences: [], counts };
   }
 
+  function pickDetailsExperienceSection(root = document) {
+    const main =
+      root.querySelector('main[role="main"]') ||
+      root.querySelector("main") ||
+      root.querySelector('[role="main"]') ||
+      root.body;
+    if (!main) return { mode: "NO_MAIN", root: null };
+
+    const anchor = main.querySelector("#experience");
+    if (anchor) {
+      const section = anchor.closest("section") || anchor.parentElement?.closest("section") || anchor.parentElement;
+      if (section) return { mode: "ANCHOR", root: section };
+    }
+
+    const headings = Array.from(main.querySelectorAll("h1, h2, h3")).filter((el) =>
+      /exp[ée]rience/i.test(clean(el.textContent))
+    );
+    if (headings.length) {
+      const section = headings[0].closest("section");
+      if (section) return { mode: "HEADING", root: section };
+    }
+
+    const sections = Array.from(main.querySelectorAll("section"));
+    if (sections.length) {
+      const scored = sections
+        .map((section) => ({
+          section,
+          score: clean(section.textContent || "").length,
+        }))
+        .sort((a, b) => b.score - a.score);
+      return { mode: "LARGEST_SECTION", root: scored[0].section };
+    }
+
+    return { mode: "MAIN_ONLY", root: main };
+  }
+
+  function extractDatesFromMetaLines(lines) {
+    return lines.find((line) => looksLikeDates(line)) || null;
+  }
+
+  function collectTopLevelExperienceLis(scope) {
+    const lis = Array.from(scope.querySelectorAll("li"));
+    return lis.filter((li) => {
+      if (li.closest(".pvs-entity__sub-components")) return false;
+      if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+      if (clean(li.innerText || "").length <= 25) return false;
+      return true;
+    });
+  }
+
+  function scrapeDetailsExperienceDocument(root = document) {
+    const pick = pickDetailsExperienceSection(root);
+    const scope = pick.root || root.body || root;
+    const topLis = collectTopLevelExperienceLis(scope);
+    const experiences = [];
+    const seen = new Set();
+    const counts = {
+      topLis: topLis.length,
+      grouped: 0,
+      singles: 0,
+      skipped: 0,
+    };
+
+    const pushExperience = (entry) => {
+      if (!entry) return;
+      const key = [entry.title, entry.company, entry.dates, entry.location, entry.workplaceType || ""]
+        .map((v) => clean(v).toLowerCase())
+        .join("|");
+      if (seen.has(key)) return;
+      seen.add(key);
+      experiences.push(entry);
+    };
+
+    for (const li of topLis) {
+      const subComponents = li.querySelector(".pvs-entity__sub-components");
+      const roleLis = subComponents
+        ? Array.from(subComponents.querySelectorAll("li")).filter((roleLi) => {
+            if (!roleLi.querySelector("div.t-bold, span.t-bold")) return false;
+            const datesSignal =
+              extractDatesFromContainer(roleLi) ||
+              extractDatesFromMetaLines(collectMetaLines(roleLi)) ||
+              extractDatesFromMetaLines(collectMetaLines(roleLi.closest("li")));
+            return !!datesSignal;
+          })
+        : [];
+
+      if (roleLis.length >= 2) {
+        counts.grouped += 1;
+        const headerTitle = extractTitleFromContainer(li);
+        const headerCompanyLine = extractCompanyLineFromContainer(li);
+        const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+
+        for (const roleLi of roleLis) {
+          const title = extractTitleFromContainer(roleLi);
+          const dates =
+            extractDatesFromContainer(roleLi) ||
+            extractDatesFromMetaLines(collectMetaLines(roleLi)) ||
+            extractDatesFromMetaLines(collectMetaLines(roleLi.closest("li")));
+          if (!title || !dates) {
+            counts.skipped += 1;
+            continue;
+          }
+          const companyLine = extractCompanyLineFromContainer(roleLi) || headerCompanyLine || headerCompany || "";
+          const { company: roleCompany, extras } = splitCompanyLine(companyLine);
+          const company = headerCompany || roleCompany;
+          if (!company) {
+            counts.skipped += 1;
+            continue;
+          }
+
+          const metaLines = uniq([...collectMetaLines(roleLi), ...extras]).filter(
+            (line) => line && line !== title && line !== dates && line !== company
+          );
+          const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
+
+          const ctx = {
+            title,
+            company,
+            companyLine,
+            dates,
+            location,
+            workplaceType,
+          };
+          const description = extractDetailsDescription(roleLi, ctx);
+
+          pushExperience({
+            title,
+            company,
+            dates,
+            location: location || "",
+            workplaceType: workplaceType || null,
+            description: description || null,
+          });
+        }
+        continue;
+      }
+
+      counts.singles += 1;
+      const title = extractTitleFromContainer(li);
+      const dates =
+        extractDatesFromContainer(li) ||
+        extractDatesFromMetaLines(collectMetaLines(li)) ||
+        extractDatesFromMetaLines(collectMetaLines(li.closest("li")));
+      const companyLine = extractCompanyLineFromContainer(li);
+      const { company, extras } = splitCompanyLine(companyLine);
+
+      if (!title || !company || !dates || looksLikeDates(company)) {
+        counts.skipped += 1;
+        continue;
+      }
+
+      const metaLines = uniq([...collectMetaLines(li), ...extras]).filter(
+        (line) => line && line !== title && line !== company && line !== dates
+      );
+      const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
+
+      const ctx = {
+        title,
+        company,
+        companyLine,
+        dates,
+        location,
+        workplaceType,
+      };
+      const description = extractDetailsDescription(li, ctx);
+
+      pushExperience({
+        title,
+        company,
+        dates,
+        location: location || "",
+        workplaceType: workplaceType || null,
+        description: description || null,
+      });
+    }
+
+    const debug = { rootMode: pick.mode, counts };
+    expLog("DETAILS_DEBUG", debug);
+    return { experiences, debug };
+  }
+
   async function waitForExperienceReady(timeoutMs = 6500) {
     const deadline = Date.now() + timeoutMs;
 
@@ -1035,26 +1353,44 @@
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
-    const detailsDecision = evaluateExperienceDetailsNeed();
-    dlog("shouldUseExperienceDetails", detailsDecision);
-
-    const detailsUrl = detailsDecision.shouldUse ? getExperienceDetailsUrl() : null;
+    const profileCanonicalUrl = canonicalProfileUrl(href);
+    const detailsUrl = getExperienceDetailsUrl();
     if (detailsUrl) {
-      dlog("Experience details URL detected", detailsUrl);
-    } else if (detailsDecision.shouldUse) {
-      warn("Experience details requested but no URL found");
+      expDlog("Details URL detected", { detailsUrl, profileCanonicalUrl });
+    } else {
+      expWarn("Details URL missing for profile", { href, profileCanonicalUrl });
     }
 
     let detailsExperiences = [];
+    let detailsDebug = null;
     if (detailsUrl) {
       try {
-        detailsExperiences = await requestExperienceDetailsScrape(detailsUrl);
-        dlog("Experience details scraped", { count: detailsExperiences.length });
+        if (isDetailsExperiencePath(location.pathname)) {
+          const detailsResult = scrapeDetailsExperienceDocument(document);
+          detailsExperiences = detailsResult.experiences || [];
+          detailsDebug = detailsResult.debug || null;
+        } else {
+          const inflightKey = profileCanonicalUrl || detailsUrl;
+          if (!detailsScrapeInFlight.has(inflightKey)) {
+            detailsScrapeInFlight.set(
+              inflightKey,
+              requestExperienceDetailsScrape(detailsUrl, inflightKey)
+            );
+          }
+          try {
+            detailsExperiences = await detailsScrapeInFlight.get(inflightKey);
+          } finally {
+            detailsScrapeInFlight.delete(inflightKey);
+          }
+        }
+        expLog("DETAILS_SCRAPED", {
+          count: detailsExperiences.length,
+          debug: detailsDebug,
+          profileCanonicalUrl,
+        });
       } catch (err) {
-        warn("Experience details scrape failed", err?.message || err);
+        expWarn("Details experience scrape failed", err?.message || err);
       }
-    } else {
-      dlog("Experience details skipped", detailsDecision);
     }
 
     const detailsNormalized = detailsExperiences
@@ -1072,7 +1408,7 @@
       .filter((exp) => exp.Titre && exp.Entreprise);
 
     const finalExperiences = detailsNormalized.length ? detailsNormalized : ready.collected.experiences;
-    dlog("Experience counts", {
+    expLog("Experience counts", {
       profileCount: ready.collected.experiences.length,
       detailsCount: detailsNormalized.length,
       finalCount: finalExperiences.length,
@@ -1098,6 +1434,7 @@
         experienceRootPath: elementPath(ready.pick.root),
         experienceDetailsUrl: detailsUrl || null,
         experienceDetailsCount: detailsNormalized.length,
+        experienceDetailsDebug: detailsDebug,
       },
     };
 
@@ -1112,7 +1449,7 @@
     });
 
     if (!result.experiences.length) {
-      warn("No experiences parsed. Debug:", result.debug);
+      expWarn("No experiences parsed. Debug:", result.debug);
     } else {
       console.table(
         result.experiences.map((e) => ({
@@ -1219,7 +1556,37 @@
     }
 
     const currentProfileKey = profileKey || getProfileKey(location.href);
+    const currentProfileUrl = canonicalProfileUrl(location.href);
+    const cached = currentProfileUrl ? profileScrapeCache.get(currentProfileUrl) : null;
     dlog("currentProfileKey", { currentProfileKey, reason });
+
+    if (!force && cached?.result) {
+      dlog("skip scrape: cache hit", {
+        currentProfileKey,
+        currentProfileUrl,
+        scrapedAt: cached.scrapedAt,
+        reason,
+      });
+      if (currentProfileKey) {
+        lastScrapedProfileKey = currentProfileKey;
+        lastScrapeAt = cached.scrapedAt || Date.now();
+      }
+      try {
+        if (chrome?.storage?.local) {
+          chrome.storage.local.set({ FOCALS_LAST_PROFILE: cached.result });
+        }
+      } catch (err) {
+        warn("Unable to persist profile cache", err);
+      }
+      if (typeof window.updateFocalsPanel === "function") {
+        try {
+          window.updateFocalsPanel(cached.result);
+        } catch (err) {
+          warn("updateFocalsPanel failed", err);
+        }
+      }
+      return cached.result;
+    }
 
     if (!force && currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
       dlog("skip scrape: already scraped", {
@@ -1258,6 +1625,12 @@
         lastScrapedProfileKey = currentProfileKey;
         lastScrapeAt = Date.now();
       }
+      if (normalized && currentProfileUrl) {
+        profileScrapeCache.set(currentProfileUrl, {
+          scrapedAt: Date.now(),
+          result: normalized,
+        });
+      }
 
       return normalized || raw;
     } finally {
@@ -1268,6 +1641,15 @@
   function scheduleRun(reason) {
     if (window.__FOCALS_TIMER) clearTimeout(window.__FOCALS_TIMER);
     const currentProfileKey = getProfileKey(location.href);
+    const currentProfileUrl = canonicalProfileUrl(location.href);
+    if (currentProfileUrl && profileScrapeCache.has(currentProfileUrl)) {
+      dlog("skip scrape: cache hit", {
+        currentProfileKey,
+        currentProfileUrl,
+        reason,
+      });
+      return;
+    }
     if (currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
       dlog("skip scrape: already scraped", {
         currentProfileKey,
@@ -1290,11 +1672,33 @@
 
     const onUrlChange = (trigger) => {
       const profileKey = getProfileKey(location.href);
+      const profileUrl = canonicalProfileUrl(location.href);
       if (profileKey && profileKey !== lastSeenProfileKey) {
         dlog("Profile URL changed", { from: lastSeenProfileKey, to: profileKey, trigger });
         lastSeenProfileKey = profileKey;
         lastScrapedProfileKey = null;
         lastScrapeAt = 0;
+
+        const cached = profileUrl ? profileScrapeCache.get(profileUrl) : null;
+        if (cached?.result) {
+          dlog("Profile URL cache hit on navigation", { profileUrl, trigger });
+          try {
+            if (chrome?.storage?.local) {
+              chrome.storage.local.set({ FOCALS_LAST_PROFILE: cached.result });
+            }
+          } catch (err) {
+            warn("Unable to persist profile cache", err);
+          }
+          if (typeof window.updateFocalsPanel === "function") {
+            try {
+              window.updateFocalsPanel(cached.result);
+            } catch (err) {
+              warn("updateFocalsPanel failed", err);
+            }
+          }
+          return;
+        }
+
         scheduleRun(`url_change:${trigger}`);
         return;
       }
