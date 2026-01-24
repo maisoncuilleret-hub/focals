@@ -5,6 +5,9 @@ import { createLogger } from "./src/utils/logger.js";
 const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
 const DEBUG_KEEP_DETAILS_TAB = false;
+const EXP_TAG = "[FOCALS][EXPERIENCE]";
+const expLog = (...a) => console.log(EXP_TAG, ...a);
+const detailsScrapeInFlight = new Map();
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -257,8 +260,27 @@ async function ensureContentScript(tabId) {
 }
 
 async function detailsExperienceScraper() {
+  const EXP_TAG = "[FOCALS][EXPERIENCE]";
+  const expLog = (...a) => console.log(EXP_TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const normalizeInfosText = (s) =>
+    (s || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+  const fixSpacedUrls = (t) => t.replace(/\bhttps?:\/\/[^\s)]+/gi, (url) => url.replace(/\s+/g, ""));
+
+  const extractTextWithBreaks = (node) => {
+    if (!node) return "";
+    const html = node.innerHTML || "";
+    const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
+    return withBreaks.replace(/<[^>]*>/g, "");
+  };
 
   const WORKPLACE_TYPE_RULES = [
     { regex: /\bsur site\b/i, value: "Sur site" },
@@ -269,6 +291,9 @@ async function detailsExperienceScraper() {
     { regex: /\bhybrid\b/i, value: "Hybrid" },
     { regex: /\bremote\b/i, value: "Remote" },
   ];
+
+  const monthTokenRegex =
+    /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|septembre|october|november|dec|january|february|march|april|june|july|august|september|october|november|december)/i;
 
   const normalizeWorkplaceType = (text) => {
     const t = clean(text);
@@ -288,24 +313,34 @@ async function detailsExperienceScraper() {
       text || ""
     );
 
-  const isRelationDegree = (text) => /\b(1er|2e|3e|1st|2nd|3rd)\b/i.test(text || "");
-
-  const extractDescription = (item) => {
-    if (!item) return null;
-    const scope = item.querySelector(".pvs-entity__sub-components") || item;
-    const candidates = [];
-    const inlineNodes = scope.querySelectorAll(
-      'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
-    );
-    if (inlineNodes.length) {
-      inlineNodes.forEach((node) => candidates.push(node));
-    } else {
-      scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
-      scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
+  const looksLikeDateRange = (text) => {
+    const t = clean(text).toLowerCase();
+    if (!t) return false;
+    if (/\b(19\d{2}|20\d{2})\b/.test(t) && (t.includes(" - ") || t.includes("–") || t.includes("—"))) {
+      return true;
     }
-    const raw = candidates.map((node) => node?.innerText || node?.textContent || "").join("\n");
-    const normalized = clean(raw.replace(/\u00a0/g, " ").replace(/\n{3,}/g, "\n\n"));
-    return normalized.length >= 30 ? normalized : null;
+    if (/\baujourd/i.test(t)) return true;
+    return monthTokenRegex.test(t);
+  };
+
+  const isMostlyDatesText = (text) => {
+    const t = clean(text).toLowerCase();
+    if (!t) return false;
+    if (
+      /^(du|de)\s+.+\s+(au|a|à)\s+.+/i.test(t) &&
+      (monthTokenRegex.test(t) || /\b(19\d{2}|20\d{2})\b/.test(t))
+    ) {
+      return true;
+    }
+    if (!looksLikeDateRange(t)) return false;
+    const stripped = t
+      .replace(monthTokenRegex, "")
+      .replace(/\b(19\d{2}|20\d{2})\b/g, "")
+      .replace(/\b(aujourd'hui|aujourd’hui|present|présent)\b/g, "")
+      .replace(/[0-9]/g, "")
+      .replace(/[\s·\-–—]+/g, "")
+      .trim();
+    return stripped.length < 6;
   };
 
   const splitCompanyLine = (line) => {
@@ -313,33 +348,8 @@ async function detailsExperienceScraper() {
     const parts = line
       .split("·")
       .map(clean)
-      .filter(Boolean)
-      .filter((part) => !isRelationDegree(part));
+      .filter(Boolean);
     return { company: parts[0] || null, extras: parts.slice(1) };
-  };
-
-  const extractLocationAndWorkplaceType = (lines) => {
-    let location = null;
-    let workplaceType = null;
-
-    for (const line of lines) {
-      const parts = line.split("·").map(clean).filter(Boolean);
-      for (const part of parts.length ? parts : [clean(line)]) {
-        if (!part || isRelationDegree(part)) continue;
-        if (!workplaceType) {
-          const detected = normalizeWorkplaceType(part);
-          if (detected) {
-            workplaceType = detected;
-            continue;
-          }
-        }
-        if (!location && !looksLikeDates(part) && !looksLikeEmploymentType(part)) {
-          location = part;
-        }
-      }
-    }
-
-    return { location, workplaceType };
   };
 
   const collectMetaLines = (container) => {
@@ -354,7 +364,7 @@ async function detailsExperienceScraper() {
         .map((n) => clean(n.textContent))
         .filter(Boolean);
     }
-    return spans.filter((line) => !isRelationDegree(line));
+    return spans;
   };
 
   const extractTitleFromContainer = (container) =>
@@ -373,6 +383,140 @@ async function detailsExperienceScraper() {
     clean(container?.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
     clean(container?.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
     null;
+
+  const extractDatesFromMetaLines = (lines) => lines.find((line) => looksLikeDates(line)) || null;
+
+  const extractLocationAndWorkplaceType = (lines) => {
+    let location = null;
+    let workplaceType = null;
+
+    for (const line of lines) {
+      const parts = line.split("·").map(clean).filter(Boolean);
+      for (const part of parts.length ? parts : [clean(line)]) {
+        if (!part) continue;
+        if (!workplaceType) {
+          const detected = normalizeWorkplaceType(part);
+          if (detected) {
+            workplaceType = detected;
+            continue;
+          }
+        }
+        if (!location && !looksLikeDates(part) && !looksLikeEmploymentType(part)) {
+          location = part;
+        }
+      }
+    }
+
+    return { location, workplaceType };
+  };
+
+  const SEE_MORE_REGEX = /(voir plus|see more|show more|afficher la suite)/i;
+
+  const clickSeeMore = (scope) => {
+    if (!scope || scope.dataset?.focalsSeeMoreClicked) return;
+    const button = Array.from(scope.querySelectorAll("button, a")).find((el) => {
+      const label = `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.trim();
+      if (!label) return false;
+      if (!SEE_MORE_REGEX.test(label)) return false;
+      const expanded = el.getAttribute("aria-expanded");
+      return expanded !== "true";
+    });
+    if (button) {
+      button.click();
+      scope.dataset.focalsSeeMoreClicked = "true";
+    }
+  };
+
+  const isTrivialMetaDescription = (desc, ctx) => {
+    if (!desc) return true;
+    const normalized = clean(desc).toLowerCase();
+    if (!normalized) return true;
+    const title = clean(ctx?.title || "").toLowerCase();
+    const companyLine = clean(ctx?.companyLine || "").toLowerCase();
+    const company = clean(ctx?.company || "").toLowerCase();
+    const dates = clean(ctx?.dates || "").toLowerCase();
+    const location = clean(ctx?.location || "").toLowerCase();
+    const workplaceType = clean(ctx?.workplaceType || "").toLowerCase();
+    const combo = [location, workplaceType].filter(Boolean).join(" · ");
+
+    if (title && (normalized === title || normalized === `${title} ${title}`.trim())) return true;
+    if (company && normalized === company) return true;
+    if (companyLine && normalized === companyLine) return true;
+    if (dates && normalized === dates) return true;
+    if (location && normalized === location) return true;
+    if (workplaceType && normalized === workplaceType) return true;
+    if (combo && normalized === combo) return true;
+    if (isMostlyDatesText(desc)) return true;
+    return false;
+  };
+
+  const normalizeDetailsDescription = (text, ctx) => {
+    let normalized = normalizeInfosText(text || "");
+    normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
+    normalized = fixSpacedUrls(normalized);
+    if (!normalized) return null;
+
+    const lines = normalized
+      .split("\n")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .filter((line) => !/comp[ée]tences|skills/i.test(line));
+
+    const filtered = lines.filter((line) => !isTrivialMetaDescription(line, ctx));
+    const finalText = filtered.join("\n").trim();
+    if (!finalText || isTrivialMetaDescription(finalText, ctx)) return null;
+    return finalText;
+  };
+
+  const extractDetailsDescription = (root, ctx) => {
+    if (!root) return null;
+    clickSeeMore(root);
+
+    const preferredNodes = Array.from(
+      root.querySelectorAll(
+        'div[class*="inline-show-more-text"] span[aria-hidden="true"], .pv-shared-text-with-see-more span[aria-hidden="true"]'
+      )
+    );
+    const inlineNodes = preferredNodes.length
+      ? preferredNodes
+      : Array.from(
+          root.querySelectorAll('div[class*="inline-show-more-text"], .pv-shared-text-with-see-more')
+        );
+
+    const inlineText = inlineNodes.map(extractTextWithBreaks).filter(Boolean).join("\n");
+    const normalizedInline = normalizeDetailsDescription(inlineText, ctx);
+    if (normalizedInline) return normalizedInline;
+
+    const fallbackNodes = Array.from(
+      root.querySelectorAll("div.t-14, div.t-normal, span.t-14, span.t-normal, p")
+    ).filter((node) => {
+      if (!node) return false;
+      if (node.closest("h1, h2, h3")) return false;
+      if (node.closest("button, a")) return false;
+      return true;
+    });
+
+    let best = null;
+    let bestScore = 0;
+    for (const node of fallbackNodes) {
+      const raw = extractTextWithBreaks(node);
+      const cleaned = normalizeDetailsDescription(raw, ctx);
+      if (!cleaned) continue;
+      const scoreBase = cleaned.length;
+      const className = node.className || "";
+      const classBonus =
+        (className.includes("t-black") ? 12 : 0) +
+        (className.includes("t-normal") ? 8 : 0) +
+        (className.includes("t-14") ? 6 : 0);
+      const score = scoreBase + classBonus;
+      if (score > bestScore) {
+        best = cleaned;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  };
 
   const scrollToLoad = async () => {
     let lastHeight = 0;
@@ -398,84 +542,202 @@ async function detailsExperienceScraper() {
     document.querySelector("main") ||
     document.querySelector('[role="main"]') ||
     document.body;
-  const sections = Array.from(main.querySelectorAll("section"));
-  const experienceSection = sections.find((section) => {
-    const heading = section.querySelector("h1, h2, h3");
-    const headingText = clean(heading?.textContent || section.getAttribute("aria-label") || "");
-    return /expérience|experience/i.test(headingText);
-  });
+  let experienceSection = null;
+  let rootMode = "MAIN";
+
+  const anchor = main.querySelector("#experience");
+  if (anchor) {
+    experienceSection = anchor.closest("section") || anchor.parentElement?.closest("section") || anchor.parentElement;
+    rootMode = "ANCHOR";
+  } else {
+    const headings = Array.from(main.querySelectorAll("h1, h2, h3")).filter((el) =>
+      /exp[ée]rience/i.test(clean(el.textContent))
+    );
+    if (headings.length) {
+      experienceSection = headings[0].closest("section");
+      rootMode = "HEADING";
+    }
+  }
+
+  if (!experienceSection) {
+    const sections = Array.from(main.querySelectorAll("section"));
+    if (sections.length) {
+      const scored = sections
+        .map((section) => ({ section, score: clean(section.textContent || "").length }))
+        .sort((a, b) => b.score - a.score);
+      experienceSection = scored[0].section;
+      rootMode = "LARGEST_SECTION";
+    }
+  }
 
   const scope = experienceSection || main;
-  const entities = Array.from(scope.querySelectorAll('div[data-view-name="profile-component-entity"]'));
-  const items = entities.length
-    ? entities
-    : Array.from(scope.querySelectorAll("li")).filter((li) => li.querySelector("div.t-bold"));
+  const allLis = Array.from(scope.querySelectorAll("li"));
+  const topLis = allLis.filter((li) => {
+    if (li.closest(".pvs-entity__sub-components")) return false;
+    if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+    if (clean(li.innerText || "").length <= 25) return false;
+    return true;
+  });
 
   const results = [];
   const seen = new Set();
+  const counts = { topLis: topLis.length, grouped: 0, singles: 0, skipped: 0 };
 
-  for (const entity of items) {
-    const container = entity.closest("li") || entity;
-    const title = extractTitleFromContainer(container) || extractTitleFromContainer(entity);
-    const dates = extractDatesFromContainer(container) || extractDatesFromContainer(entity);
-    const companyLine = extractCompanyLineFromContainer(container) || extractCompanyLineFromContainer(entity);
+  const pushExperience = (record) => {
+    const key = [record.title, record.company, record.dates, record.location, record.workplaceType || ""]
+      .map((v) => clean(v).toLowerCase())
+      .join("|");
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(record);
+  };
+
+  for (const li of topLis) {
+    const subComponents = li.querySelector(".pvs-entity__sub-components");
+    const roleLis = subComponents
+      ? Array.from(subComponents.querySelectorAll("li")).filter((roleLi) => {
+          if (!roleLi.querySelector("div.t-bold, span.t-bold")) return false;
+          const datesSignal =
+            extractDatesFromContainer(roleLi) ||
+            extractDatesFromMetaLines(collectMetaLines(roleLi)) ||
+            extractDatesFromMetaLines(collectMetaLines(roleLi.closest("li")));
+          return !!datesSignal;
+        })
+      : [];
+
+    if (roleLis.length >= 2) {
+      counts.grouped += 1;
+      const headerTitle = extractTitleFromContainer(li);
+      const headerCompanyLine = extractCompanyLineFromContainer(li);
+      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+
+      for (const roleLi of roleLis) {
+        const title = extractTitleFromContainer(roleLi);
+        const dates =
+          extractDatesFromContainer(roleLi) ||
+          extractDatesFromMetaLines(collectMetaLines(roleLi)) ||
+          extractDatesFromMetaLines(collectMetaLines(roleLi.closest("li")));
+
+        if (!title || !dates) {
+          counts.skipped += 1;
+          continue;
+        }
+
+        const companyLine = extractCompanyLineFromContainer(roleLi) || headerCompanyLine || headerCompany || "";
+        const { company: roleCompany, extras } = splitCompanyLine(companyLine);
+        const company = headerCompany || roleCompany;
+        if (!company) {
+          counts.skipped += 1;
+          continue;
+        }
+
+        const metaLines = [...collectMetaLines(roleLi), ...extras].filter(
+          (line) => line && line !== title && line !== dates && line !== company
+        );
+        const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
+        const ctx = { title, company, companyLine, dates, location, workplaceType };
+        const description = extractDetailsDescription(roleLi, ctx);
+
+        pushExperience({
+          title,
+          company,
+          dates,
+          location: location || "",
+          workplaceType: workplaceType || null,
+          description: description || null,
+        });
+      }
+      continue;
+    }
+
+    counts.singles += 1;
+    const title = extractTitleFromContainer(li);
+    const dates =
+      extractDatesFromContainer(li) ||
+      extractDatesFromMetaLines(collectMetaLines(li)) ||
+      extractDatesFromMetaLines(collectMetaLines(li.closest("li")));
+    const companyLine = extractCompanyLineFromContainer(li);
     const { company, extras } = splitCompanyLine(companyLine);
-    const metaLines = [...collectMetaLines(container), ...extras].filter(Boolean);
+
+    if (!title || !company || !dates || looksLikeDates(company)) {
+      counts.skipped += 1;
+      continue;
+    }
+
+    const metaLines = [...collectMetaLines(li), ...extras].filter(
+      (line) => line && line !== title && line !== company && line !== dates
+    );
     const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
-    const description = extractDescription(container);
+    const ctx = { title, company, companyLine, dates, location, workplaceType };
+    const description = extractDetailsDescription(li, ctx);
 
-    if (!title || !company) continue;
-
-    const record = {
+    pushExperience({
       title,
       company,
-      dates: dates || "",
+      dates,
       location: location || "",
       workplaceType: workplaceType || null,
       description: description || null,
-    };
-
-    const key = [record.title, record.company, record.dates, record.location, record.workplaceType || ""]
-      .map((v) => clean(v))
-      .join("|")
-      .toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    results.push(record);
+    });
   }
 
-  return results;
+  const debug = { rootMode, counts };
+  expLog("DETAILS_DEBUG", debug);
+  return { experiences: results, debug };
 }
 
-async function scrapeExperienceDetailsInBackground(detailsUrl) {
-  const tab = await chrome.tabs.create({ url: detailsUrl, active: false });
-  if (!tab?.id) {
-    throw new Error("Failed to open details tab");
+async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
+  if (profileKey && detailsScrapeInFlight.has(profileKey)) {
+    return detailsScrapeInFlight.get(profileKey);
   }
 
-  debugLog("DETAILS_TAB_CREATED", { tabId: tab.id, detailsUrl });
+  const runner = (async () => {
+    const tab = await chrome.tabs.create({ url: detailsUrl, active: false });
+    if (!tab?.id) {
+      throw new Error("Failed to open details tab");
+    }
 
-  try {
-    await waitForComplete(tab.id, 15000);
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: detailsExperienceScraper,
-    });
-    const experiences = Array.isArray(results) ? results?.[0]?.result : [];
-    debugLog("DETAILS_SCRAPE_RESULT", { count: experiences?.length || 0 });
-    return Array.isArray(experiences) ? experiences : [];
-  } catch (err) {
-    debugLog("DETAILS_SCRAPE_ERROR", err?.message || err);
-    throw err;
-  } finally {
-    if (!DEBUG_KEEP_DETAILS_TAB) {
-      try {
-        await chrome.tabs.remove(tab.id);
-        debugLog("DETAILS_TAB_CLOSED", { tabId: tab.id });
-      } catch (err) {
-        debugLog("DETAILS_TAB_CLOSE_FAILED", err?.message || err);
+    expLog("DETAILS_TAB_CREATED", { tabId: tab.id, detailsUrl, profileKey });
+
+    try {
+      await waitForComplete(tab.id, 15000);
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: detailsExperienceScraper,
+      });
+      const payload = Array.isArray(results) ? results?.[0]?.result : null;
+      const experiences = Array.isArray(payload?.experiences)
+        ? payload.experiences
+        : Array.isArray(payload)
+          ? payload
+          : [];
+      expLog("DETAILS_SCRAPE_RESULT", {
+        count: experiences?.length || 0,
+        debug: payload?.debug || null,
+        detailsUrl,
+        profileKey,
+      });
+      return Array.isArray(experiences) ? experiences : [];
+    } catch (err) {
+      expLog("DETAILS_SCRAPE_ERROR", err?.message || err);
+      throw err;
+    } finally {
+      if (!DEBUG_KEEP_DETAILS_TAB) {
+        try {
+          await chrome.tabs.remove(tab.id);
+          expLog("DETAILS_TAB_CLOSED", { tabId: tab.id });
+        } catch (err) {
+          expLog("DETAILS_TAB_CLOSE_FAILED", err?.message || err);
+        }
       }
     }
+  })();
+
+  if (profileKey) detailsScrapeInFlight.set(profileKey, runner);
+  try {
+    return await runner;
+  } finally {
+    if (profileKey) detailsScrapeInFlight.delete(profileKey);
   }
 }
 
@@ -584,13 +846,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
-      const { detailsUrl } = message || {};
+      const { detailsUrl, profileKey } = message || {};
       if (!detailsUrl) {
         sendResponse({ ok: false, error: "Missing detailsUrl" });
         return false;
       }
 
-      scrapeExperienceDetailsInBackground(detailsUrl)
+      scrapeExperienceDetailsInBackground(detailsUrl, profileKey)
         .then((experiences) => sendResponse({ ok: true, experiences }))
         .catch((error) =>
           sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
