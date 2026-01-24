@@ -39,6 +39,22 @@
       return u;
     }
   };
+  const getProfileKey = (u = location.href) => {
+    try {
+      const url = new URL(u, window.location.origin);
+      const path = url.pathname.replace(/\/$/, "");
+      if (!/^\/in\//i.test(path)) return null;
+      return path;
+    } catch {
+      return null;
+    }
+  };
+
+  let lastScrapedProfileKey = null;
+  let lastScrapeAt = 0;
+  let lastSeenProfileKey = getProfileKey(location.href);
+  let scrapeInFlight = false;
+  let urlChangeTimer = null;
 
   const getExperienceDetailsUrl = (root = document) => {
     const anchor = root.querySelector('a[href*="/details/experience/"]');
@@ -59,6 +75,106 @@
 
     return null;
   };
+
+  const EXPERIENCE_CTA_REGEX = /(voir tout|voir les|see all|show all|afficher tout|afficher les)/i;
+  const EXPERIENCE_LABEL_REGEX = /exp[ée]rience/i;
+
+  const parseExperienceCount = (text) => {
+    const match = String(text || "").match(/(\d[\d\s\u00a0\u202f]*)/);
+    if (!match) return null;
+    const parsed = parseInt(match[1].replace(/[^\d]/g, ""), 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const getVisibleExperienceCount = (root) => {
+    if (!root) return { count: 0, source: "no_root" };
+    const collected = collectExperiences(root);
+    let count = collected.experiences.length;
+    let source = "parsed";
+
+    if (!count) {
+      const entities = Array.from(root.querySelectorAll('div[data-view-name="profile-component-entity"]'));
+      if (entities.length) {
+        count = entities.length;
+        source = "entity-count";
+      } else {
+        const liItems = Array.from(root.querySelectorAll("li")).filter((li) =>
+          li.querySelector("div.t-bold, span.t-bold")
+        );
+        count = liItems.length;
+        source = "li-count";
+      }
+    }
+
+    return { count, source };
+  };
+
+  const findExperienceCta = (root) => {
+    if (!root) return null;
+    const candidates = Array.from(
+      root.querySelectorAll('a[href*="/details/experience/"], button, a')
+    );
+    for (const el of candidates) {
+      const label = clean(`${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`);
+      const href = el.getAttribute("href") || "";
+      if (href && href.includes("/details/experience/")) {
+        if (!label || EXPERIENCE_LABEL_REGEX.test(label) || EXPERIENCE_CTA_REGEX.test(label)) {
+          return { type: "details_link", label, element: el };
+        }
+      }
+      if (label && EXPERIENCE_CTA_REGEX.test(label)) {
+        if (EXPERIENCE_LABEL_REGEX.test(label)) {
+          return { type: "cta_text", label, element: el };
+        }
+        if (root.contains(el)) {
+          return { type: "cta_text", label, element: el };
+        }
+      }
+    }
+    return null;
+  };
+
+  const evaluateExperienceDetailsNeed = (root = document) => {
+    const pick = pickExperienceSection();
+    const scope = pick.root || root;
+    if (!scope) {
+      return { shouldUse: false, reason: "no_root", totalCount: null, visibleCount: 0 };
+    }
+
+    const cta = findExperienceCta(scope);
+    const ctaText = cta?.label || "";
+    const totalCount = parseExperienceCount(ctaText);
+    const { count: visibleCount, source } = getVisibleExperienceCount(scope);
+
+    if (cta && totalCount && visibleCount && totalCount > visibleCount) {
+      return {
+        shouldUse: true,
+        reason: "cta_count_mismatch",
+        totalCount,
+        visibleCount,
+        source,
+      };
+    }
+
+    if (cta && !totalCount) {
+      return { shouldUse: true, reason: "cta_found", totalCount: null, visibleCount, source };
+    }
+
+    if (cta && totalCount && visibleCount && totalCount <= visibleCount) {
+      return {
+        shouldUse: false,
+        reason: "cta_count_not_truncated",
+        totalCount,
+        visibleCount,
+        source,
+      };
+    }
+
+    return { shouldUse: false, reason: "no_signal", totalCount, visibleCount, source };
+  };
+
+  const shouldUseExperienceDetails = (root = document) =>
+    evaluateExperienceDetailsNeed(root).shouldUse;
 
   const requestExperienceDetailsScrape = (detailsUrl) =>
     new Promise((resolve, reject) => {
@@ -919,9 +1035,14 @@
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
-    const detailsUrl = getExperienceDetailsUrl();
+    const detailsDecision = evaluateExperienceDetailsNeed();
+    dlog("shouldUseExperienceDetails", detailsDecision);
+
+    const detailsUrl = detailsDecision.shouldUse ? getExperienceDetailsUrl() : null;
     if (detailsUrl) {
       dlog("Experience details URL detected", detailsUrl);
+    } else if (detailsDecision.shouldUse) {
+      warn("Experience details requested but no URL found");
     }
 
     let detailsExperiences = [];
@@ -932,6 +1053,8 @@
       } catch (err) {
         warn("Experience details scrape failed", err?.message || err);
       }
+    } else {
+      dlog("Experience details skipped", detailsDecision);
     }
 
     const detailsNormalized = detailsExperiences
@@ -949,6 +1072,11 @@
       .filter((exp) => exp.Titre && exp.Entreprise);
 
     const finalExperiences = detailsNormalized.length ? detailsNormalized : ready.collected.experiences;
+    dlog("Experience counts", {
+      profileCount: ready.collected.experiences.length,
+      detailsCount: detailsNormalized.length,
+      finalCount: finalExperiences.length,
+    });
 
     const result = {
       ok: true,
@@ -1084,34 +1212,74 @@
     };
   }
 
-  async function handleScrape(reason) {
-    const raw = await runOnce(reason);
-    const normalized = normalizeForUi(raw);
-
-    if (normalized) {
-      try {
-        if (chrome?.storage?.local) {
-          chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
-        }
-      } catch (err) {
-        warn("Unable to persist profile", err);
-      }
-
-      if (typeof window.updateFocalsPanel === "function") {
-        try {
-          window.updateFocalsPanel(normalized);
-        } catch (err) {
-          warn("updateFocalsPanel failed", err);
-        }
-      }
+  async function handleScrape(reason, { profileKey, force = false } = {}) {
+    if (scrapeInFlight) {
+      dlog("skip scrape: already running", { reason });
+      return window.__FOCALS_LAST || null;
     }
 
-    return normalized || raw;
+    const currentProfileKey = profileKey || getProfileKey(location.href);
+    dlog("currentProfileKey", { currentProfileKey, reason });
+
+    if (!force && currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
+      dlog("skip scrape: already scraped", {
+        currentProfileKey,
+        lastScrapedProfileKey,
+        lastScrapeAt,
+        reason,
+      });
+      return window.__FOCALS_LAST || null;
+    }
+
+    scrapeInFlight = true;
+    let raw = null;
+    try {
+      raw = await runOnce(reason);
+      const normalized = normalizeForUi(raw);
+
+      if (normalized) {
+        try {
+          if (chrome?.storage?.local) {
+            chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
+          }
+        } catch (err) {
+          warn("Unable to persist profile", err);
+        }
+
+        if (typeof window.updateFocalsPanel === "function") {
+          try {
+            window.updateFocalsPanel(normalized);
+          } catch (err) {
+            warn("updateFocalsPanel failed", err);
+          }
+        }
+      }
+      if (currentProfileKey) {
+        lastScrapedProfileKey = currentProfileKey;
+        lastScrapeAt = Date.now();
+      }
+
+      return normalized || raw;
+    } finally {
+      scrapeInFlight = false;
+    }
   }
 
   function scheduleRun(reason) {
     if (window.__FOCALS_TIMER) clearTimeout(window.__FOCALS_TIMER);
-    window.__FOCALS_TIMER = setTimeout(() => handleScrape(reason), 350);
+    const currentProfileKey = getProfileKey(location.href);
+    if (currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
+      dlog("skip scrape: already scraped", {
+        currentProfileKey,
+        lastScrapeAt,
+        reason,
+      });
+      return;
+    }
+    window.__FOCALS_TIMER = setTimeout(
+      () => handleScrape(reason, { profileKey: currentProfileKey, force: false }),
+      350
+    );
   }
 
   function installSpaWatcher() {
@@ -1119,6 +1287,26 @@
     window.__FOCALS_WATCHER_INSTALLED = true;
 
     let lastHref = location.href;
+
+    const onUrlChange = (trigger) => {
+      const profileKey = getProfileKey(location.href);
+      if (profileKey && profileKey !== lastSeenProfileKey) {
+        dlog("Profile URL changed", { from: lastSeenProfileKey, to: profileKey, trigger });
+        lastSeenProfileKey = profileKey;
+        lastScrapedProfileKey = null;
+        lastScrapeAt = 0;
+        scheduleRun(`url_change:${trigger}`);
+        return;
+      }
+      if (!profileKey) {
+        lastSeenProfileKey = null;
+      }
+    };
+
+    const scheduleUrlChange = (trigger) => {
+      if (urlChangeTimer) clearTimeout(urlChangeTimer);
+      urlChangeTimer = setTimeout(() => onUrlChange(trigger), 450);
+    };
 
     const patch = (fnName) => {
       const orig = history[fnName];
@@ -1137,7 +1325,7 @@
     window.addEventListener("focals:navigation", () => {
       if (location.href !== lastHref) {
         lastHref = location.href;
-        scheduleRun("spa_navigation");
+        scheduleUrlChange("spa_navigation");
       }
     });
 
@@ -1173,7 +1361,7 @@
   }
 
   window.FOCALS = {
-    run: () => scheduleRun("manual_call"),
+    run: () => handleScrape("manual_call", { force: true }),
     dump,
     logExperienceDescriptions,
     debugScrapeExperiences,
@@ -1200,7 +1388,9 @@
       }
 
       if (request?.action === "SCRAPE_PROFILE") {
-        handleScrape("message_request").then((data) => sendResponse({ status: "success", data }));
+        handleScrape("message_request", { force: true }).then((data) =>
+          sendResponse({ status: "success", data })
+        );
         return true;
       }
       if (request?.action === "PING") {
