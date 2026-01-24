@@ -345,11 +345,31 @@ async function detailsExperienceScraper() {
 
   const splitCompanyLine = (line) => {
     if (!line) return { company: null, extras: [] };
-    const parts = line
+    const parts = String(line)
       .split("·")
       .map(clean)
       .filter(Boolean);
-    return { company: parts[0] || null, extras: parts.slice(1) };
+    if (!parts.length) return { company: null, extras: [] };
+    const first = parts[0];
+    if (looksLikeEmploymentType(first)) {
+      return { company: null, extras: parts };
+    }
+    return { company: first, extras: parts.slice(1) };
+  };
+
+  const extractGroupCompanyName = (li) => {
+    if (!li) return null;
+    const companyLink = Array.from(li.querySelectorAll('a[href*="/company/"]')).find(
+      (a) => clean(a.textContent).length >= 2
+    );
+    const linkText = clean(companyLink?.textContent);
+    if (linkText) return linkText;
+
+    const imgAlt = clean(li.querySelector('img[alt*="Logo"]')?.getAttribute("alt"));
+    const match = imgAlt.match(/logo\s+de\s+(.+)/i);
+    if (match?.[1]) return clean(match[1]);
+
+    return null;
   };
 
   const collectMetaLines = (container) => {
@@ -609,7 +629,17 @@ async function detailsExperienceScraper() {
       counts.grouped += 1;
       const headerTitle = extractTitleFromContainer(li);
       const headerCompanyLine = extractCompanyLineFromContainer(li);
-      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+      const headerCompany =
+        extractGroupCompanyName(li) ||
+        splitCompanyLine(headerCompanyLine).company ||
+        headerTitle ||
+        null;
+      if (!headerCompany) {
+        expLog("DETAILS_GROUPED_COMPANY_MISSING", {
+          headerTitle,
+          headerCompanyLine,
+        });
+      }
 
       for (const roleLi of roleLis) {
         const title = extractTitleFromContainer(roleLi);
@@ -623,9 +653,9 @@ async function detailsExperienceScraper() {
           continue;
         }
 
-        const companyLine = extractCompanyLineFromContainer(roleLi) || headerCompanyLine || headerCompany || "";
-        const { company: roleCompany, extras } = splitCompanyLine(companyLine);
-        const company = headerCompany || roleCompany;
+        const companyLine = extractCompanyLineFromContainer(roleLi) || "";
+        const { extras } = splitCompanyLine(companyLine);
+        const company = headerCompany;
         if (!company) {
           counts.skipped += 1;
           continue;
