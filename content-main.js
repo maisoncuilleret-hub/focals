@@ -1610,6 +1610,16 @@
       linkedinUrl: result.linkedinUrl,
       experiences: result.experiences.length,
     });
+    if (reason === "AUTORUN") {
+      log(`AUTORUN (${reason})`, {
+        fullName: result.fullName,
+        relationDegree: result.relationDegree,
+        photoUrl: result.photoUrl,
+        linkedinUrl: result.linkedinUrl,
+        experiences: result.experiences.length,
+        skills: result.experiences?.[0]?.Skills?.length ?? 0,
+      });
+    }
 
     if (!result.experiences.length) {
       expWarn("No experiences parsed. Debug:", result.debug);
@@ -1620,6 +1630,7 @@
           Entreprise: e.Entreprise,
           Dates: e.Dates,
           Lieu: e.Lieu,
+          Skills: e.SkillsText || (e.Skills || []).join(" · "),
           Description: e.Description ? `${e.Description.slice(0, 120)}…` : null,
         }))
       );
