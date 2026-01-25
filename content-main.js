@@ -1,5 +1,6 @@
 (() => {
   const TAG = "🧪 FOCALS CONSOLE";
+  const EXP_TAG = "[FOCALS][EXPERIENCE]";
   const DEBUG = (() => {
     try {
       return localStorage.getItem("FOCALS_DEBUG") === "true";
@@ -9,14 +10,13 @@
   })();
 
   const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
-  const log = (...a) => DEBUG && console.log(TAG, ...a);
+  const log = (...a) => console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
-  const warn = (...a) => DEBUG && console.warn(TAG, ...a);
+  const warn = (...a) => console.warn(TAG, ...a);
 
-  const EXP_TAG = "[FOCALS][EXPERIENCE]";
-  const expLog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
+  const expLog = (...a) => console.log(EXP_TAG, ...a);
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
-  const expWarn = (...a) => DEBUG && console.warn(EXP_TAG, ...a);
+  const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,6 +51,12 @@
     } catch {
       return null;
     }
+  };
+  // Always derive details url from canonical /in/<slug> base path.
+  const buildDetailsExperienceUrlFromProfile = (href = location.href) => {
+    const base = canonicalProfileUrl(href);
+    if (!base) return null;
+    return `${base.replace(/\/$/, "")}/details/experience/`;
   };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
 
@@ -123,6 +129,8 @@
   let lastResult = null;
   let lastResultAt = 0;
   const detailsScrapeInFlight = new Map();
+  // cache should only skip if profile is "details enriched"
+  const isDetailsEnriched = (p) => !!(p && (p.__detailsEnriched || p?.debug?.detailsEnriched));
 
   const getExperienceDetailsUrl = (root = document) => {
     const anchor = root.querySelector('a[href*="/details/experience/"]');
@@ -143,7 +151,8 @@
       return `${origin}${basePath}/details/experience/`;
     }
 
-    return null;
+    // fallback: compute from canonical profile
+    return buildDetailsExperienceUrlFromProfile(location.href);
   };
 
   const EXPERIENCE_CTA_REGEX = /(voir tout|voir les|see all|show all|afficher tout|afficher les)/i;
@@ -1522,12 +1531,10 @@
 
     const ready = await waitForExperienceReady(6500);
     const profileCanonicalUrl = canonicalProfileUrl(href);
-    const detailsUrl = getExperienceDetailsUrl();
-    if (detailsUrl) {
-      expDlog("Details URL detected", { detailsUrl, profileCanonicalUrl });
-    } else {
-      expWarn("Details URL missing for profile", { href, profileCanonicalUrl });
-    }
+    // Always try details url from canonical profile (more reliable than DOM anchor)
+    const detailsUrl = buildDetailsExperienceUrlFromProfile(href) || getExperienceDetailsUrl();
+    const willScrapeDetails = !!detailsUrl && !isDetailsExperiencePath(location.pathname);
+    expLog("DETAILS_USAGE", { reason, detailsUrl: detailsUrl || null, willScrapeDetails });
 
     let detailsExperiences = [];
     let detailsDebug = null;
@@ -1551,11 +1558,7 @@
             detailsScrapeInFlight.delete(inflightKey);
           }
         }
-        expLog("DETAILS_SCRAPED", {
-          count: detailsExperiences.length,
-          debug: detailsDebug,
-          profileCanonicalUrl,
-        });
+        expLog("DETAILS_SCRAPED", { count: detailsExperiences.length, profileCanonicalUrl });
       } catch (err) {
         expWarn("Details experience scrape failed", err?.message || err);
       }
@@ -1588,10 +1591,12 @@
     );
 
     const finalExperiences = detailsNormalized.length ? detailsNormalized : ready.collected.experiences;
+    const usingDetails = !!detailsNormalized.length;
     expLog("Experience counts", {
       profileCount: ready.collected.experiences.length,
       detailsCount: detailsNormalized.length,
       finalCount: finalExperiences.length,
+      usingDetails,
     });
 
     const result = {
@@ -1607,6 +1612,7 @@
       education,
       skills,
       infos,
+      __detailsEnriched: usingDetails,
       debug: {
         experienceRootMode: ready.pick.mode,
         experienceCollectionMode: ready.collected.mode,
@@ -1615,6 +1621,7 @@
         experienceDetailsUrl: detailsUrl || null,
         experienceDetailsCount: detailsNormalized.length,
         experienceDetailsDebug: detailsDebug,
+        detailsEnriched: usingDetails,
       },
     };
 
@@ -1700,6 +1707,7 @@
       linkedin_url: result.linkedinUrl || "",
       relationDegree: result.relationDegree || null,
       source: "focals-scraper-robust",
+      __detailsEnriched: isDetailsEnriched(result),
     };
   }
 
@@ -1742,7 +1750,7 @@
     };
   }
 
-  async function handleScrapeRequest(reason) {
+  async function handleScrapeRequest(reason, { force = false } = {}) {
     const profileUrl = canonicalProfileUrl(location.href);
     if (!profileUrl) {
       return { ok: false, error: "BAD_CONTEXT" };
@@ -1765,13 +1773,16 @@
     }
 
     const cachedEntry = await readProfileCache(profileUrl);
+    const cachedEnriched = isDetailsEnriched(cachedEntry?.result);
     const cacheAgeSec = cachedEntry?.scrapedAt
       ? Math.floor((Date.now() - cachedEntry.scrapedAt) / 1000)
       : null;
     if (
+      !force &&
       cachedEntry?.result &&
       cachedEntry?.scrapedAt &&
-      Date.now() - cachedEntry.scrapedAt < CACHE_TTL_MS
+      Date.now() - cachedEntry.scrapedAt < CACHE_TTL_MS &&
+      cachedEnriched
     ) {
       lastResult = cachedEntry.result;
       lastResultAt = cachedEntry.scrapedAt;
@@ -1787,12 +1798,19 @@
         },
       };
     }
+    if (!force && cachedEntry?.result && !cachedEnriched) {
+      dlog("cache present but not details-enriched; re-scraping", {
+        profileUrl,
+        reason,
+        cacheAgeSec,
+      });
+    }
 
     const lastScrapeAt = await readLastScrapeAt();
     const cooldownMs = COOLDOWN_BASE_MS + Math.floor(Math.random() * COOLDOWN_JITTER_MS);
     const cooldownActive = lastScrapeAt && Date.now() - lastScrapeAt < cooldownMs;
-    if (cooldownActive) {
-      if (lastResult) {
+    if (!force && cooldownActive) {
+      if (lastResult && isDetailsEnriched(lastResult)) {
         return {
           ok: true,
           profile: lastResult,
@@ -1804,17 +1822,11 @@
           },
         };
       }
-      return {
-        ok: false,
-        error: "COOLDOWN",
-        status: "cooldown",
-        debug: {
-          cacheHit: false,
-          cacheAgeSec,
-          cooldownActive: true,
-          scrapedAt: lastScrapeAt || null,
-        },
-      };
+      dlog("cooldown active but details not enriched; re-scraping", {
+        profileUrl,
+        reason,
+        lastScrapeAt,
+      });
     }
 
     scrapeInFlight = true;
@@ -1916,6 +1928,16 @@
 
       if (request?.type === "FOCALS_SCRAPE_NOW") {
         handleScrapeRequest("popup_request")
+          .then((payload) => sendResponse(payload))
+          .catch((error) =>
+            sendResponse({ ok: false, error: error?.message || "SCRAPE_FAILED" })
+          );
+        return true;
+      }
+      if (request?.type === "FOCALS_TRIGGER_SCRAPE") {
+        const reason = request?.reason || "popup_open";
+        const force = !!request?.force;
+        handleScrapeRequest(reason, { force })
           .then((payload) => sendResponse(payload))
           .catch((error) =>
             sendResponse({ ok: false, error: error?.message || "SCRAPE_FAILED" })

@@ -51,6 +51,21 @@ function debugError(stage, details) {
   }
 }
 
+// On popup open: force a scrape so details/experience runs and skills appear.
+async function triggerScrapeOnActiveTab() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    chrome.tabs.sendMessage(tab.id, {
+      type: "FOCALS_TRIGGER_SCRAPE",
+      reason: "popup_open",
+      force: true,
+    });
+  } catch (e) {
+    console.warn("[FOCALS][POPUP] triggerScrape failed", e);
+  }
+}
+
   const STORAGE_KEYS = {
     tone: "focals_defaultTone",
     systemPromptOverride: "focals_systemPromptOverride",
@@ -782,6 +797,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   setupSystemPrompt();
   setupTabs();
   setupProfileActions();
+  await triggerScrapeOnActiveTab();
   await refreshProfileFromTab();
   await loadSupabaseSession();
   debugLog("POPUP_READY", state);
