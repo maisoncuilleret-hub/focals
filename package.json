@@ -1,0 +1,11 @@
+{
+  "name": "focals",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

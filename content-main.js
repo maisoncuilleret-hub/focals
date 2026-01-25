@@ -442,24 +442,30 @@
     return stripped.length < 6;
   }
 
+  function isDateRangeLine(line) {
+    return /^(du|from)\b.+\b(au|to)\b/i.test(line);
+  }
+
+  function buildMetaLines(ctx) {
+    const title = clean(ctx?.title || "");
+    const company = clean(ctx?.company || "");
+    const companyLine = clean(ctx?.companyLine || "");
+    const dates = clean(ctx?.dates || "");
+    const location = clean(ctx?.location || "");
+    const workplaceType = clean(ctx?.workplaceType || "");
+    const combo = [location, workplaceType].filter(Boolean).join(" · ");
+    return [title, company, companyLine, dates, location, workplaceType, combo].filter(Boolean);
+  }
+
   function isTrivialMetaDescription(desc, ctx) {
     if (!desc) return true;
     const normalized = clean(desc).toLowerCase();
     if (!normalized) return true;
+    const metaLines = buildMetaLines(ctx).map((line) => line.toLowerCase());
+    if (metaLines.some((line) => line && normalized === line)) return true;
     const title = clean(ctx?.title || "").toLowerCase();
-    const companyLine = clean(ctx?.companyLine || "").toLowerCase();
-    const company = clean(ctx?.company || "").toLowerCase();
-    const dates = clean(ctx?.dates || "").toLowerCase();
-    const location = clean(ctx?.location || "").toLowerCase();
-    const workplaceType = clean(ctx?.workplaceType || "").toLowerCase();
-
-    const same = (value) => value && normalized === value;
-    const combo = [location, workplaceType].filter(Boolean).join(" · ");
-
-    if (same(title) || normalized === `${title} ${title}`.trim()) return true;
-    if (same(company) || same(companyLine)) return true;
-    if (same(dates) || isMostlyDatesText(desc)) return true;
-    if (same(location) || same(workplaceType) || (combo && normalized === combo)) return true;
+    if (title && normalized === `${title} ${title}`.trim()) return true;
+    if (isDateRangeLine(desc) || isMostlyDatesText(desc)) return true;
     return false;
   }
 
@@ -469,66 +475,57 @@
     normalized = fixSpacedUrls(normalized);
     if (!normalized) return null;
 
+    const metaLines = buildMetaLines(ctx).map((line) => line.toLowerCase());
     const lines = normalized
       .split("\n")
-      .map((line) => line.replace(/\s+/g, " ").trim())
-      .filter(Boolean)
-      .filter((line) => !/comp[ée]tences|skills/i.test(line));
+      .map((line) => line.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
 
-    const filtered = lines.filter((line) => !isTrivialMetaDescription(line, ctx));
+    const filtered = [];
+    let lastKey = null;
+    for (const line of lines) {
+      if (/comp[ée]tences\s*:/i.test(line)) continue;
+      if (isDateRangeLine(line) || isMostlyDatesText(line)) continue;
+      if (isTrivialMetaDescription(line, ctx)) continue;
+      const key = line.toLowerCase();
+      if (metaLines.some((meta) => meta && key === meta)) continue;
+      if (lastKey && key === lastKey) continue;
+      filtered.push(line);
+      lastKey = key;
+    }
+
     const finalText = filtered.join("\n").trim();
-    if (!finalText || isTrivialMetaDescription(finalText, ctx)) return null;
+    if (!finalText || finalText.length < 20 || isTrivialMetaDescription(finalText, ctx)) return null;
     return finalText;
   }
 
   function extractDetailsDescription(root, ctx) {
     if (!root) return null;
-    clickSeeMoreInItem(root);
-
+    const scope = root.querySelector(".pvs-entity__sub-components") || root;
     const preferredNodes = Array.from(
-      root.querySelectorAll(
-        'div[class*="inline-show-more-text"] span[aria-hidden="true"], .pv-shared-text-with-see-more span[aria-hidden="true"]'
+      scope.querySelectorAll(
+        'div[class*="inline-show-more-text"] span[aria-hidden="true"]:not(.visually-hidden), .pv-shared-text-with-see-more span[aria-hidden="true"]:not(.visually-hidden)'
       )
     );
     const inlineNodes = preferredNodes.length
       ? preferredNodes
       : Array.from(
-          root.querySelectorAll('div[class*="inline-show-more-text"], .pv-shared-text-with-see-more')
+          scope.querySelectorAll('div[class*="inline-show-more-text"], .pv-shared-text-with-see-more')
         );
 
     const inlineText = inlineNodes.map(extractTextWithBreaks).filter(Boolean).join("\n");
     const normalizedInline = normalizeDetailsDescription(inlineText, ctx);
-    if (normalizedInline) return normalizedInline;
-
-    const fallbackNodes = Array.from(
-      root.querySelectorAll("div.t-14, div.t-normal, span.t-14, span.t-normal, p")
-    ).filter((node) => {
-      if (!node) return false;
-      if (node.closest("h1, h2, h3")) return false;
-      if (node.closest("button, a")) return false;
-      return true;
-    });
-
-    let best = null;
-    let bestScore = 0;
-    for (const node of fallbackNodes) {
-      const raw = extractTextWithBreaks(node);
-      const cleaned = normalizeDetailsDescription(raw, ctx);
-      if (!cleaned) continue;
-      const scoreBase = cleaned.length;
-      const className = node.className || "";
-      const classBonus =
-        (className.includes("t-black") ? 12 : 0) +
-        (className.includes("t-normal") ? 8 : 0) +
-        (className.includes("t-14") ? 6 : 0);
-      const score = scoreBase + classBonus;
-      if (score > bestScore) {
-        best = cleaned;
-        bestScore = score;
-      }
+    if (DEBUG && !root.dataset?.focalsDescDebug) {
+      const rawPreview = inlineNodes.map((node) => clean(extractTextWithBreaks(node))).filter(Boolean);
+      expDlog("DESC_DEBUG", {
+        title: ctx?.title || null,
+        rawPreview,
+        outPreview: normalizedInline ? normalizedInline.slice(0, 160) : null,
+      });
+      root.dataset.focalsDescDebug = "true";
     }
-
-    return best;
+    if (normalizedInline) return normalizedInline;
+    return null;
   }
 
   const findAboutSection = () => {
