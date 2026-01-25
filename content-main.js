@@ -8,6 +8,7 @@
     }
   })();
 
+  const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
   const log = (...a) => DEBUG && console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
   const warn = (...a) => DEBUG && console.warn(TAG, ...a);
@@ -83,6 +84,12 @@
 
   const persistLastProfile = async (profile) => {
     if (!profile) return;
+    SKDBG("persisting FOCALS_LAST_PROFILE", {
+      hasProfile: !!profile,
+      exp0: profile?.experiences?.[0],
+      exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
+      exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
+    });
     await setStorageValue({ FOCALS_LAST_PROFILE: profile });
   };
 
@@ -1570,6 +1577,16 @@
       }))
       .filter((exp) => exp.Titre && exp.Entreprise);
 
+    SKDBG(
+      "detailsNormalized sample",
+      detailsNormalized.slice(0, 3).map((e) => ({
+        Titre: e.Titre,
+        Entreprise: e.Entreprise,
+        skillsLen: (e.Skills || []).length,
+        skillsText: e.SkillsText,
+      }))
+    );
+
     const finalExperiences = detailsNormalized.length ? detailsNormalized : ready.collected.experiences;
     expLog("Experience counts", {
       profileCount: ready.collected.experiences.length,
@@ -1805,6 +1822,15 @@
     try {
       raw = await runOnce(reason);
       const normalized = normalizeForUi(raw);
+      SKDBG(
+        "normalized(UI) sample",
+        normalized?.experiences?.slice(0, 3).map((e) => ({
+          title: e.title,
+          company: e.company,
+          skillsLen: (e.skills || []).length,
+          skillsText: e.skillsText,
+        }))
+      );
       if (!normalized) {
         return { ok: false, error: raw?.mode === "BAD_CONTEXT" ? "BAD_CONTEXT" : "SCRAPE_FAILED" };
       }
