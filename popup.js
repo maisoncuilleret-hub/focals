@@ -1,7 +1,15 @@
 import * as apiModule from "./src/api/focalsApi.js";
-import { getOrCreateUserId, getUserIdCached } from "./src/focalsUserId.js";
+import { IS_DEV } from "./src/api/config.js";
+import { getOrCreateUserId } from "./src/focalsUserId.js";
 
-const FOCALS_DEBUG = true;
+const FOCALS_DEBUG = (() => {
+  if (IS_DEV) return true;
+  try {
+    return localStorage.getItem("FOCALS_DEBUG") === "true";
+  } catch (err) {
+    return false;
+  }
+})();
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -13,6 +21,24 @@ function debugLog(stage, details) {
     }
   } catch (e) {
     console.log(`[Focals][${stage}]`, details);
+  }
+}
+
+function debugWarn(stage, details) {
+  if (!FOCALS_DEBUG) return;
+  if (typeof details === "string") {
+    console.warn(`[Focals][${stage}]`, details);
+  } else {
+    console.warn(`[Focals][${stage}]`, details);
+  }
+}
+
+function debugError(stage, details) {
+  if (!FOCALS_DEBUG) return;
+  if (typeof details === "string") {
+    console.error(`[Focals][${stage}]`, details);
+  } else {
+    console.error(`[Focals][${stage}]`, details);
   }
 }
 
@@ -122,14 +148,14 @@ async function ensureProfileScripts(tabId) {
     debugLog("POPUP_SCRIPT_INJECT", { tabId });
     return true;
   } catch (err) {
-    console.warn("[Focals][POPUP] Unable to inject content scripts", err);
+    debugWarn("POPUP_SCRIPT_INJECT_FAIL", err);
     return false;
   }
 }
 
 function requestProfileFromTab(tabId) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { action: "SCRAPE_PROFILE" }, (response) => {
+    chrome.tabs.sendMessage(tabId, { type: "FOCALS_SCRAPE_NOW" }, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ error: chrome.runtime.lastError });
         return;
@@ -469,7 +495,7 @@ async function loadState() {
       [STORAGE_KEYS.systemPromptOverride]: state.systemPromptOverride,
     });
   } catch (err) {
-    console.error(err);
+    debugError("STATE_LOAD_ERROR", err);
     alert(`Erreur Focals : ${err?.message || "Impossible de charger les données."}`);
   } finally {
     setLoading(false);
@@ -510,21 +536,38 @@ async function refreshProfileFromTab() {
       }
     }
 
-    if (requestError || !response || response.status !== "success" || !response.data) {
-      console.warn("[Focals][POPUP] No profile data:", requestError?.message || requestError || response);
+    if (requestError || !response) {
+      debugWarn("POPUP_PROFILE_EMPTY", requestError?.message || requestError || response);
       state.profile = null;
       state.profileStatus = "error";
       state.profileStatusMessage =
         "Aucun profil détecté. Assurez-vous d'être sur une page LinkedIn /in/ et réessayez.";
-    } else {
-      state.profile = response.data;
+    } else if (response.ok && response.profile) {
+      state.profile = response.profile;
       state.profileStatus = "ready";
       state.profileStatusMessage = "";
+    } else if (response?.error === "BAD_CONTEXT") {
+      state.profile = null;
+      state.profileStatus = "error";
+      state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
+    } else if (response?.status === "cooldown") {
+      state.profile = null;
+      state.profileStatus = "error";
+      state.profileStatusMessage = "Cooldown actif. Réessaie dans un instant.";
+    } else if (response?.status === "in_flight") {
+      state.profile = null;
+      state.profileStatus = "loading";
+      state.profileStatusMessage = "Scraping déjà en cours...";
+    } else {
+      state.profile = null;
+      state.profileStatus = "error";
+      state.profileStatusMessage =
+        response?.error || "Aucun profil détecté. Assurez-vous d'être sur une page LinkedIn /in/.";
     }
 
     renderProfileCard(state.profile);
   } catch (err) {
-    console.error("[Focals][POPUP] Profil indisponible", err);
+    debugError("POPUP_PROFILE_UNAVAILABLE", err);
     state.profile = null;
     state.profileStatus = "error";
     state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
@@ -541,7 +584,7 @@ async function loadSupabaseSession() {
       hasUser: !!state.supabaseSession?.user,
     });
   } catch (err) {
-    console.error("[Focals][POPUP] Impossible de charger la session Supabase", err);
+    debugError("SUPABASE_SESSION_ERROR", err);
   }
 }
 
@@ -560,7 +603,7 @@ async function forceRescrapeProfile() {
     renderProfileCard(state.profile);
     await refreshProfileFromTab();
   } catch (err) {
-    console.error("[Focals][POPUP] Force rescrape failed", err);
+    debugError("FORCE_RESCRAPE_FAILED", err);
     state.profileStatus = "error";
     state.profileStatusMessage = "Ouvrez un profil LinkedIn (/in/...) pour afficher les infos.";
     renderProfileCard(null);
@@ -590,7 +633,7 @@ async function handleAssociateProfile() {
       status.textContent = res?.error || "Export terminé (réponse inattendue).";
     }
   } catch (err) {
-    console.error(err);
+    debugError("PROFILE_EXPORT_ERROR", err);
     if (status) status.textContent = err?.message || "Export impossible. Réessaie.";
   }
 }
@@ -613,7 +656,7 @@ async function handleCopyProfileJson() {
     await navigator.clipboard.writeText(json);
     if (status) status.textContent = "Profil copié dans le presse-papiers 📋";
   } catch (err) {
-    console.error("[Focals][POPUP] Impossible de copier le profil", err);
+    debugError("COPY_PROFILE_ERROR", err);
     if (status) status.textContent = "Copie impossible. Réessaie.";
   }
 }
@@ -630,32 +673,8 @@ function setupProfileActions() {
       const activeTab = tabs[0];
 
       if (activeTab && isLinkedinProfileContext(activeTab.url)) {
-        const currentStatusText = statusEl.innerText;
         statusEl.innerText = "Scraping en cours... ⏳";
-
-        try {
-          chrome.tabs.sendMessage(activeTab.id, { action: "SCRAPE_PROFILE" }, (response) => {
-            if (chrome.runtime.lastError) {
-              console.error("[Focals][Popup] Erreur de communication:", chrome.runtime.lastError.message);
-              statusEl.innerText = "Erreur: Rechargez la page LinkedIn. ❌";
-              return;
-            }
-
-            if (response && response.status === "success" && response.data) {
-              state.profile = response.data;
-              state.profileStatus = "ready";
-              state.profileStatusMessage = "";
-              displayProfileData(state.profile);
-              renderProfileCard(state.profile);
-              statusEl.innerText = "Scrape V14 terminé ! ✅";
-            } else {
-              statusEl.innerText = response?.error || "Échec du scrape. ❌";
-            }
-          });
-        } catch (e) {
-          statusEl.innerText = "Échec de l'envoi du message. ❌";
-          console.error("[Focals] Message send failed:", e);
-        }
+        await refreshProfileFromTab();
       } else {
         statusEl.innerText = "Veuillez vous placer sur un profil LinkedIn. ⚠️";
       }
@@ -685,7 +704,7 @@ function setupTone() {
       await syncStore.set({ [STORAGE_KEYS.tone]: tone });
       setStatus("Ton mis à jour");
     } catch (err) {
-      console.error(err);
+      debugError("TONE_UPDATE_ERROR", err);
       alert(`Erreur Focals : ${err?.message || "Une erreur est survenue."}`);
     } finally {
       setLoading(false);
@@ -715,7 +734,7 @@ function setupSystemPrompt() {
       await syncStore.set({ [STORAGE_KEYS.systemPromptOverride]: value });
       setStatus("Règles personnalisées enregistrées");
     } catch (err) {
-      console.error(err);
+      debugError("SYSTEM_PROMPT_SAVE_ERROR", err);
       alert(`Erreur Focals : ${err?.message || "Impossible d'enregistrer."}`);
     } finally {
       setLoading(false);

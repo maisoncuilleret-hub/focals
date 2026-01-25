@@ -8,14 +8,14 @@
     }
   })();
 
-  const log = (...a) => console.log(TAG, ...a);
+  const log = (...a) => DEBUG && console.log(TAG, ...a);
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
-  const warn = (...a) => console.warn(TAG, ...a);
+  const warn = (...a) => DEBUG && console.warn(TAG, ...a);
 
   const EXP_TAG = "[FOCALS][EXPERIENCE]";
-  const expLog = (...a) => console.log(EXP_TAG, ...a);
+  const expLog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
-  const expWarn = (...a) => console.warn(EXP_TAG, ...a);
+  const expWarn = (...a) => DEBUG && console.warn(EXP_TAG, ...a);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,22 +51,70 @@
       return null;
     }
   };
-  const getProfileKey = (u = location.href) => {
-    try {
-      const url = new URL(u, window.location.origin);
-      return normalizeProfilePath(url.pathname);
-    } catch {
-      return null;
-    }
-  };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
 
-  let lastScrapedProfileKey = null;
-  let lastScrapeAt = 0;
-  let lastSeenProfileKey = getProfileKey(location.href);
+  const getStorageValue = (key) =>
+    new Promise((resolve) => {
+      if (!chrome?.storage?.local) {
+        resolve(null);
+        return;
+      }
+      try {
+        chrome.storage.local.get(key, (result) => resolve(result?.[key] ?? null));
+      } catch (err) {
+        warn("Storage get failed", err);
+        resolve(null);
+      }
+    });
+
+  const setStorageValue = (values) =>
+    new Promise((resolve) => {
+      if (!chrome?.storage?.local) {
+        resolve(false);
+        return;
+      }
+      try {
+        chrome.storage.local.set(values, () => resolve(true));
+      } catch (err) {
+        warn("Storage set failed", err);
+        resolve(false);
+      }
+    });
+
+  const persistLastProfile = async (profile) => {
+    if (!profile) return;
+    await setStorageValue({ FOCALS_LAST_PROFILE: profile });
+  };
+
+  const readProfileCache = async (profileUrl) => {
+    if (!profileUrl) return null;
+    const entry = await getStorageValue(profileUrl);
+    if (!entry || typeof entry !== "object") return null;
+    return entry;
+  };
+
+  const writeProfileCache = async (profileUrl, entry) => {
+    if (!profileUrl || !entry) return false;
+    return setStorageValue({ [profileUrl]: entry });
+  };
+
+  const readLastScrapeAt = async () => {
+    const value = await getStorageValue(LAST_SCRAPE_AT_KEY);
+    return Number.isFinite(value) ? value : 0;
+  };
+
+  const writeLastScrapeAt = async (value) => {
+    if (!Number.isFinite(value)) return false;
+    return setStorageValue({ [LAST_SCRAPE_AT_KEY]: value });
+  };
+
+  const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const COOLDOWN_BASE_MS = 90 * 1000;
+  const COOLDOWN_JITTER_MS = 1500;
+  const LAST_SCRAPE_AT_KEY = "FOCALS_LAST_SCRAPE_AT";
   let scrapeInFlight = false;
-  let urlChangeTimer = null;
-  const profileScrapeCache = new Map();
+  let lastResult = null;
+  let lastResultAt = 0;
   const detailsScrapeInFlight = new Map();
 
   const getExperienceDetailsUrl = (root = document) => {
@@ -1493,7 +1541,7 @@
 
     window.__FOCALS_LAST = result;
 
-    log(`AUTORUN (${reason})`, {
+    log(`SCRAPE (${reason})`, {
       fullName: result.fullName,
       relationDegree: result.relationDegree,
       photoUrl: result.photoUrl,
@@ -1503,7 +1551,7 @@
 
     if (!result.experiences.length) {
       expWarn("No experiences parsed. Debug:", result.debug);
-    } else {
+    } else if (DEBUG) {
       console.table(
         result.experiences.map((e) => ({
           Titre: e.Titre,
@@ -1572,7 +1620,7 @@
   }
 
   async function buildCandidateData() {
-    const profile = await handleScrape("message_request");
+    const profile = await getProfileForUi("message_request");
     if (!profile) return null;
 
     const linkedin_url =
@@ -1602,53 +1650,79 @@
     };
   }
 
-  async function handleScrape(reason, { profileKey, force = false } = {}) {
+  async function handleScrapeRequest(reason) {
+    const profileUrl = canonicalProfileUrl(location.href);
+    if (!profileUrl) {
+      return { ok: false, error: "BAD_CONTEXT" };
+    }
+
     if (scrapeInFlight) {
-      dlog("skip scrape: already running", { reason });
-      return window.__FOCALS_LAST || null;
+      if (lastResult) {
+        return {
+          ok: true,
+          profile: lastResult,
+          debug: {
+            cacheHit: false,
+            cacheAgeSec: lastResultAt ? Math.floor((Date.now() - lastResultAt) / 1000) : null,
+            cooldownActive: false,
+            scrapedAt: lastResultAt || null,
+          },
+        };
+      }
+      return { ok: false, error: "IN_FLIGHT", status: "in_flight" };
     }
 
-    const currentProfileKey = profileKey || getProfileKey(location.href);
-    const currentProfileUrl = canonicalProfileUrl(location.href);
-    const cached = currentProfileUrl ? profileScrapeCache.get(currentProfileUrl) : null;
-    dlog("currentProfileKey", { currentProfileKey, reason });
-
-    if (!force && cached?.result) {
-      dlog("skip scrape: cache hit", {
-        currentProfileKey,
-        currentProfileUrl,
-        scrapedAt: cached.scrapedAt,
-        reason,
-      });
-      if (currentProfileKey) {
-        lastScrapedProfileKey = currentProfileKey;
-        lastScrapeAt = cached.scrapedAt || Date.now();
-      }
-      try {
-        if (chrome?.storage?.local) {
-          chrome.storage.local.set({ FOCALS_LAST_PROFILE: cached.result });
-        }
-      } catch (err) {
-        warn("Unable to persist profile cache", err);
-      }
-      if (typeof window.updateFocalsPanel === "function") {
-        try {
-          window.updateFocalsPanel(cached.result);
-        } catch (err) {
-          warn("updateFocalsPanel failed", err);
-        }
-      }
-      return cached.result;
+    const cachedEntry = await readProfileCache(profileUrl);
+    const cacheAgeSec = cachedEntry?.scrapedAt
+      ? Math.floor((Date.now() - cachedEntry.scrapedAt) / 1000)
+      : null;
+    if (
+      cachedEntry?.result &&
+      cachedEntry?.scrapedAt &&
+      Date.now() - cachedEntry.scrapedAt < CACHE_TTL_MS
+    ) {
+      lastResult = cachedEntry.result;
+      lastResultAt = cachedEntry.scrapedAt;
+      await persistLastProfile(cachedEntry.result);
+      return {
+        ok: true,
+        profile: cachedEntry.result,
+        debug: {
+          cacheHit: true,
+          cacheAgeSec,
+          cooldownActive: false,
+          scrapedAt: cachedEntry.scrapedAt,
+        },
+      };
     }
 
-    if (!force && currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
-      dlog("skip scrape: already scraped", {
-        currentProfileKey,
-        lastScrapedProfileKey,
-        lastScrapeAt,
-        reason,
-      });
-      return window.__FOCALS_LAST || null;
+    const lastScrapeAt = await readLastScrapeAt();
+    const cooldownMs = COOLDOWN_BASE_MS + Math.floor(Math.random() * COOLDOWN_JITTER_MS);
+    const cooldownActive = lastScrapeAt && Date.now() - lastScrapeAt < cooldownMs;
+    if (cooldownActive) {
+      if (lastResult) {
+        return {
+          ok: true,
+          profile: lastResult,
+          debug: {
+            cacheHit: false,
+            cacheAgeSec,
+            cooldownActive: true,
+            scrapedAt: lastResultAt || null,
+          },
+        };
+      }
+      return {
+        ok: false,
+        error: "COOLDOWN",
+        status: "cooldown",
+        debug: {
+          cacheHit: false,
+          cacheAgeSec,
+          cooldownActive: true,
+          scrapedAt: lastScrapeAt || null,
+        },
+      };
     }
 
     scrapeInFlight = true;
@@ -1656,142 +1730,35 @@
     try {
       raw = await runOnce(reason);
       const normalized = normalizeForUi(raw);
-
-      if (normalized) {
-        try {
-          if (chrome?.storage?.local) {
-            chrome.storage.local.set({ FOCALS_LAST_PROFILE: normalized });
-          }
-        } catch (err) {
-          warn("Unable to persist profile", err);
-        }
-
-        if (typeof window.updateFocalsPanel === "function") {
-          try {
-            window.updateFocalsPanel(normalized);
-          } catch (err) {
-            warn("updateFocalsPanel failed", err);
-          }
-        }
+      if (!normalized) {
+        return { ok: false, error: raw?.mode === "BAD_CONTEXT" ? "BAD_CONTEXT" : "SCRAPE_FAILED" };
       }
-      if (currentProfileKey) {
-        lastScrapedProfileKey = currentProfileKey;
-        lastScrapeAt = Date.now();
-      }
-      if (normalized && currentProfileUrl) {
-        profileScrapeCache.set(currentProfileUrl, {
-          scrapedAt: Date.now(),
-          result: normalized,
-        });
-      }
-
-      return normalized || raw;
+      const scrapedAt = Date.now();
+      lastResult = normalized;
+      lastResultAt = scrapedAt;
+      await Promise.all([
+        persistLastProfile(normalized),
+        writeProfileCache(profileUrl, { scrapedAt, result: normalized }),
+        writeLastScrapeAt(scrapedAt),
+      ]);
+      return {
+        ok: true,
+        profile: normalized,
+        debug: {
+          cacheHit: false,
+          cacheAgeSec,
+          cooldownActive: false,
+          scrapedAt,
+        },
+      };
     } finally {
       scrapeInFlight = false;
     }
   }
 
-  function scheduleRun(reason) {
-    if (window.__FOCALS_TIMER) clearTimeout(window.__FOCALS_TIMER);
-    const currentProfileKey = getProfileKey(location.href);
-    const currentProfileUrl = canonicalProfileUrl(location.href);
-    if (currentProfileUrl && profileScrapeCache.has(currentProfileUrl)) {
-      dlog("skip scrape: cache hit", {
-        currentProfileKey,
-        currentProfileUrl,
-        reason,
-      });
-      return;
-    }
-    if (currentProfileKey && currentProfileKey === lastScrapedProfileKey) {
-      dlog("skip scrape: already scraped", {
-        currentProfileKey,
-        lastScrapeAt,
-        reason,
-      });
-      return;
-    }
-    window.__FOCALS_TIMER = setTimeout(
-      () => handleScrape(reason, { profileKey: currentProfileKey, force: false }),
-      350
-    );
-  }
-
-  function installSpaWatcher() {
-    if (window.__FOCALS_WATCHER_INSTALLED) return;
-    window.__FOCALS_WATCHER_INSTALLED = true;
-
-    let lastHref = location.href;
-
-    const onUrlChange = (trigger) => {
-      const profileKey = getProfileKey(location.href);
-      const profileUrl = canonicalProfileUrl(location.href);
-      if (profileKey && profileKey !== lastSeenProfileKey) {
-        dlog("Profile URL changed", { from: lastSeenProfileKey, to: profileKey, trigger });
-        lastSeenProfileKey = profileKey;
-        lastScrapedProfileKey = null;
-        lastScrapeAt = 0;
-
-        const cached = profileUrl ? profileScrapeCache.get(profileUrl) : null;
-        if (cached?.result) {
-          dlog("Profile URL cache hit on navigation", { profileUrl, trigger });
-          try {
-            if (chrome?.storage?.local) {
-              chrome.storage.local.set({ FOCALS_LAST_PROFILE: cached.result });
-            }
-          } catch (err) {
-            warn("Unable to persist profile cache", err);
-          }
-          if (typeof window.updateFocalsPanel === "function") {
-            try {
-              window.updateFocalsPanel(cached.result);
-            } catch (err) {
-              warn("updateFocalsPanel failed", err);
-            }
-          }
-          return;
-        }
-
-        scheduleRun(`url_change:${trigger}`);
-        return;
-      }
-      if (!profileKey) {
-        lastSeenProfileKey = null;
-      }
-    };
-
-    const scheduleUrlChange = (trigger) => {
-      if (urlChangeTimer) clearTimeout(urlChangeTimer);
-      urlChangeTimer = setTimeout(() => onUrlChange(trigger), 450);
-    };
-
-    const patch = (fnName) => {
-      const orig = history[fnName];
-      if (!orig || orig.__FOCALS_PATCHED) return;
-      history[fnName] = function () {
-        const ret = orig.apply(this, arguments);
-        window.dispatchEvent(new Event("focals:navigation"));
-        return ret;
-      };
-      history[fnName].__FOCALS_PATCHED = true;
-    };
-    patch("pushState");
-    patch("replaceState");
-
-    window.addEventListener("popstate", () => window.dispatchEvent(new Event("focals:navigation")));
-    window.addEventListener("focals:navigation", () => {
-      if (location.href !== lastHref) {
-        lastHref = location.href;
-        scheduleUrlChange("spa_navigation");
-      }
-    });
-
-    const obs = new MutationObserver(() => {
-      if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-
-    log("SPA watcher installed");
+  async function getProfileForUi(reason) {
+    const response = await handleScrapeRequest(reason);
+    return response?.ok ? response.profile : null;
   }
 
   function dump() {
@@ -1807,7 +1774,9 @@
       Entreprise: exp.Entreprise || null,
       Description: exp.Description ? exp.Description.slice(0, maxLen) : null,
     }));
-    console.table(rows);
+    if (DEBUG) {
+      console.table(rows);
+    }
     return rows;
   }
 
@@ -1818,7 +1787,7 @@
   }
 
   window.FOCALS = {
-    run: () => handleScrape("manual_call", { force: true }),
+    run: () => handleScrapeRequest("manual_call"),
     dump,
     logExperienceDescriptions,
     debugScrapeExperiences,
@@ -1844,10 +1813,27 @@
         return true;
       }
 
+      if (request?.type === "FOCALS_SCRAPE_NOW") {
+        handleScrapeRequest("popup_request")
+          .then((payload) => sendResponse(payload))
+          .catch((error) =>
+            sendResponse({ ok: false, error: error?.message || "SCRAPE_FAILED" })
+          );
+        return true;
+      }
+
       if (request?.action === "SCRAPE_PROFILE") {
-        handleScrape("message_request", { force: true }).then((data) =>
-          sendResponse({ status: "success", data })
-        );
+        handleScrapeRequest("message_request")
+          .then((payload) =>
+            sendResponse(
+              payload?.ok
+                ? { status: "success", data: payload.profile, debug: payload.debug }
+                : { status: "error", error: payload?.error || "SCRAPE_FAILED", debug: payload?.debug }
+            )
+          )
+          .catch((error) =>
+            sendResponse({ status: "error", error: error?.message || "SCRAPE_FAILED" })
+          );
         return true;
       }
       if (request?.action === "PING") {
@@ -1858,12 +1844,10 @@
   }
 
   log(
-    "Ready. Autorun enabled. Also available:",
+    "Ready. Manual scrape only. Also available:",
     "FOCALS.dump()",
     "FOCALS.run()",
     "FOCALS.logExperienceDescriptions()",
     "FOCALS.debugScrapeExperiences()"
   );
-  installSpaWatcher();
-  scheduleRun("init");
 })();
