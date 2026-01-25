@@ -264,6 +264,13 @@ async function detailsExperienceScraper() {
   const expLog = (...a) => console.log(EXP_TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const DEBUG = (() => {
+    try {
+      return localStorage.getItem("FOCALS_DEBUG") === "true";
+    } catch (err) {
+      return false;
+    }
+  })();
 
   const normalizeInfosText = (s) =>
     (s || "")
@@ -280,6 +287,52 @@ async function detailsExperienceScraper() {
     const html = node.innerHTML || "";
     const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
     return withBreaks.replace(/<[^>]*>/g, "");
+  };
+
+  const SKILLS_LABEL_REGEX = /(Comp[ée]tences|Skills)\s*:/i;
+  const normalizeSkill = (skill) =>
+    clean(skill)
+      .replace(/\((langage de programmation|programming language)\)/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const extractSkillsFromExperienceNode = (node) => {
+    if (!node) return [];
+    const candidates = Array.from(node.querySelectorAll("span, div, p"))
+      .map((el) => ({ el, text: clean(el.textContent) }))
+      .filter((entry) => entry.text && SKILLS_LABEL_REGEX.test(entry.text));
+    if (!candidates.length) return [];
+    const chosen = candidates.reduce((best, entry) => {
+      if (!best) return entry;
+      return entry.text.length < best.text.length ? entry : best;
+    }, null);
+    const text = chosen?.text || "";
+    const separatorIndex = text.indexOf(":");
+    if (separatorIndex === -1) return [];
+    const rawSkills = text.slice(separatorIndex + 1);
+    const parts = rawSkills.split("·");
+    const seen = new Set();
+    const out = [];
+    for (const part of parts) {
+      const normalized = normalizeSkill(part);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(normalized);
+    }
+    return out;
+  };
+
+  const runSkillsSelfTest = (nodes = []) => {
+    if (!DEBUG || !nodes.length) return;
+    const rows = nodes.slice(0, 5).map((node, index) => {
+      const skills = extractSkillsFromExperienceNode(node);
+      return { index, skills, skillsCount: skills.length };
+    });
+    if (rows.length) {
+      console.table(rows);
+    }
   };
 
   const WORKPLACE_TYPE_RULES = [
@@ -591,6 +644,7 @@ async function detailsExperienceScraper() {
     if (clean(li.innerText || "").length <= 25) return false;
     return true;
   });
+  runSkillsSelfTest(topLis);
 
   const results = [];
   const seen = new Set();
@@ -660,6 +714,7 @@ async function detailsExperienceScraper() {
         const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
         const ctx = { title, company, companyLine, dates, location, workplaceType };
         const description = extractDetailsDescription(roleLi, ctx);
+        const skills = extractSkillsFromExperienceNode(roleLi);
 
         pushExperience({
           title,
@@ -668,6 +723,7 @@ async function detailsExperienceScraper() {
           location: location || "",
           workplaceType: workplaceType || null,
           description: description || null,
+          skills,
         });
       }
       continue;
@@ -693,6 +749,7 @@ async function detailsExperienceScraper() {
     const { location, workplaceType } = extractLocationAndWorkplaceType(metaLines);
     const ctx = { title, company, companyLine, dates, location, workplaceType };
     const description = extractDetailsDescription(li, ctx);
+    const skills = extractSkillsFromExperienceNode(li);
 
     pushExperience({
       title,
@@ -701,10 +758,17 @@ async function detailsExperienceScraper() {
       location: location || "",
       workplaceType: workplaceType || null,
       description: description || null,
+      skills,
     });
   }
 
   const debug = { rootMode, counts };
+  results.slice(0, 3).forEach((entry) => {
+    expLog("DETAILS_SKILLS", {
+      title: entry?.title || null,
+      skillsCount: Array.isArray(entry?.skills) ? entry.skills.length : 0,
+    });
+  });
   expLog("DETAILS_DEBUG", debug);
   return { experiences: results, debug };
 }
