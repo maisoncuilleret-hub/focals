@@ -2,6 +2,15 @@ import * as apiModule from "./src/api/focalsApi.js";
 import { IS_DEV } from "./src/api/config.js";
 import { getOrCreateUserId } from "./src/focalsUserId.js";
 
+const DEBUG = (() => {
+  try {
+    return localStorage.getItem("FOCALS_DEBUG") === "true";
+  } catch {
+    return false;
+  }
+})();
+const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
+
 const FOCALS_DEBUG = (() => {
   if (IS_DEV) return true;
   try {
@@ -111,6 +120,14 @@ async function loadProfileDataFromStorage(localStore) {
   const profile = data ? data.FOCALS_LAST_PROFILE : null;
   state.profile = profile;
   state.profileStatus = profile ? "ready" : "idle";
+  SKDBG("popup loaded profile", {
+    hasProfile: !!profile,
+    name: profile?.name,
+    expCount: profile?.experiences?.length ?? 0,
+    exp0: profile?.experiences?.[0],
+    exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
+    exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
+  });
   displayProfileData(profile);
   renderProfileCard(profile);
 }
@@ -363,7 +380,15 @@ function renderProfileCard(profile) {
       empty.textContent = "Aucune expérience détectée.";
       experiencesList.appendChild(empty);
     } else {
-      experiences.forEach((exp) => {
+      experiences.forEach((exp, index) => {
+        if (index < 2) {
+          SKDBG("popup render exp", {
+            title: exp.title,
+            company: exp.company,
+            skills: exp.skills,
+            skillsText: exp.skillsText,
+          });
+        }
         const row = document.createElement("div");
         row.className = "experience-row";
 
@@ -761,3 +786,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   await loadSupabaseSession();
   debugLog("POPUP_READY", state);
 });
+
+// Manual test steps:
+// - In LinkedIn tab console: localStorage.setItem("FOCALS_DEBUG","true"); then open popup and click refresh.
+// - Check console for [FOCALS][SKILLS][DBG] lines in both page (content script) + popup devtools.
