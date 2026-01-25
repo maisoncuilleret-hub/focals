@@ -407,6 +407,14 @@ function renderProfileCard(profile) {
           }
         }
 
+        const skillsText = exp.skillsText || (Array.isArray(exp.skills) ? exp.skills.join(" · ") : "");
+        if (skillsText && skillsText.trim().length) {
+          const skillsLine = document.createElement("div");
+          skillsLine.className = "experience-skills";
+          skillsLine.textContent = `Skills: ${skillsText.trim()}`;
+          row.appendChild(skillsLine);
+        }
+
         experiencesList.appendChild(row);
       });
     }

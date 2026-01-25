@@ -329,6 +329,56 @@
     return withBreaks.replace(/<[^>]*>/g, "");
   };
 
+  const SKILLS_LABEL_REGEX = /(Comp[ée]tences|Skills)\s*:/i;
+  const normalizeSkill = (skill) =>
+    clean(skill)
+      .replace(/\((langage de programmation|programming language)\)/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const extractSkillsFromExperienceNode = (node) => {
+    if (!node) return [];
+    const candidates = Array.from(node.querySelectorAll("span, div, p"))
+      .map((el) => ({ el, text: clean(el.textContent) }))
+      .filter((entry) => entry.text && SKILLS_LABEL_REGEX.test(entry.text));
+    if (!candidates.length) return [];
+    const chosen = candidates.reduce((best, entry) => {
+      if (!best) return entry;
+      return entry.text.length < best.text.length ? entry : best;
+    }, null);
+    const text = chosen?.text || "";
+    const separatorIndex = text.indexOf(":");
+    if (separatorIndex === -1) return [];
+    const rawSkills = text.slice(separatorIndex + 1);
+    const parts = rawSkills.split("·");
+    const seen = new Set();
+    const out = [];
+    for (const part of parts) {
+      const normalized = normalizeSkill(part);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(normalized);
+    }
+    return out;
+  };
+
+  const runSkillsSelfTest = (nodes = [], root) => {
+    if (!DEBUG || !nodes.length || !isDetailsExperiencePath(location.pathname)) return;
+    if (root?.dataset?.focalsSkillsSelfTest) return;
+    const rows = nodes.slice(0, 5).map((node, index) => {
+      const skills = extractSkillsFromExperienceNode(node);
+      return { index, skills, skillsCount: skills.length };
+    });
+    if (rows.length) {
+      console.table(rows);
+    }
+    if (root?.dataset) {
+      root.dataset.focalsSkillsSelfTest = "true";
+    }
+  };
+
   const normalizeDescriptionText = (text) => {
     let normalized = normalizeInfosText(text || "");
     normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
@@ -1273,6 +1323,7 @@
     const pick = pickDetailsExperienceSection(root);
     const scope = pick.root || root.body || root;
     const topLis = collectTopLevelExperienceLis(scope);
+    runSkillsSelfTest(topLis, scope);
     const experiences = [];
     const seen = new Set();
     const counts = {
@@ -1353,6 +1404,7 @@
             workplaceType,
           };
           const description = extractDetailsDescription(roleLi, ctx);
+          const skills = extractSkillsFromExperienceNode(roleLi);
 
           pushExperience({
             title,
@@ -1361,6 +1413,7 @@
             location: location || "",
             workplaceType: workplaceType || null,
             description: description || null,
+            skills,
           });
         }
         continue;
@@ -1394,6 +1447,7 @@
         workplaceType,
       };
       const description = extractDetailsDescription(li, ctx);
+      const skills = extractSkillsFromExperienceNode(li);
 
       pushExperience({
         title,
@@ -1402,10 +1456,19 @@
         location: location || "",
         workplaceType: workplaceType || null,
         description: description || null,
+        skills,
       });
     }
 
     const debug = { rootMode: pick.mode, counts };
+    if (isDetailsExperiencePath(location.pathname)) {
+      experiences.slice(0, 3).forEach((entry) => {
+        expLog("DETAILS_SKILLS", {
+          title: entry?.title || null,
+          skillsCount: Array.isArray(entry?.skills) ? entry.skills.length : 0,
+        });
+      });
+    }
     expLog("DETAILS_DEBUG", debug);
     return { experiences, debug };
   }
@@ -1502,6 +1565,8 @@
         WorkplaceType: exp.workplaceType || null,
         Description: exp.description || null,
         DescriptionBullets: exp.descriptionBullets || null,
+        Skills: Array.isArray(exp.skills) ? exp.skills : [],
+        SkillsText: Array.isArray(exp.skills) && exp.skills.length ? exp.skills.join(" · ") : null,
       }))
       .filter((exp) => exp.Titre && exp.Entreprise);
 
@@ -1545,6 +1610,16 @@
       linkedinUrl: result.linkedinUrl,
       experiences: result.experiences.length,
     });
+    if (reason === "AUTORUN") {
+      log(`AUTORUN (${reason})`, {
+        fullName: result.fullName,
+        relationDegree: result.relationDegree,
+        photoUrl: result.photoUrl,
+        linkedinUrl: result.linkedinUrl,
+        experiences: result.experiences.length,
+        skills: result.experiences?.[0]?.Skills?.length ?? 0,
+      });
+    }
 
     if (!result.experiences.length) {
       expWarn("No experiences parsed. Debug:", result.debug);
@@ -1555,6 +1630,7 @@
           Entreprise: e.Entreprise,
           Dates: e.Dates,
           Lieu: e.Lieu,
+          Skills: e.SkillsText || (e.Skills || []).join(" · "),
           Description: e.Description ? `${e.Description.slice(0, 120)}…` : null,
         }))
       );
@@ -1575,6 +1651,8 @@
       workplaceType: exp.WorkplaceType || null,
       description: exp.Description || null,
       descriptionBullets: exp.DescriptionBullets || null,
+      skills: exp.Skills || [],
+      skillsText: exp.SkillsText || (exp.Skills || []).join(" · "),
     }));
 
     const education = (result.education || []).map((ed) => ({
