@@ -1598,6 +1598,11 @@
       finalCount: finalExperiences.length,
       usingDetails,
     });
+    console.log("[FOCALS]", {
+      profileCount: ready.collected.experiences.length,
+      detailsCount: detailsNormalized.length,
+      usingDetails,
+    });
 
     const result = {
       ok: true,
