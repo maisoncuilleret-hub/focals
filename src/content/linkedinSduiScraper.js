@@ -7,6 +7,17 @@
   const warn = (...a) => console.warn(TAG, ...a);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const collapseDouble = (text) => {
+    const t = clean(text);
+    if (!t) return "";
+    const match = t.match(/^(.+?)\s+\1$/i);
+    if (match?.[1]) return clean(match[1]);
+    if (t.length % 2 === 0) {
+      const half = t.slice(0, t.length / 2);
+      if (half === t.slice(t.length / 2)) return clean(half);
+    }
+    return t;
+  };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const INLINE_DATE_GLUE_RE = /(\d)\s*(an|ans|mois|yr|yrs|mos)\s*(De|Du)\s+/i;
   let dedupeSampleCount = 0;
@@ -40,7 +51,7 @@
     if (prefixMatch) {
       joined = joined.replace(prefixMatch[0], prefixMatch[1]);
     }
-    return joined;
+    return collapseDouble(joined);
   }
 
   const uniq = (arr) => {
@@ -84,10 +95,10 @@
     const seen = new Set();
     const out = [];
     for (const exp of experiences) {
-      const title = clean(exp?.Titre);
-      const company = clean(exp?.Entreprise);
-      const dates = clean(exp?.Dates);
-      const location = clean(exp?.Lieu);
+      const title = collapseDouble(clean(exp?.Titre));
+      const company = collapseDouble(clean(exp?.Entreprise));
+      const dates = collapseDouble(clean(exp?.Dates));
+      const location = collapseDouble(clean(exp?.Lieu));
       const key = [title, company, dates, location].join("||").toLowerCase();
       if (!title || !company || !dates) {
         out.push(exp);
@@ -622,18 +633,78 @@
   function splitCompanyLine(line) {
     if (!line) return { company: null, extras: [] };
     const parts = dedupeInlineRepeats(line).split("·").map(clean).filter(Boolean);
-    return { company: parts[0] || null, extras: parts.slice(1) };
+    return { company: collapseDouble(parts[0]) || null, extras: parts.slice(1).map(collapseDouble) };
+  }
+
+  const COMPANY_DURATION_RE = /\b\d+\s*(an|ans|mois|yr|yrs|year|years|mos|months)\b/i;
+
+  function isBadCompanyCandidate(company, title) {
+    const t = clean(company);
+    if (!t) return true;
+    if (looksLikeEmploymentType(t)) return true;
+    if (looksLikeDates(t)) return true;
+    if (COMPANY_DURATION_RE.test(t)) return true;
+    if (title && t.toLowerCase() === clean(title).toLowerCase()) return true;
+    return false;
+  }
+
+  function getLines(scope) {
+    if (!scope) return [];
+    const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
+    const out = [];
+    let lastKey = null;
+    for (const node of nodes) {
+      const raw = node.textContent || "";
+      const parts = raw.split("\n").map((line) => collapseDouble(line)).filter(Boolean);
+      for (const part of parts) {
+        const key = part.toLowerCase();
+        if (lastKey && key === lastKey) continue;
+        out.push(part);
+        lastKey = key;
+      }
+    }
+    return out;
+  }
+
+  function pickCompanyFromDotLine(scope, title) {
+    const lines = getLines(scope);
+    for (const line of lines) {
+      if (!line.includes("·")) continue;
+      const first = collapseDouble(clean(line.split("·")[0]));
+      if (!first) continue;
+      if (isBadCompanyCandidate(first, title)) continue;
+      return first;
+    }
+    return null;
+  }
+
+  function pickCompanyFallback(scope, title) {
+    const lines = getLines(scope);
+    if (!lines.length) return null;
+    const titleKey = clean(title).toLowerCase();
+    const titleIndex = lines.findIndex((line) => clean(line).toLowerCase() === titleKey);
+    if (titleIndex >= 0 && lines[titleIndex + 1]) {
+      const candidate = collapseDouble(lines[titleIndex + 1]);
+      if (!isBadCompanyCandidate(candidate, title)) return candidate;
+    }
+    for (const line of lines) {
+      const candidate = collapseDouble(line);
+      if (!isBadCompanyCandidate(candidate, title)) return candidate;
+    }
+    return null;
   }
 
   function extractTitleFromContainer(container) {
     if (!container) return null;
     return (
-      dedupeInlineRepeats(container.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
-      dedupeInlineRepeats(container.querySelector("div.t-bold span")?.textContent) ||
-      dedupeInlineRepeats(
-        container.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent
+      collapseDouble(dedupeInlineRepeats(container.querySelector("div.t-bold span[aria-hidden='true']")?.textContent)) ||
+      collapseDouble(dedupeInlineRepeats(container.querySelector("div.t-bold span")?.textContent)) ||
+      collapseDouble(
+        dedupeInlineRepeats(
+          container.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent
+        )
       ) ||
-      dedupeInlineRepeats(container.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+      collapseDouble(dedupeInlineRepeats(container.querySelector(".hoverable-link-text.t-bold")?.textContent)) ||
       null
     );
   }
@@ -641,8 +712,10 @@
   function extractCompanyLineFromContainer(container) {
     if (!container) return null;
     return (
-      dedupeInlineRepeats(container.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-      dedupeInlineRepeats(container.querySelector("span.t-14.t-normal")?.textContent) ||
+      collapseDouble(
+        dedupeInlineRepeats(container.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent)
+      ) ||
+      collapseDouble(dedupeInlineRepeats(container.querySelector("span.t-14.t-normal")?.textContent)) ||
       null
     );
   }
@@ -650,14 +723,16 @@
   function extractDatesFromContainer(container) {
     if (!container) return null;
     const caption =
-      clean(container.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
-      clean(container.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+      collapseDouble(
+        clean(container.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent)
+      ) ||
+      collapseDouble(clean(container.querySelector("span.pvs-entity__caption-wrapper")?.textContent)) ||
       null;
     if (caption) return caption;
     const fallback = Array.from(
       container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
     )
-      .map((n) => clean(n.textContent))
+      .map((n) => collapseDouble(clean(n.textContent)))
       .find((t) => looksLikeDates(t));
     return fallback || null;
   }
@@ -700,8 +775,8 @@
     let workplaceType = null;
 
     for (const line of lines) {
-      const parts = line.split("·").map(clean).filter(Boolean);
-      const candidates = parts.length ? parts : [clean(line)];
+      const parts = line.split("·").map((part) => collapseDouble(clean(part))).filter(Boolean);
+      const candidates = parts.length ? parts : [collapseDouble(clean(line))];
 
       for (const part of candidates) {
         if (!part) continue;
@@ -714,7 +789,7 @@
         }
 
         if (!location && (looksLikeLocation(part) || looksLikePlainLocationFallback(part))) {
-          location = part;
+          location = collapseDouble(part);
         }
       }
     }
@@ -782,7 +857,12 @@
       metaLines.filter((t) => t && t !== dates && t !== title && t !== companyFromLine)
     );
 
-    const company = companyOverride || companyFromLine || null;
+    let company = companyOverride || companyFromLine || null;
+    if (isBadCompanyCandidate(company, title)) {
+      const scope = scopeItem || entity;
+      const fallback = pickCompanyFromDotLine(scope, title) || pickCompanyFallback(scope, title);
+      if (fallback) company = fallback;
+    }
 
     const { description, descriptionBullets } = extractExperienceDescription(
       scopeItem || entity.closest("li") || entity
@@ -820,7 +900,10 @@
     if (innerRoleEntities.length) {
       const headerTitle = extractTitleFromContainer(entity);
       const headerCompanyLine = extractCompanyLineFromContainer(entity);
-      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+      let headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+      if (isBadCompanyCandidate(headerCompany, headerTitle)) {
+        headerCompany = pickCompanyFromDotLine(li, headerTitle) || pickCompanyFallback(li, headerTitle) || headerCompany;
+      }
       const out = [];
       for (let i = 0; i < innerRoleEntities.length; i++) {
         const scopeItem = innerRoleEntities[i].closest("li") || li;
@@ -867,7 +950,11 @@
     if (groupedRoles.length > 1) {
       const headerTitle = extractTitleFromContainer(item);
       const headerCompanyLine = extractCompanyLineFromContainer(item);
-      const headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+      let headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
+      if (isBadCompanyCandidate(headerCompany, headerTitle)) {
+        headerCompany =
+          pickCompanyFromDotLine(item, headerTitle) || pickCompanyFallback(item, headerTitle) || headerCompany;
+      }
 
       return groupedRoles
         .map((roleItem, roleIndex) => {
@@ -885,7 +972,11 @@
             expDlog("SKILLS_DEBUG", { title, company: headerCompany || companyFromLine, skills, skillsMoreCount });
           }
 
-          const company = headerCompany || companyFromLine || null;
+          let company = headerCompany || companyFromLine || null;
+          if (isBadCompanyCandidate(company, title)) {
+            const fallback = pickCompanyFromDotLine(roleItem, title) || pickCompanyFallback(roleItem, title);
+            if (fallback) company = fallback;
+          }
           const ok = !!(title && company && dates);
 
           return {
@@ -918,7 +1009,16 @@
     const title = extractTitleFromContainer(item) || extractTitleFromContainer(link);
     const dates = extractDatesFromContainer(item) || extractDatesFromContainer(link);
     const companyLine = extractCompanyLineFromContainer(item) || extractCompanyLineFromContainer(link);
-    const { company, extras } = splitCompanyLine(companyLine);
+    const { company: companyFromLine, extras } = splitCompanyLine(companyLine);
+    let company = companyFromLine;
+    if (isBadCompanyCandidate(company, title)) {
+      company =
+        pickCompanyFromDotLine(item, title) ||
+        pickCompanyFallback(item, title) ||
+        pickCompanyFromDotLine(link || item, title) ||
+        pickCompanyFallback(link || item, title) ||
+        company;
+    }
 
     const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
     let ps = Array.from(pNodes)
