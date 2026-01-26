@@ -8,6 +8,40 @@
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const INLINE_DATE_GLUE_RE = /(\d)\s*(an|ans|mois|yr|yrs|mos)\s*(De|Du)\s+/i;
+  let dedupeSampleCount = 0;
+
+  function dedupeInlineRepeats(text) {
+    const normalized = clean(text);
+    if (!normalized) return "";
+
+    if (normalized.length % 2 === 0) {
+      const half = normalized.slice(0, normalized.length / 2);
+      if (half === normalized.slice(normalized.length / 2)) return half;
+    }
+
+    const gluedMatch = normalized.match(INLINE_DATE_GLUE_RE);
+    if (gluedMatch) {
+      return normalized.slice(0, gluedMatch.index).trim();
+    }
+
+    const chunks = normalized
+      .split("·")
+      .map(clean)
+      .filter(Boolean);
+    const dedupedChunks = [];
+    for (const chunk of chunks) {
+      const prev = dedupedChunks[dedupedChunks.length - 1];
+      if (prev && prev.toLowerCase() === chunk.toLowerCase()) continue;
+      dedupedChunks.push(chunk);
+    }
+    let joined = dedupedChunks.join(" · ");
+    const prefixMatch = joined.match(/^(.{3,60})\s+\1\b/i);
+    if (prefixMatch) {
+      joined = joined.replace(prefixMatch[0], prefixMatch[1]);
+    }
+    return joined;
+  }
 
   const uniq = (arr) => {
     const seen = new Set();
@@ -587,17 +621,19 @@
 
   function splitCompanyLine(line) {
     if (!line) return { company: null, extras: [] };
-    const parts = line.split("·").map(clean).filter(Boolean);
+    const parts = dedupeInlineRepeats(line).split("·").map(clean).filter(Boolean);
     return { company: parts[0] || null, extras: parts.slice(1) };
   }
 
   function extractTitleFromContainer(container) {
     if (!container) return null;
     return (
-      clean(container.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
-      clean(container.querySelector("div.t-bold span")?.textContent) ||
-      clean(container.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
-      clean(container.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+      dedupeInlineRepeats(container.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
+      dedupeInlineRepeats(container.querySelector("div.t-bold span")?.textContent) ||
+      dedupeInlineRepeats(
+        container.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent
+      ) ||
+      dedupeInlineRepeats(container.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
       null
     );
   }
@@ -605,8 +641,8 @@
   function extractCompanyLineFromContainer(container) {
     if (!container) return null;
     return (
-      clean(container.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-      clean(container.querySelector("span.t-14.t-normal")?.textContent) ||
+      dedupeInlineRepeats(container.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+      dedupeInlineRepeats(container.querySelector("span.t-14.t-normal")?.textContent) ||
       null
     );
   }
@@ -631,12 +667,28 @@
     let spans = Array.from(
       container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
     )
-      .map((n) => clean(n.textContent))
+      .map((n) => {
+        const raw = clean(n.textContent);
+        const deduped = dedupeInlineRepeats(raw);
+        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+          dedupeSampleCount += 1;
+        }
+        return deduped;
+      })
       .filter(Boolean);
 
     if (!spans.length) {
       spans = Array.from(container.querySelectorAll("span.t-14.t-normal.t-black--light"))
-        .map((n) => clean(n.textContent))
+        .map((n) => {
+          const raw = clean(n.textContent);
+          const deduped = dedupeInlineRepeats(raw);
+          if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+            console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+            dedupeSampleCount += 1;
+          }
+          return deduped;
+        })
         .filter(Boolean);
     }
 
@@ -870,7 +922,15 @@
 
     const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
     let ps = Array.from(pNodes)
-      .map((p) => clean(p.textContent))
+      .map((p) => {
+        const raw = clean(p.textContent);
+        const deduped = dedupeInlineRepeats(raw);
+        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+          dedupeSampleCount += 1;
+        }
+        return deduped;
+      })
       .filter(Boolean)
       .filter((t) => !/compétences de plus|competences de plus|skills|programming language/i.test(t));
 
@@ -1019,6 +1079,16 @@
     if (!result.experiences.length) {
       warn("No experiences parsed. Debug:", result.debug);
     } else {
+      if (DEBUG) {
+        console.table(
+          result.experiences.slice(0, 8).map((e) => ({
+            Titre: e.Titre,
+            Entreprise: e.Entreprise,
+            Dates: e.Dates,
+            Lieu: e.Lieu,
+          }))
+        );
+      }
       console.table(
         result.experiences.map((e) => ({
           Titre: e.Titre,

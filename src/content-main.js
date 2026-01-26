@@ -12,9 +12,44 @@
   const log = (...a) => logger.info(...a);
   const dlog = (...a) => logger.debug(...a);
   const warn = (...a) => logger.warn(...a);
+  const DEBUG = false;
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const INLINE_DATE_GLUE_RE = /(\d)\s*(an|ans|mois|yr|yrs|mos)\s*(De|Du)\s+/i;
+  let dedupeSampleCount = 0;
+
+  function dedupeInlineRepeats(text) {
+    const normalized = clean(text);
+    if (!normalized) return "";
+
+    if (normalized.length % 2 === 0) {
+      const half = normalized.slice(0, normalized.length / 2);
+      if (half === normalized.slice(normalized.length / 2)) return half;
+    }
+
+    const gluedMatch = normalized.match(INLINE_DATE_GLUE_RE);
+    if (gluedMatch) {
+      return normalized.slice(0, gluedMatch.index).trim();
+    }
+
+    const chunks = normalized
+      .split("·")
+      .map(clean)
+      .filter(Boolean);
+    const dedupedChunks = [];
+    for (const chunk of chunks) {
+      const prev = dedupedChunks[dedupedChunks.length - 1];
+      if (prev && prev.toLowerCase() === chunk.toLowerCase()) continue;
+      dedupedChunks.push(chunk);
+    }
+    let joined = dedupedChunks.join(" · ");
+    const prefixMatch = joined.match(/^(.{3,60})\s+\1\b/i);
+    if (prefixMatch) {
+      joined = joined.replace(prefixMatch[0], prefixMatch[1]);
+    }
+    return joined;
+  }
 
   const uniq = (arr) => {
     const seen = new Set();
@@ -518,13 +553,13 @@
       return { _idx: index, _ok: false, Titre: null, Entreprise: null, Dates: null, Lieu: null };
 
     const title =
-      clean(mainLink.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
-      clean(mainLink.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+      dedupeInlineRepeats(mainLink.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+      dedupeInlineRepeats(mainLink.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
       null;
 
     const company =
-      clean(mainLink.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-      clean(mainLink.querySelector("span.t-14.t-normal")?.textContent) ||
+      dedupeInlineRepeats(mainLink.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+      dedupeInlineRepeats(mainLink.querySelector("span.t-14.t-normal")?.textContent) ||
       null;
 
     const dates =
@@ -535,12 +570,28 @@
     let lightSpans = Array.from(
       mainLink.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
     )
-      .map((n) => clean(n.textContent))
+      .map((n) => {
+        const raw = clean(n.textContent);
+        const deduped = dedupeInlineRepeats(raw);
+        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+          dedupeSampleCount += 1;
+        }
+        return deduped;
+      })
       .filter(Boolean);
 
     if (!lightSpans.length) {
       lightSpans = Array.from(mainLink.querySelectorAll("span.t-14.t-normal.t-black--light"))
-        .map((n) => clean(n.textContent))
+        .map((n) => {
+          const raw = clean(n.textContent);
+          const deduped = dedupeInlineRepeats(raw);
+          if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+            console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+            dedupeSampleCount += 1;
+          }
+          return deduped;
+        })
         .filter(Boolean);
     }
 
@@ -605,7 +656,15 @@
 
     const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
     let ps = Array.from(pNodes)
-      .map((p) => clean(p.textContent))
+      .map((p) => {
+        const raw = clean(p.textContent);
+        const deduped = dedupeInlineRepeats(raw);
+        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+          dedupeSampleCount += 1;
+        }
+        return deduped;
+      })
       .filter(Boolean)
       .filter((t) => !/compétences de plus|skills|programming language/i.test(t));
 
@@ -614,7 +673,7 @@
     const title = ps[0] || null;
 
     let company = null;
-    if (ps[1]) company = clean(ps[1].split("·")[0]);
+    if (ps[1]) company = clean(dedupeInlineRepeats(ps[1]).split("·")[0]);
 
     const dates = ps.find((t) => looksLikeDates(t)) || null;
 
@@ -752,6 +811,16 @@
     if (!result.experiences.length) {
       warn("No experiences parsed");
     } else {
+      if (DEBUG) {
+        console.table(
+          result.experiences.slice(0, 8).map((e) => ({
+            Titre: e.Titre,
+            Entreprise: e.Entreprise,
+            Dates: e.Dates,
+            Lieu: e.Lieu,
+          }))
+        );
+      }
       dlog(
         "EXPERIENCES",
         result.experiences.map((e) => ({
