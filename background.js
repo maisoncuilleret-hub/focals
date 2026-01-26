@@ -263,6 +263,13 @@ async function detailsExperienceScraper() {
   const EXP_TAG = "[FOCALS][EXPERIENCE]";
   const expLog = (...a) => console.log(EXP_TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const collapseDuplicatedText = (text) => {
+    const t = clean(text);
+    if (!t) return "";
+    const match = t.match(/^(.+?)\s+\1$/i);
+    return match?.[1] ? clean(match[1]) : t;
+  };
+  const cleanText = (text) => collapseDuplicatedText(clean(text));
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const DEBUG = (() => {
     try {
@@ -349,14 +356,14 @@ async function detailsExperienceScraper() {
     /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|septembre|october|november|dec|january|february|march|april|june|july|august|september|october|november|december)/i;
 
   const normalizeWorkplaceType = (text) => {
-    const t = clean(text);
+    const t = cleanText(text);
     if (!t) return null;
     const rule = WORKPLACE_TYPE_RULES.find((entry) => entry.regex.test(t));
     return rule ? rule.value : null;
   };
 
   const looksLikeDates = (text) => {
-    const t = clean(text);
+    const t = cleanText(text);
     if (!t) return false;
     return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
   };
@@ -367,7 +374,7 @@ async function detailsExperienceScraper() {
     );
 
   const looksLikeDateRange = (text) => {
-    const t = clean(text).toLowerCase();
+    const t = cleanText(text).toLowerCase();
     if (!t) return false;
     if (/\b(19\d{2}|20\d{2})\b/.test(t) && (t.includes(" - ") || t.includes("–") || t.includes("—"))) {
       return true;
@@ -377,7 +384,7 @@ async function detailsExperienceScraper() {
   };
 
   const isMostlyDatesText = (text) => {
-    const t = clean(text).toLowerCase();
+    const t = cleanText(text).toLowerCase();
     if (!t) return false;
     if (
       /^(du|de)\s+.+\s+(au|a|à)\s+.+/i.test(t) &&
@@ -400,7 +407,7 @@ async function detailsExperienceScraper() {
     if (!line) return { company: null, extras: [] };
     const parts = String(line)
       .split("·")
-      .map(clean)
+      .map(cleanText)
       .filter(Boolean);
     if (!parts.length) return { company: null, extras: [] };
     const first = parts[0];
@@ -413,14 +420,14 @@ async function detailsExperienceScraper() {
   const extractGroupCompanyName = (li) => {
     if (!li) return null;
     const companyLink = Array.from(li.querySelectorAll('a[href*="/company/"]')).find(
-      (a) => clean(a.textContent).length >= 2
+      (a) => cleanText(a.textContent).length >= 2
     );
-    const linkText = clean(companyLink?.textContent);
+    const linkText = cleanText(companyLink?.textContent);
     if (linkText) return linkText;
 
-    const imgAlt = clean(li.querySelector('img[alt*="Logo"]')?.getAttribute("alt"));
+    const imgAlt = cleanText(li.querySelector('img[alt*="Logo"]')?.getAttribute("alt"));
     const match = imgAlt.match(/logo\s+de\s+(.+)/i);
-    if (match?.[1]) return clean(match[1]);
+    if (match?.[1]) return cleanText(match[1]);
 
     return null;
   };
@@ -430,31 +437,31 @@ async function detailsExperienceScraper() {
     let spans = Array.from(
       container.querySelectorAll("span.t-14.t-normal.t-black--light span[aria-hidden='true']")
     )
-      .map((n) => clean(n.textContent))
+      .map((n) => cleanText(n.textContent))
       .filter(Boolean);
     if (!spans.length) {
       spans = Array.from(container.querySelectorAll("span.t-14.t-normal.t-black--light"))
-        .map((n) => clean(n.textContent))
+        .map((n) => cleanText(n.textContent))
         .filter(Boolean);
     }
     return spans;
   };
 
   const extractTitleFromContainer = (container) =>
-    clean(container?.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
-    clean(container?.querySelector("div.t-bold span")?.textContent) ||
-    clean(container?.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
-    clean(container?.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
+    cleanText(container?.querySelector("div.t-bold span[aria-hidden='true']")?.textContent) ||
+    cleanText(container?.querySelector("div.t-bold span")?.textContent) ||
+    cleanText(container?.querySelector(".hoverable-link-text.t-bold span[aria-hidden='true']")?.textContent) ||
+    cleanText(container?.querySelector(".hoverable-link-text.t-bold")?.textContent) ||
     null;
 
   const extractCompanyLineFromContainer = (container) =>
-    clean(container?.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
-    clean(container?.querySelector("span.t-14.t-normal")?.textContent) ||
+    cleanText(container?.querySelector("span.t-14.t-normal span[aria-hidden='true']")?.textContent) ||
+    cleanText(container?.querySelector("span.t-14.t-normal")?.textContent) ||
     null;
 
   const extractDatesFromContainer = (container) =>
-    clean(container?.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
-    clean(container?.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
+    cleanText(container?.querySelector("span.pvs-entity__caption-wrapper[aria-hidden='true']")?.textContent) ||
+    cleanText(container?.querySelector("span.pvs-entity__caption-wrapper")?.textContent) ||
     null;
 
   const extractDatesFromMetaLines = (lines) => lines.find((line) => looksLikeDates(line)) || null;
@@ -503,23 +510,23 @@ async function detailsExperienceScraper() {
   const isDateRangeLine = (line) => /^(du|from)\b.+\b(au|to)\b/i.test(line);
 
   const buildMetaLines = (ctx) => {
-    const title = clean(ctx?.title || "");
-    const company = clean(ctx?.company || "");
-    const companyLine = clean(ctx?.companyLine || "");
-    const dates = clean(ctx?.dates || "");
-    const location = clean(ctx?.location || "");
-    const workplaceType = clean(ctx?.workplaceType || "");
+    const title = cleanText(ctx?.title || "");
+    const company = cleanText(ctx?.company || "");
+    const companyLine = cleanText(ctx?.companyLine || "");
+    const dates = cleanText(ctx?.dates || "");
+    const location = cleanText(ctx?.location || "");
+    const workplaceType = cleanText(ctx?.workplaceType || "");
     const combo = [location, workplaceType].filter(Boolean).join(" · ");
     return [title, company, companyLine, dates, location, workplaceType, combo].filter(Boolean);
   };
 
   const isTrivialMetaDescription = (desc, ctx) => {
     if (!desc) return true;
-    const normalized = clean(desc).toLowerCase();
+    const normalized = cleanText(desc).toLowerCase();
     if (!normalized) return true;
     const metaLines = buildMetaLines(ctx).map((line) => line.toLowerCase());
     if (metaLines.some((line) => line && normalized === line)) return true;
-    const title = clean(ctx?.title || "").toLowerCase();
+    const title = cleanText(ctx?.title || "").toLowerCase();
     if (title && normalized === `${title} ${title}`.trim()) return true;
     if (isDateRangeLine(desc) || isMostlyDatesText(desc)) return true;
     return false;
@@ -572,7 +579,7 @@ async function detailsExperienceScraper() {
     const inlineText = inlineNodes.map(extractTextWithBreaks).filter(Boolean).join("\n");
     const normalizedInline = normalizeDetailsDescription(inlineText, ctx);
     if (FOCALS_DEBUG && !root.dataset?.focalsDescDebug) {
-      const rawPreview = inlineNodes.map((node) => clean(extractTextWithBreaks(node))).filter(Boolean);
+      const rawPreview = inlineNodes.map((node) => cleanText(extractTextWithBreaks(node))).filter(Boolean);
       expLog("DESC_DEBUG", {
         title: ctx?.title || null,
         rawPreview,
@@ -641,22 +648,92 @@ async function detailsExperienceScraper() {
   const topLis = allLis.filter((li) => {
     if (li.closest(".pvs-entity__sub-components")) return false;
     if (!li.querySelector("div.t-bold, span.t-bold")) return false;
-    if (clean(li.innerText || "").length <= 25) return false;
+    if (cleanText(li.innerText || "").length <= 25) return false;
     return true;
   });
   runSkillsSelfTest(topLis);
 
   const results = [];
   const seen = new Set();
+  const parsedRecords = [];
+  const duplicateKeys = [];
   const counts = { topLis: topLis.length, grouped: 0, singles: 0, skipped: 0 };
 
   const pushExperience = (record) => {
-    const key = [record.title, record.company, record.dates, record.location, record.workplaceType || ""]
-      .map((v) => clean(v).toLowerCase())
+    const key = [record.title, record.company, record.dates, record.location]
+      .map((v) => cleanText(v).toLowerCase())
       .join("|");
-    if (seen.has(key)) return;
+    if (seen.has(key)) {
+      duplicateKeys.push(key);
+      return;
+    }
     seen.add(key);
     results.push(record);
+  };
+
+  const extractHeaderCompany = (li) => {
+    const candidates = Array.from(li.querySelectorAll(".t-bold")).filter(
+      (node) => !node.closest(".pvs-entity__sub-components")
+    );
+    for (const node of candidates) {
+      const text = cleanText(node.querySelector("span[aria-hidden='true']")?.textContent || node.textContent);
+      if (text) return text;
+    }
+    return null;
+  };
+
+  const collectCandidateLines = (container) => {
+    if (!container) return [];
+    const rawLines = Array.from(container.querySelectorAll("span[aria-hidden='true']"))
+      .map((node) => cleanText(node.textContent))
+      .filter(Boolean);
+    const fallbackLines = cleanText(container.innerText || "")
+      .split("\n")
+      .map((line) => cleanText(line))
+      .filter(Boolean);
+    const merged = rawLines.length ? rawLines : fallbackLines;
+    const seenLines = new Set();
+    const out = [];
+    for (const line of merged) {
+      const key = line.toLowerCase();
+      if (seenLines.has(key)) continue;
+      seenLines.add(key);
+      out.push(line);
+    }
+    return out;
+  };
+
+  const normalizeCompanyCandidate = (line) => {
+    if (!line) return null;
+    const parts = line.split("·").map(cleanText).filter(Boolean);
+    return parts[0] || cleanText(line);
+  };
+
+  const isReasonableCompanyLine = (line, title) => {
+    if (!line) return false;
+    if (line.length > 80) return false;
+    const normalized = cleanText(line);
+    if (!normalized) return false;
+    if (title && normalized.toLowerCase() === cleanText(title).toLowerCase()) return false;
+    if (looksLikeDateRange(normalized) || isMostlyDatesText(normalized) || looksLikeDates(normalized)) return false;
+    if (looksLikeEmploymentType(normalized)) return false;
+    if (/^(comp[ée]tences|skills)\b/i.test(normalized)) return false;
+    return true;
+  };
+
+  const resolveCompanyFallback = (title, lines) => {
+    if (!Array.isArray(lines) || !lines.length) return null;
+    const normalizedTitle = cleanText(title).toLowerCase();
+    const titleIndex = lines.findIndex((line) => cleanText(line).toLowerCase() === normalizedTitle);
+    if (titleIndex >= 0 && lines[titleIndex + 1]) {
+      const candidate = normalizeCompanyCandidate(lines[titleIndex + 1]);
+      if (isReasonableCompanyLine(candidate, title)) return candidate;
+    }
+    for (const line of lines) {
+      const candidate = normalizeCompanyCandidate(line);
+      if (isReasonableCompanyLine(candidate, title)) return candidate;
+    }
+    return null;
   };
 
   for (const li of topLis) {
@@ -672,11 +749,12 @@ async function detailsExperienceScraper() {
         })
       : [];
 
-    if (roleLis.length >= 2) {
+    if (roleLis.length) {
       counts.grouped += 1;
       const headerTitle = extractTitleFromContainer(li);
       const headerCompanyLine = extractCompanyLineFromContainer(li);
       const headerCompany =
+        extractHeaderCompany(li) ||
         extractGroupCompanyName(li) ||
         splitCompanyLine(headerCompanyLine).company ||
         headerTitle ||
@@ -716,7 +794,7 @@ async function detailsExperienceScraper() {
         const description = extractDetailsDescription(roleLi, ctx);
         const skills = extractSkillsFromExperienceNode(roleLi);
 
-        pushExperience({
+        const record = {
           title,
           company,
           dates,
@@ -724,7 +802,9 @@ async function detailsExperienceScraper() {
           workplaceType: workplaceType || null,
           description: description || null,
           skills,
-        });
+        };
+        parsedRecords.push(record);
+        pushExperience(record);
       }
       continue;
     }
@@ -736,7 +816,12 @@ async function detailsExperienceScraper() {
       extractDatesFromMetaLines(collectMetaLines(li)) ||
       extractDatesFromMetaLines(collectMetaLines(li.closest("li")));
     const companyLine = extractCompanyLineFromContainer(li);
-    const { company, extras } = splitCompanyLine(companyLine);
+    const { company: rawCompany, extras } = splitCompanyLine(companyLine);
+    let company = rawCompany;
+    if (company && title && company.toLowerCase() === title.toLowerCase()) {
+      const lines = collectCandidateLines(li);
+      company = resolveCompanyFallback(title, lines) || company;
+    }
 
     if (!title || !company || !dates || looksLikeDates(company)) {
       counts.skipped += 1;
@@ -751,7 +836,7 @@ async function detailsExperienceScraper() {
     const description = extractDetailsDescription(li, ctx);
     const skills = extractSkillsFromExperienceNode(li);
 
-    pushExperience({
+    const record = {
       title,
       company,
       dates,
@@ -759,7 +844,9 @@ async function detailsExperienceScraper() {
       workplaceType: workplaceType || null,
       description: description || null,
       skills,
-    });
+    };
+    parsedRecords.push(record);
+    pushExperience(record);
   }
 
   const debug = { rootMode, counts };
@@ -769,7 +856,24 @@ async function detailsExperienceScraper() {
       skillsCount: Array.isArray(entry?.skills) ? entry.skills.length : 0,
     });
   });
+  expLog("DETAILS_PARSE_DEBUG", {
+    rootMode,
+    topLis: topLis.length,
+    parsed: parsedRecords.length,
+    deduped: results.length,
+    duplicateKeys,
+  });
   expLog("DETAILS_DEBUG", debug);
+  if (DEBUG && parsedRecords.length) {
+    console.table(
+      parsedRecords.slice(0, 10).map((row) => ({
+        title: row.title || "",
+        company: row.company || "",
+        dates: row.dates || "",
+        location: row.location || "",
+      }))
+    );
+  }
   return { experiences: results, debug };
 }
 
@@ -788,6 +892,44 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
 
     try {
       await waitForComplete(tab.id, 15000);
+      const prepResults = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: async () => {
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+          const getMain = () =>
+            document.querySelector('main[role="main"]') ||
+            document.querySelector("main") ||
+            document.querySelector('[role="main"]') ||
+            document.body;
+          const waitForContent = async () => {
+            for (let i = 0; i < 40; i += 1) {
+              const main = getMain();
+              const liCount = main ? main.querySelectorAll("li").length : 0;
+              if (main && liCount >= 5) {
+                return { mainFound: true, liCount };
+              }
+              await sleep(250);
+            }
+            const main = getMain();
+            return { mainFound: !!main, liCount: main ? main.querySelectorAll("li").length : 0 };
+          };
+
+          const initial = await waitForContent();
+          const steps = 8;
+          for (let i = 0; i < steps; i += 1) {
+            window.scrollTo(0, document.body.scrollHeight);
+            await sleep(rand(250, 450));
+          }
+          window.scrollTo(0, 0);
+          await sleep(200);
+          const main = getMain();
+          const liCount = main ? main.querySelectorAll("li").length : 0;
+          return { ...initial, finalLiCount: liCount, steps };
+        },
+      });
+      const prepPayload = Array.isArray(prepResults) ? prepResults?.[0]?.result : null;
+      expLog("DETAILS_PREP_DONE", { tabId: tab.id, detailsUrl, profileKey, ...prepPayload });
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: detailsExperienceScraper,
@@ -798,8 +940,13 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
         : Array.isArray(payload)
           ? payload
           : [];
+      const experienceCount = experiences?.length || 0;
+      expLog("DETAILS_SCRAPED", { count: experienceCount, detailsUrl, profileKey });
+      if (!experienceCount) {
+        expLog("DETAILS_EMPTY", { detailsUrl, profileKey });
+      }
       expLog("DETAILS_SCRAPE_RESULT", {
-        count: experiences?.length || 0,
+        count: experienceCount,
         debug: payload?.debug || null,
         detailsUrl,
         profileKey,
