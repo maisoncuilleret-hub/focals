@@ -53,6 +53,26 @@
     return out;
   };
 
+  const dedupeExperiences = (experiences) => {
+    const seen = new Set();
+    const out = [];
+    for (const exp of experiences) {
+      const title = clean(exp?.Titre);
+      const company = clean(exp?.Entreprise);
+      const dates = clean(exp?.Dates);
+      const location = clean(exp?.Lieu);
+      const key = [title, company, dates, location].join("||").toLowerCase();
+      if (!title || !company || !dates) {
+        out.push(exp);
+        continue;
+      }
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(exp);
+    }
+    return out;
+  };
+
   const findLastSkillLabelSlice = (raw) => {
     const matches = [...raw.matchAll(/comp[ée]tences/gi)];
     if (!matches.length) return raw;
@@ -647,13 +667,13 @@
 
     if (sduiLikely.length) {
       const parsed = sduiLikely.map((it, i) => parseSduiExperienceItem(it, i));
-      const ok = parsed.filter((x) => x._ok);
+      const ok = dedupeExperiences(parsed.filter((x) => x._ok));
       return { mode: "SDUI_ITEMS", experiences: ok, counts };
     }
 
     if (legacyLis.length) {
       const parsed = legacyLis.map((li, i) => parseLegacyExperienceLi(li, i));
-      const ok = parsed.filter((x) => x._ok);
+      const ok = dedupeExperiences(parsed.filter((x) => x._ok));
       return { mode: "LEGACY_LIS", experiences: ok, counts };
     }
 
