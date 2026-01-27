@@ -1603,6 +1603,24 @@ console.log(
     let focalsSrObsStarted = false;
     let focalsSrTimer = null;
     let focalsLiveDetectionStarted = false;
+    let liveRouteWatcherId = null;
+    let liveRetryTimerId = null;
+    let lastLiveHref = window.location.href;
+
+    const cleanupLiveObservers = () => {
+      if (window.__FOCALS_MSG_OBSERVER__) {
+        window.__FOCALS_MSG_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_OBSERVER__ = null;
+      }
+      if (window.__FOCALS_MSG_ROOT_OBSERVER__) {
+        window.__FOCALS_MSG_ROOT_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_ROOT_OBSERVER__ = null;
+      }
+      if (liveRetryTimerId) {
+        clearTimeout(liveRetryTimerId);
+        liveRetryTimerId = null;
+      }
+    };
 
     const setupMessagingObserver = () => {
       if (focalsSrObsStarted) return;
@@ -1671,24 +1689,6 @@ console.log(
 
       const MY_NAME = "Maxime Cuilleret";
 
-      if (window.__FOCALS_MSG_OBSERVER__) {
-        window.__FOCALS_MSG_OBSERVER__.disconnect();
-        window.__FOCALS_MSG_OBSERVER__ = null;
-      }
-
-      const root = getLinkedinMessagingRoot();
-      const listRoot =
-        root.querySelector(".msg-s-message-list-container ul") ||
-        root.querySelector(".msg-convo-wrapper ul");
-
-      if (!listRoot) {
-        debugLog(
-          "LIVE_DETECTION",
-          "[LIVE_DETECTION] message list root not found, skipping observer"
-        );
-        return;
-      }
-
       const messageSelector =
         'div.msg-s-event-listitem[data-view-name="message-list-item"]';
       const processedMessages = new Map();
@@ -1750,35 +1750,92 @@ console.log(
         }
       };
 
-      const observer = new MutationObserver((mutations) => {
-        const candidates = new Set();
-        for (const mutation of mutations) {
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeType !== Node.ELEMENT_NODE) return;
-            const element = node;
-            if (element.matches?.(messageSelector)) {
-              candidates.add(element);
-            }
-            element
-              .querySelectorAll?.(messageSelector)
-              .forEach((messageNode) => candidates.add(messageNode));
-          });
-        }
-        candidates.forEach((node) => processMessageElement(node));
+      const root = getLinkedinMessagingRoot();
+      const findListRoot = () =>
+        root.querySelector(".msg-s-message-list-container ul") ||
+        root.querySelector(".msg-convo-wrapper ul") ||
+        root.querySelector(".msg-s-event-listitem__body")?.parentElement;
+
+      const startLiveObserver = (listRoot) => {
+        cleanupLiveObservers();
+        const observer = new MutationObserver((mutations) => {
+          const candidates = new Set();
+          for (const mutation of mutations) {
+            mutation.addedNodes.forEach((node) => {
+              if (node.nodeType !== Node.ELEMENT_NODE) return;
+              const element = node;
+              if (element.matches?.(messageSelector)) {
+                candidates.add(element);
+              }
+              element
+                .querySelectorAll?.(messageSelector)
+                .forEach((messageNode) => candidates.add(messageNode));
+            });
+          }
+          candidates.forEach((node) => processMessageElement(node));
+        });
+
+        observer.observe(listRoot, { childList: true, subtree: true });
+        window.__FOCALS_MSG_OBSERVER__ = observer;
+        debugLog(
+          "LIVE_DETECTION",
+          "[LIVE_DETECTION] Chat window detected, starting observer"
+        );
+      };
+
+      const existingListRoot = findListRoot();
+      if (existingListRoot) {
+        startLiveObserver(existingListRoot);
+        return;
+      }
+
+      if (liveRetryTimerId) {
+        clearTimeout(liveRetryTimerId);
+      }
+      liveRetryTimerId = setTimeout(() => {
+        liveRetryTimerId = null;
+        focalsLiveDetectionStarted = false;
+        setupLiveMessageObserver();
+      }, 2000);
+
+      if (window.__FOCALS_MSG_ROOT_OBSERVER__) {
+        window.__FOCALS_MSG_ROOT_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_ROOT_OBSERVER__ = null;
+      }
+
+      const rootObserver = new MutationObserver(() => {
+        const listRoot = findListRoot();
+        if (!listRoot) return;
+        startLiveObserver(listRoot);
       });
 
-      observer.observe(listRoot, { childList: true, subtree: true });
-      window.__FOCALS_MSG_OBSERVER__ = observer;
-      debugLog(
-        "LIVE_DETECTION",
-        "[LIVE_DETECTION] observer started on message list"
-      );
+      const bodyTarget = root === document ? document.body : root;
+      if (bodyTarget) {
+        rootObserver.observe(bodyTarget, { childList: true, subtree: true });
+        window.__FOCALS_MSG_ROOT_OBSERVER__ = rootObserver;
+      } else {
+        debugLog(
+          "LIVE_DETECTION",
+          "[LIVE_DETECTION] message list root not found, skipping observer"
+        );
+      }
+
     };
 
     const initMessagingWatcher = () => {
       console.log("[FOCALS DEBUG] messaging script bootstrap");
       setupMessagingObserver();
       setupLiveMessageObserver();
+
+      if (!liveRouteWatcherId) {
+        liveRouteWatcherId = setInterval(() => {
+          if (window.location.href === lastLiveHref) return;
+          lastLiveHref = window.location.href;
+          cleanupLiveObservers();
+          focalsLiveDetectionStarted = false;
+          setupLiveMessageObserver();
+        }, 1000);
+      }
     };
 
     if (document.readyState === "loading") {
