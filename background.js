@@ -3,6 +3,48 @@ import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 import { loadStoredToken } from "./src/api/supabaseClient.js";
 import { createLogger } from "./src/utils/logger.js";
 
+// Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.method === "POST" && details.requestBody && details.requestBody.raw) {
+      try {
+        const rawBody = details.requestBody.raw[0].bytes;
+        const decoder = new TextDecoder("utf-8");
+        const json = JSON.parse(decoder.decode(rawBody));
+
+        // Extraction du texte et de l'URN de conversation
+        const messageText = json.message?.body?.text;
+        const conversationUrn = json.conversationUrn;
+
+        if (messageText) {
+          const payload = {
+            match_name: "LinkedIn Dash Contact",
+            text: messageText,
+            conversation_urn: conversationUrn,
+            type: "linkedin_chat_dash",
+            received_at: new Date().toISOString(),
+          };
+
+          console.log("🎯 [FOCALS DASH] Capture réseau réussie :", messageText);
+
+          // Relais vers ton SaaS via la fonction existante
+          if (typeof relayLiveMessageToSupabase === "function") {
+            relayLiveMessageToSupabase(payload);
+          }
+        }
+      } catch (e) {
+        // On ignore les requêtes malformées
+      }
+    }
+  },
+  {
+    urls: [
+      "*://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage*",
+    ],
+  },
+  ["requestBody"]
+);
+
 const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
 const DEBUG_KEEP_DETAILS_TAB = false;
