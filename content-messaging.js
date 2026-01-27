@@ -1737,12 +1737,28 @@ console.log(
             type: "linkedin_chat",
             received_at: new Date().toISOString(),
           };
-          sendApiRequest({
-            endpoint: "/focals-incoming-message",
-            method: "POST",
-            body: payload,
-          }).catch((err) => {
-            warn("LIVE_DETECTION_API_ERROR", err?.message || err);
+          chrome.runtime.sendMessage(
+            { type: "NEW_LIVE_MESSAGE", data: payload },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                warn(
+                  "LIVE_DETECTION_RELAY_ERROR",
+                  chrome.runtime.lastError.message
+                );
+                return;
+              }
+              if (!response?.ok) {
+                warn(
+                  "LIVE_DETECTION_RELAY_ERROR",
+                  response?.error || "Relay failed"
+                );
+              }
+            }
+          );
+          debugLog("LIVE_DETECTION", {
+            prefix: "[LIVE_DETECTION]",
+            status: "relay_sent",
+            payload,
           });
         }
       };
