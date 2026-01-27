@@ -1,18 +1,41 @@
 (async () => {
   if (window !== window.top) return;
-  const { createLogger } = await import(chrome.runtime.getURL("src/utils/logger.js"));
-  const { ScrapeController, ScrapeState } = await import(
-    chrome.runtime.getURL("src/scrape/ScrapeController.js")
-  );
-  const { createDomObserver, listenToNavigation } = await import(
-    chrome.runtime.getURL("src/scrape/domObservers.js")
-  );
 
+  const safeGetURL = (path) => {
+    if (!path || typeof path !== "string") return null;
+    try {
+      return chrome.runtime.getURL(path);
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const loggerUrl = safeGetURL("src/utils/logger.js");
+  if (!loggerUrl) {
+    console.error("[FOCALS] Fatal: Invalid Logger Path");
+    return;
+  }
+
+  const { createLogger } = await import(loggerUrl);
   const logger = createLogger("FocalsContent");
   const log = (...a) => logger.info(...a);
   const dlog = (...a) => logger.debug(...a);
   const warn = (...a) => logger.warn(...a);
   const DEBUG = false;
+
+  const scrapeUrl = safeGetURL("src/scrape/ScrapeController.js");
+  if (!scrapeUrl) {
+    logger.error("Fatal: Invalid ScrapeController Path");
+    return;
+  }
+  const domObserverUrl = safeGetURL("src/scrape/domObservers.js");
+  if (!domObserverUrl) {
+    logger.error("Fatal: Invalid domObservers Path");
+    return;
+  }
+
+  const { ScrapeController, ScrapeState } = await import(scrapeUrl);
+  const { createDomObserver, listenToNavigation } = await import(domObserverUrl);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

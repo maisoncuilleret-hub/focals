@@ -80,24 +80,17 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 }
 
 async function relayLiveMessageToSupabase(payload) {
-  const anonKey = await loadStoredToken();
-  const edgeBase = SUPABASE_URL.replace(".supabase.co", ".functions.supabase.co");
-  const response = await fetch(`${edgeBase}/focals-incoming-message`, {
+  const result = await fetchApi({
+    endpoint: "/focals-incoming-message",
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${anonKey}`,
-    },
-    body: JSON.stringify(payload ?? {}),
+    body: payload,
   });
 
-  if (!response.ok) {
-    const error = await response.text().catch(() => "");
-    throw new Error(error || `HTTP ${response.status}`);
+  if (!result?.ok) {
+    throw new Error(result?.error || "Relay failed");
   }
 
-  logger.info("Live message relayed to Supabase", { status: response.status });
-  return true;
+  return result;
 }
 
 const STORAGE_KEYS = {
@@ -1691,21 +1684,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      fetchApi({
-        endpoint: "/focals-incoming-message",
-        method: "POST",
-        body: payload,
-      })
+      relayLiveMessageToSupabase(payload)
         .then((result) => {
-          if (result?.ok) {
-            console.log("[FOCALS RELAY] Live message synced to Supabase");
-          } else {
-            console.error("[FOCALS RELAY] Sync failed", result?.error);
-          }
+          console.log("[FOCALS RELAY] Live message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("[FOCALS RELAY] Network error", err);
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;
