@@ -1,5 +1,6 @@
-import supabase from "./supabase-client.js";
+import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
+import { loadStoredToken } from "./src/api/supabaseClient.js";
 import { createLogger } from "./src/utils/logger.js";
 
 const logger = createLogger("Background");
