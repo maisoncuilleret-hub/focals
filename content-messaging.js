@@ -1602,6 +1602,7 @@ console.log(
 
     let focalsSrObsStarted = false;
     let focalsSrTimer = null;
+    let focalsLiveDetectionStarted = false;
 
     const setupMessagingObserver = () => {
       if (focalsSrObsStarted) return;
@@ -1628,9 +1629,156 @@ console.log(
       console.log("[FOCALS SR] observer ON");
     };
 
+    const LIVE_MESSAGE_IGNORE_TEXTS = [
+      "Répondez à la conversation",
+      "Parcourez les réponses rapides",
+      "Envoyez plus tard",
+    ].map((text) => text.toLowerCase());
+
+    const shouldIgnoreLiveMessage = (messageElement, text) => {
+      if (!messageElement || !text) return true;
+      if (messageElement.classList.contains("msg-s-message-status")) return true;
+      if (messageElement.querySelector(".msg-s-message-status")) return true;
+      const normalizedText = text.toLowerCase();
+      return LIVE_MESSAGE_IGNORE_TEXTS.some((ignored) =>
+        normalizedText.includes(ignored)
+      );
+    };
+
+    const resolveLiveSenderName = (messageElement) => {
+      const fromMessage = normalizeText(
+        messageElement.querySelector(".msg-s-message-group__profile-link")
+          ?.textContent || ""
+      );
+      if (fromMessage) return fromMessage;
+      return normalizeText(
+        document.querySelector(".msg-entity-lockup__title")?.textContent || ""
+      );
+    };
+
+    const extractLiveMessageText = (messageElement) => {
+      if (!messageElement) return "";
+      const body =
+        messageElement.querySelector("p.msg-s-event-listitem__body") ||
+        messageElement.querySelector(".msg-s-event-listitem__body");
+      const rawText = body?.textContent || body?.innerText || "";
+      return cleanMessageText(rawText);
+    };
+
+    const setupLiveMessageObserver = () => {
+      if (focalsLiveDetectionStarted) return;
+      focalsLiveDetectionStarted = true;
+
+      const MY_NAME = "Maxime Cuilleret";
+
+      if (window.__FOCALS_MSG_OBSERVER__) {
+        window.__FOCALS_MSG_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_OBSERVER__ = null;
+      }
+
+      const root = getLinkedinMessagingRoot();
+      const listRoot =
+        root.querySelector(".msg-s-message-list-container ul") ||
+        root.querySelector(".msg-convo-wrapper ul");
+
+      if (!listRoot) {
+        debugLog(
+          "LIVE_DETECTION",
+          "[LIVE_DETECTION] message list root not found, skipping observer"
+        );
+        return;
+      }
+
+      const messageSelector =
+        'div.msg-s-event-listitem[data-view-name="message-list-item"]';
+      const processedMessages = new Map();
+      let sendLockUntil = 0;
+
+      const processMessageElement = (messageElement) => {
+        if (!messageElement) return;
+        const now = Date.now();
+        if (sendLockUntil && now < sendLockUntil) {
+          debugLog(
+            "LIVE_DETECTION",
+            "[LIVE_DETECTION] send lock active, skipping mutation batch"
+          );
+          return;
+        }
+
+        const text = extractLiveMessageText(messageElement);
+        if (shouldIgnoreLiveMessage(messageElement, text)) {
+          return;
+        }
+
+        const sender =
+          resolveLiveSenderName(messageElement) || "Unknown sender";
+        const isFromMe =
+          !!messageElement.closest(".msg-s-message-group--viewer") ||
+          sender === MY_NAME;
+        const msgKey = `${isFromMe ? "me" : "them"}:${normalizeText(text)}`;
+
+        if (processedMessages.has(msgKey)) {
+          return;
+        }
+
+        processedMessages.set(msgKey, now);
+
+        if (isFromMe) {
+          sendLockUntil = now + 2000;
+        }
+
+        debugLog("LIVE_DETECTION", {
+          prefix: "[LIVE_DETECTION]",
+          direction: isFromMe ? "outgoing" : "incoming",
+          sender,
+          text,
+        });
+
+        if (!isFromMe) {
+          const payload = {
+            match_name: sender,
+            text: text,
+            type: "linkedin_chat",
+            received_at: new Date().toISOString(),
+          };
+          chrome.runtime.sendMessage({ type: "NEW_LIVE_MESSAGE", data: payload });
+          debugLog(
+            "LIVE_DETECTION",
+            "[LIVE_DETECTION] Message sent to background relay",
+            payload
+          );
+        }
+      };
+
+      const observer = new MutationObserver((mutations) => {
+        const candidates = new Set();
+        for (const mutation of mutations) {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            const element = node;
+            if (element.matches?.(messageSelector)) {
+              candidates.add(element);
+            }
+            element
+              .querySelectorAll?.(messageSelector)
+              .forEach((messageNode) => candidates.add(messageNode));
+          });
+        }
+        candidates.forEach((node) => processMessageElement(node));
+      });
+
+      observer.observe(listRoot, { childList: true, subtree: true });
+      window.__FOCALS_MSG_OBSERVER__ = observer;
+      debugLog(
+        "LIVE_DETECTION",
+        "[LIVE_DETECTION] observer started on message list"
+      );
+    };
+
     const initMessagingWatcher = () => {
       console.log("[FOCALS DEBUG] messaging script bootstrap");
       setupMessagingObserver();
+      setupLiveMessageObserver();
     };
 
     if (document.readyState === "loading") {
