@@ -982,12 +982,6 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
 
     try {
       await waitForComplete(tab.id, 15000);
-      if (reason !== "popup_open") {
-        await chrome.tabs.update(tab.id, { active: true });
-        await wait(700);
-        await chrome.tabs.update(tab.id, { active: false });
-        await wait(300);
-      }
       const prepResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
