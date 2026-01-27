@@ -546,6 +546,7 @@
       scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
       scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
     }
+    scope.querySelectorAll("ul li, ol li").forEach((node) => candidates.push(node));
 
     const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
     const description = normalizeDescriptionText(raw);
