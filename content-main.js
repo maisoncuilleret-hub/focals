@@ -59,6 +59,7 @@
     return `${base.replace(/\/$/, "")}/details/experience/`;
   };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
+  const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
 
   const getStorageValue = (key) =>
     new Promise((resolve) => {
@@ -97,6 +98,16 @@
       exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
     });
     await setStorageValue({ FOCALS_LAST_PROFILE: profile });
+  };
+
+  const persistLastResultForProfile = async (profileKey, payload, ts = Date.now()) => {
+    if (!profileKey || !payload) return;
+    await setStorageValue({
+      [buildLastResultCacheKey(profileKey)]: {
+        ts,
+        payload,
+      },
+    });
   };
 
   const readProfileCache = async (profileUrl) => {
@@ -255,7 +266,7 @@
   const shouldUseExperienceDetails = (root = document) =>
     evaluateExperienceDetailsNeed(root).shouldUse;
 
-  const requestExperienceDetailsScrape = (detailsUrl, profileKey) =>
+  const requestExperienceDetailsScrape = (detailsUrl, profileKey, reason) =>
     new Promise((resolve, reject) => {
       if (!detailsUrl) {
         resolve([]);
@@ -263,7 +274,7 @@
       }
       try {
         chrome.runtime.sendMessage(
-          { type: "FOCALS_SCRAPE_DETAILS_EXPERIENCE", detailsUrl, profileKey },
+          { type: "FOCALS_SCRAPE_DETAILS_EXPERIENCE", detailsUrl, profileKey, reason },
           (response) => {
             if (chrome.runtime.lastError) {
               reject(new Error(chrome.runtime.lastError.message || "Messaging failed"));
@@ -1549,7 +1560,7 @@
           if (!detailsScrapeInFlight.has(inflightKey)) {
             detailsScrapeInFlight.set(
               inflightKey,
-              requestExperienceDetailsScrape(detailsUrl, inflightKey)
+              requestExperienceDetailsScrape(detailsUrl, inflightKey, reason)
             );
           }
           try {
@@ -1568,10 +1579,10 @@
       .map((exp) => ({
         _idx: exp._idx ?? null,
         _ok: true,
-        Titre: exp.title || "",
-        Entreprise: exp.company || "",
-        Dates: exp.dates || "",
-        Lieu: exp.location || "",
+        Titre: exp.Titre || exp.title || "",
+        Entreprise: exp.Entreprise || exp.company || "",
+        Dates: exp.Dates || exp.dates || "",
+        Lieu: exp.Lieu || exp.location || "",
         WorkplaceType: exp.workplaceType || null,
         Description: exp.description || null,
         DescriptionBullets: exp.descriptionBullets || null,
@@ -1764,6 +1775,7 @@
     if (!profileUrl) {
       return { ok: false, error: "BAD_CONTEXT" };
     }
+    const profileKey = profileUrl;
 
     if (scrapeInFlight) {
       if (lastResult) {
@@ -1795,7 +1807,10 @@
     ) {
       lastResult = cachedEntry.result;
       lastResultAt = cachedEntry.scrapedAt;
-      await persistLastProfile(cachedEntry.result);
+      await Promise.all([
+        persistLastProfile(cachedEntry.result),
+        persistLastResultForProfile(profileKey, cachedEntry.result, cachedEntry.scrapedAt),
+      ]);
       return {
         ok: true,
         profile: cachedEntry.result,
@@ -1860,6 +1875,7 @@
       lastResultAt = scrapedAt;
       await Promise.all([
         persistLastProfile(normalized),
+        persistLastResultForProfile(profileKey, normalized, scrapedAt),
         writeProfileCache(profileUrl, { scrapedAt, result: normalized }),
         writeLastScrapeAt(scrapedAt),
       ]);

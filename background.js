@@ -9,6 +9,7 @@ const EXP_TAG = "[FOCALS][EXPERIENCE]";
 const expLog = (...a) => console.log(EXP_TAG, ...a);
 const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
 const detailsScrapeInFlight = new Map();
+const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -143,6 +144,27 @@ function withStorage(area = "sync") {
       });
     },
   };
+}
+
+const buildDetailsCacheKey = (profileKey) => `focals_details_cache:${profileKey}`;
+const isCacheFresh = (ts) => Number.isFinite(ts) && Date.now() - ts < DETAILS_CACHE_TTL_MS;
+
+async function getDetailsCache(profileKey) {
+  if (!profileKey) return null;
+  const localStore = withStorage("local");
+  const key = buildDetailsCacheKey(profileKey);
+  const data = await localStore.get(key);
+  const entry = data?.[key];
+  if (!entry || typeof entry !== "object") return null;
+  if (!isCacheFresh(entry.ts)) return null;
+  return Array.isArray(entry.experiences) ? entry.experiences : null;
+}
+
+async function setDetailsCache(profileKey, experiences) {
+  if (!profileKey || !Array.isArray(experiences)) return false;
+  const localStore = withStorage("local");
+  const key = buildDetailsCacheKey(profileKey);
+  return localStore.set({ [key]: { ts: Date.now(), experiences } });
 }
 
 async function saveProfileToSupabase(profile) {
@@ -936,12 +958,21 @@ async function detailsExperienceScraper() {
   return { experiences: results, debug };
 }
 
-async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
+async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reason) {
   if (profileKey && detailsScrapeInFlight.has(profileKey)) {
     return detailsScrapeInFlight.get(profileKey);
   }
 
   const runner = (async () => {
+    const cached = await getDetailsCache(profileKey);
+    if (cached) {
+      detailsLog("CACHE_HIT", { profileKey, count: cached.length });
+      return cached;
+    }
+    if (profileKey) {
+      detailsLog("CACHE_MISS", { profileKey });
+    }
+
     const tab = await chrome.tabs.create({ url: detailsUrl, active: false });
     if (!tab?.id) {
       throw new Error("Failed to open details tab");
@@ -951,10 +982,12 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
 
     try {
       await waitForComplete(tab.id, 15000);
-      await chrome.tabs.update(tab.id, { active: true });
-      await wait(700);
-      await chrome.tabs.update(tab.id, { active: false });
-      await wait(300);
+      if (reason !== "popup_open") {
+        await chrome.tabs.update(tab.id, { active: true });
+        await wait(700);
+        await chrome.tabs.update(tab.id, { active: false });
+        await wait(300);
+      }
       const prepResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
@@ -1003,12 +1036,19 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
           const steps = rand(12, 18);
           for (let i = 0; i < steps; i += 1) {
             window.scrollTo(0, document.body.scrollHeight);
-            await sleep(rand(280, 480));
+            window.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: 900, bubbles: true, cancelable: true })
+            );
+            document.dispatchEvent(
+              new WheelEvent("wheel", { deltaY: 900, bubbles: true, cancelable: true })
+            );
+            await sleep(rand(250, 450));
             const main = getMain();
             const section = findExperienceSectionRoot(main);
-            if (section) {
-              topLisExp = getTopLis(section).length;
-              rolesCount = getRoleLisCount(section);
+            const root = section || main;
+            if (root) {
+              topLisExp = getTopLis(root).length;
+              rolesCount = getRoleLisCount(root);
               if (topLisExp >= 3 && rolesCount >= 3) break;
             }
           }
@@ -1028,6 +1068,8 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
       detailsLog("PREP_COUNTS", {
         topLisExp: prepPayload?.topLisExp ?? null,
         rolesCount: prepPayload?.rolesCount ?? null,
+        liCountMain: prepPayload?.liCountMain ?? null,
+        profileKey,
       });
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
@@ -1209,10 +1251,10 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
             });
             const parsed = topLis.flatMap((li) => parseGroupedV6(li));
             return parsed.map((x) => ({
-              title: x.title,
-              company: x.company,
-              dates: x.dates,
-              location: x.location || null,
+              Titre: x.title,
+              Entreprise: x.company,
+              Dates: x.dates,
+              Lieu: x.location || null,
             }));
           }
 
@@ -1232,10 +1274,12 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
           ? payload
           : [];
       const experienceCount = experiences?.length || 0;
-      detailsLog("SCRAPED_COUNT", { count: experienceCount });
+      detailsLog("SCRAPED_COUNT", { profileKey, count: experienceCount });
       expLog("DETAILS_SCRAPED", { count: experienceCount, detailsUrl, profileKey });
       if (!experienceCount) {
         expLog("DETAILS_EMPTY", { detailsUrl, profileKey });
+      } else {
+        await setDetailsCache(profileKey, experiences);
       }
       expLog("DETAILS_SCRAPE_RESULT", {
         count: experienceCount,
@@ -1372,13 +1416,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
-      const { detailsUrl, profileKey } = message || {};
+      const { detailsUrl, profileKey, reason } = message || {};
       if (!detailsUrl) {
         sendResponse({ ok: false, error: "Missing detailsUrl" });
         return false;
       }
 
-      scrapeExperienceDetailsInBackground(detailsUrl, profileKey)
+      scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reason)
         .then((experiences) => sendResponse({ ok: true, experiences }))
         .catch((error) =>
           sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
