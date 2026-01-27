@@ -1179,6 +1179,124 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
             (getLines(scope).find(looksLikeLocation)
               ? collapseDouble(getLines(scope).find(looksLikeLocation))
               : "");
+          const normalizeInfosText = (s) =>
+            (s || "")
+              .replace(/\u00a0/g, " ")
+              .replace(/[ \t]+\n/g, "\n")
+              .replace(/[ \t]{2,}/g, " ")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim();
+          const fixSpacedUrls = (t) =>
+            t.replace(/\bhttps?:\/\/[^\s)]+/gi, (url) => url.replace(/\s+/g, ""));
+          const SEE_MORE_REGEX = /(voir plus|see more|show more|afficher la suite)/i;
+          const extractTextWithBreaks = (node) => {
+            if (!node) return "";
+            const html = node.innerHTML || "";
+            const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
+            return withBreaks.replace(/<[^>]*>/g, "");
+          };
+          const normalizeDescriptionText = (text) => {
+            let normalized = normalizeInfosText(text || "");
+            normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
+            normalized = fixSpacedUrls(normalized);
+            if (!normalized) return null;
+
+            const lines = normalized
+              .split("\n")
+              .map((line) => line.replace(/\s+/g, " ").trim())
+              .filter(Boolean);
+
+            const seen = new Set();
+            const deduped = [];
+            for (const line of lines) {
+              const key = line.toLowerCase();
+              if (seen.has(key)) continue;
+              seen.add(key);
+              deduped.push(line);
+            }
+
+            const finalText = deduped.join("\n").trim();
+            if (!finalText || finalText.length < 30) return null;
+            return finalText;
+          };
+          const extractDescriptionBullets = (text) => {
+            if (!text) return null;
+            const lines = text
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean);
+            const bullets = lines
+              .filter((line) => /^[-•]\s+/.test(line))
+              .map((line) => line.replace(/^[-•]\s+/, "").trim())
+              .filter(Boolean);
+            return bullets.length ? bullets : null;
+          };
+          const stripExperienceMetaFromDescription = (description, exp) => {
+            if (!description) return null;
+            const lines = description
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean);
+            if (!lines.length) return null;
+            const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
+              .map((x) => clean(x).toLowerCase())
+              .filter(Boolean);
+            const metaSet = new Set(metaTokens);
+            const filtered = lines.filter((line) => {
+              const key = clean(line).toLowerCase();
+              if (!key) return false;
+              if (metaSet.has(key)) return false;
+              if (looksLikeDates(line)) return false;
+              if (looksLikeLocation(line)) return false;
+              return true;
+            });
+            if (!filtered.length) return null;
+            const finalText = filtered.join("\n").trim();
+            if (!finalText || finalText.length < 30) return null;
+            return finalText;
+          };
+          const clickSeeMoreInItem = (item) => {
+            if (!item) return false;
+            const scope = item.querySelector(".pvs-entity__sub-components") || item;
+            if (!scope || scope.dataset?.focalsSeeMoreClicked) return false;
+            const buttons = Array.from(scope.querySelectorAll("button, a"))
+              .map((el) => ({
+                el,
+                label: `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.trim(),
+              }))
+              .filter(({ label }) => SEE_MORE_REGEX.test(label));
+            const target = buttons.find(({ el }) => !el.disabled)?.el;
+            if (target) {
+              target.click();
+              scope.dataset.focalsSeeMoreClicked = "true";
+              return true;
+            }
+            return false;
+          };
+          const extractExperienceDescription = (item) => {
+            if (!item) return { description: null, descriptionBullets: null };
+            const scope = item.querySelector(".pvs-entity__sub-components") || item;
+            if (!scope) return { description: null, descriptionBullets: null };
+
+            clickSeeMoreInItem(item);
+
+            const candidates = [];
+            const inlineNodes = scope.querySelectorAll(
+              'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
+            );
+            if (inlineNodes.length) {
+              inlineNodes.forEach((node) => candidates.push(node));
+            } else {
+              scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
+              scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
+            }
+
+            const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
+            const description = normalizeDescriptionText(raw);
+            if (!description) return { description: null, descriptionBullets: null };
+
+            return { description, descriptionBullets: extractDescriptionBullets(description) };
+          };
 
           function parseGroupedV6(groupLi) {
             const headerCompany = pickHeaderCompany(groupLi);
@@ -1195,7 +1313,15 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
               }
               const location = pickLocation(groupLi) || "";
               if (!title || !dates) return [];
-              return [{ title, company: collapseDouble(company), dates, location: collapseDouble(location) }];
+              return [
+                {
+                  title,
+                  company: collapseDouble(company),
+                  dates,
+                  location: collapseDouble(location),
+                  _scope: groupLi,
+                },
+              ];
             }
 
             const out = [];
@@ -1212,7 +1338,13 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
                 company = pickCompanyFallback(groupLi, title) || company;
               }
               const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
-              out.push({ title, company: collapseDouble(company), dates, location: collapseDouble(location) });
+              out.push({
+                title,
+                company: collapseDouble(company),
+                dates,
+                location: collapseDouble(location),
+                _scope: roleLi,
+              });
             }
 
             const seen = new Set();
@@ -1225,6 +1357,40 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
               return true;
             });
           }
+
+          const buildExpKey = (exp) =>
+            [exp?.title, exp?.company, exp?.dates, exp?.location].map((x) => clean(x)).join("||").toLowerCase();
+          const enrichDescriptionsFromScopes = (v6Parsed) => {
+            if (!Array.isArray(v6Parsed)) return [];
+            const descByKey = new Map();
+            return v6Parsed.map((item) => {
+              const key = buildExpKey(item);
+              let entry = descByKey.get(key);
+              if (!entry) {
+                let description = null;
+                let descriptionBullets = null;
+                try {
+                  if (item?._scope) {
+                    clickSeeMoreInItem(item._scope);
+                    const extracted = extractExperienceDescription(item._scope);
+                    description = extracted?.description || null;
+                    description = stripExperienceMetaFromDescription(description, item);
+                    descriptionBullets = description ? extractDescriptionBullets(description) : null;
+                  }
+                } catch (err) {
+                  description = null;
+                  descriptionBullets = null;
+                }
+                entry = { description, descriptionBullets };
+                descByKey.set(key, entry);
+              }
+              return {
+                ...item,
+                Description: entry?.description || null,
+                DescriptionBullets: entry?.descriptionBullets || null,
+              };
+            });
+          };
 
           function findExperienceSectionRoot(main) {
             if (!main) return null;
@@ -1244,11 +1410,14 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
               return true;
             });
             const parsed = topLis.flatMap((li) => parseGroupedV6(li));
-            return parsed.map((x) => ({
+            const enriched = enrichDescriptionsFromScopes(parsed);
+            return enriched.map((x) => ({
               Titre: x.title,
               Entreprise: x.company,
               Dates: x.dates,
               Lieu: x.location || null,
+              Description: x.Description || null,
+              DescriptionBullets: x.DescriptionBullets || null,
             }));
           }
 
@@ -1267,6 +1436,9 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         : Array.isArray(payload)
           ? payload
           : [];
+      console.log("[FOCALS][DETAILS] DESC_COUNT", {
+        count: experiences.filter((e) => e?.Description).length,
+      });
       const experienceCount = experiences?.length || 0;
       detailsLog("SCRAPED_COUNT", { profileKey, count: experienceCount });
       expLog("DETAILS_SCRAPED", { count: experienceCount, detailsUrl, profileKey });
