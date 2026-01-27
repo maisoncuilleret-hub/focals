@@ -1097,6 +1097,22 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
             if (s.includes("·")) return false;
             return /(,| Area\b|Région|Île-de-France|France)\b/i.test(s) && s.length <= 140;
           };
+          const EMPLOYMENT_RE =
+            /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
+          const looksLikeEmploymentType = (s) => {
+            const t = clean(s);
+            if (!t) return false;
+            return EMPLOYMENT_RE.test(t);
+          };
+          const looksLikePlainLocationFallback = (s) => {
+            const t = clean(s);
+            if (!t) return false;
+            if (t.length > 80) return false;
+            if (looksLikeDates(t)) return false;
+            if (looksLikeEmploymentType(t)) return false;
+            if (/compétences|competences|skills/i.test(t)) return false;
+            return /^[\p{L}\s,'’.\-]+$/u.test(t);
+          };
           const isNoise = (t) => {
             const s = clean(t);
             if (!s) return true;
@@ -1241,13 +1257,20 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
             const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
               .map((x) => clean(x).toLowerCase())
               .filter(Boolean);
+            const companyToken = clean(exp?.company).toLowerCase();
+            const employmentLineRe =
+              /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
             const metaSet = new Set(metaTokens);
             const filtered = lines.filter((line) => {
               const key = clean(line).toLowerCase();
               if (!key) return false;
               if (metaSet.has(key)) return false;
+              if (companyToken && key.includes(companyToken) && (key.includes("·") || employmentLineRe.test(key))) {
+                return false;
+              }
               if (looksLikeDates(line)) return false;
               if (looksLikeLocation(line)) return false;
+              if (looksLikePlainLocationFallback(line)) return false;
               return true;
             });
             if (!filtered.length) return null;

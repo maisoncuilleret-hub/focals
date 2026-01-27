@@ -187,13 +187,20 @@
     const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
       .map((x) => clean(x).toLowerCase())
       .filter(Boolean);
+    const companyToken = clean(exp?.company).toLowerCase();
+    const employmentLineRe =
+      /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
     const metaSet = new Set(metaTokens);
     const filtered = lines.filter((line) => {
       const key = clean(line).toLowerCase();
       if (!key) return false;
       if (metaSet.has(key)) return false;
+      if (companyToken && key.includes(companyToken) && (key.includes("·") || employmentLineRe.test(key))) {
+        return false;
+      }
       if (looksLikeDates(line)) return false;
       if (looksLikeLocation(line)) return false;
+      if (looksLikePlainLocationFallback(line)) return false;
       return true;
     });
     if (!filtered.length) return null;
