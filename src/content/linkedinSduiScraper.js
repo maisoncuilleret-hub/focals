@@ -6,18 +6,168 @@
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
 
-  const clean = (t) => (t ? String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() : "");
-  const collapseDouble = (text) => {
-    const t = clean(text);
+  const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  const collapseDouble = (s) => {
+    const t = clean(s);
     if (!t) return "";
-    const match = t.match(/^(.+?)\s+\1$/i);
-    if (match?.[1]) return clean(match[1]);
     if (t.length % 2 === 0) {
-      const half = t.slice(0, t.length / 2);
-      if (half === t.slice(t.length / 2)) return clean(half);
+      const h = t.length / 2;
+      const a = t.slice(0, h),
+        b = t.slice(h);
+      if (a === b) return a;
     }
+    const m = t.match(/^(.+?)\1$/);
+    if (m && m[1]) return clean(m[1]);
     return t;
   };
+  const monthToken =
+    /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|january|february|march|april|may|june|july|august|september|october|november|december)/i;
+  const looksLikeDates = (t) => {
+    const s = clean(t);
+    if (!s) return false;
+    if (!monthToken.test(s)) return false;
+    return /-/.test(s) && (/\b(19\d{2}|20\d{2})\b/.test(s) || /aujourd|present/i.test(s));
+  };
+  const looksLikeLocation = (t) => {
+    const s = clean(t);
+    if (!s) return false;
+    if (looksLikeDates(s)) return false;
+    if (s.includes("·")) return false;
+    return /(,| Area\b|Région|Île-de-France|France)\b/i.test(s) && s.length <= 140;
+  };
+  const isNoise = (t) => {
+    const s = clean(t);
+    if (!s) return true;
+    if (/^(afficher plus|see more|show more)$/i.test(s)) return true;
+    if (/^\d+\s+(mois|ans?)$/i.test(s)) return true;
+    if (/^de\s/i.test(s) && monthToken.test(s)) return true;
+    return false;
+  };
+  const getLines = (scope) => {
+    const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
+    const raw = nodes.map((n) => collapseDouble(n.textContent)).map(clean).filter(Boolean);
+    const out = [];
+    for (const r of raw) {
+      if (!r) continue;
+      if (out[out.length - 1] === r) continue;
+      out.push(r);
+    }
+    return out;
+  };
+  const pickTitle = (li) => {
+    const n = li.querySelector("div.t-bold span[aria-hidden='true'], div.t-bold, span.t-bold");
+    return collapseDouble(clean(n?.textContent));
+  };
+  const pickHeaderCompany = (groupLi) => {
+    const nodes = Array.from(groupLi.querySelectorAll("div.t-bold, span.t-bold"))
+      .filter((n) => !n.closest(".pvs-entity__sub-components"))
+      .map((n) => collapseDouble(n.textContent))
+      .map(clean)
+      .filter(Boolean);
+    return nodes[0] || "";
+  };
+  const pickDates = (scope, title = "") => {
+    const lines = getLines(scope).filter((l) => l && l !== title);
+    const candidates = lines.filter(looksLikeDates).filter((l) => l.length <= 120);
+    if (!candidates.length) return "";
+    const scored = candidates
+      .map((l) => {
+        let score = 0;
+        if (/\s-\s| - /.test(l)) score += 3;
+        if (/\b(19\d{2}|20\d{2})\b/.test(l)) score += 2;
+        if (/aujourd|present/i.test(l)) score += 1;
+        if (/^De\s/i.test(l)) score -= 1;
+        return [l, score];
+      })
+      .sort((a, b) => b[1] - a[1]);
+    return scored[0][0];
+  };
+  const pickCompanyFromDotLine = (scope, title = "") => {
+    const lines = getLines(scope);
+    const dotLine = lines.find((l) => l.includes("·") && !looksLikeDates(l) && l.length <= 160);
+    if (!dotLine) return "";
+    const first = collapseDouble(clean(dotLine.split("·")[0]));
+    if (!first) return "";
+    if (title && first.toLowerCase() === title.toLowerCase()) return "";
+    if (looksLikeLocation(first)) return "";
+    return first;
+  };
+  const pickCompanyFallback = (scope, title = "") => {
+    const lines = getLines(scope);
+    const idx = lines.findIndex((l) => clean(l).toLowerCase() === clean(title).toLowerCase());
+    if (idx >= 0) {
+      const next = lines[idx + 1] || "";
+      const c = collapseDouble(next);
+      if (c && !looksLikeDates(c) && !looksLikeLocation(c) && !isNoise(c) && c.length <= 120) {
+        return clean(c.split("·")[0]);
+      }
+    }
+    const candidates = lines.filter((l) => {
+      const s = clean(l);
+      if (!s) return false;
+      if (title && s.toLowerCase() === title.toLowerCase()) return false;
+      if (looksLikeDates(s) || looksLikeLocation(s) || isNoise(s)) return false;
+      if (s.length > 140) return false;
+      return true;
+    });
+    if (!candidates.length) return "";
+    return clean(candidates[0].split("·")[0]);
+  };
+  const pickLocation = (scope) =>
+    (getLines(scope).find(looksLikeLocation) ? collapseDouble(getLines(scope).find(looksLikeLocation)) : "");
+
+  function parseGroupedV6(groupLi) {
+    const headerCompany = pickHeaderCompany(groupLi);
+    const roleLis = Array.from(groupLi.querySelectorAll(".pvs-entity__sub-components li")).filter(
+      (li) => !!li.querySelector("div.t-bold, span.t-bold")
+    );
+
+    if (!roleLis.length) {
+      const title = pickTitle(groupLi) || "";
+      const dates = pickDates(groupLi, title) || "";
+      let company = headerCompany || pickCompanyFromDotLine(groupLi, title) || "";
+      if (!company || (title && company.toLowerCase() === title.toLowerCase())) {
+        company = pickCompanyFallback(groupLi, title) || company;
+      }
+      const location = pickLocation(groupLi) || "";
+      if (!title || !dates) return [];
+      return [{ title, company: collapseDouble(company), dates, location: collapseDouble(location) }];
+    }
+
+    const out = [];
+    for (const roleLi of roleLis) {
+      const title = pickTitle(roleLi);
+      const dates = pickDates(roleLi, title) || pickDates(groupLi, title);
+      if (!title || !dates) continue;
+
+      let company = headerCompany || "";
+      if (!company || company.toLowerCase() === title.toLowerCase()) {
+        company = pickCompanyFromDotLine(groupLi, title) || pickCompanyFromDotLine(roleLi, title) || "";
+      }
+      if (!company || company.toLowerCase() === title.toLowerCase()) {
+        company = pickCompanyFallback(groupLi, title) || company;
+      }
+      const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
+      out.push({ title, company: collapseDouble(company), dates, location: collapseDouble(location) });
+    }
+
+    const seen = new Set();
+    return out.filter((e) => {
+      const k = [e.title, e.company, e.dates, e.location].map((x) => clean(x).toLowerCase()).join("||");
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  function findExperienceSectionRoot(main) {
+    if (!main) return null;
+    const heading = Array.from(main.querySelectorAll("h1, h2, h3")).find((el) =>
+      /exp[ée]rience/i.test(clean(el.textContent))
+    );
+    if (!heading) return null;
+    return heading.closest("section");
+  }
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const INLINE_DATE_GLUE_RE = /(\d)\s*(an|ans|mois|yr|yrs|mos)\s*(De|Du)\s+/i;
   let dedupeSampleCount = 0;
@@ -545,30 +695,10 @@
 
   // ---------------- Experience root picking ----------------
   function pickExperienceSection() {
-    const legacyAnchor = document.querySelector("#experience");
-    if (legacyAnchor) {
-      const section =
-        legacyAnchor.closest("section.artdeco-card") ||
-        legacyAnchor.closest("section") ||
-        legacyAnchor.parentElement;
-      if (section) return { mode: "LEGACY_ANCHOR", root: section };
-    }
-
-    const sduiCard = document.querySelector('[data-view-name="profile-card-experience"]');
-    if (sduiCard) return { mode: "SDUI_CARD", root: sduiCard.querySelector("section") || sduiCard };
-
-    const sduiTopSection = document.querySelector('section[componentkey*="ExperienceTopLevelSection"]');
-    if (sduiTopSection) return { mode: "SDUI_COMPONENTKEY", root: sduiTopSection };
-
-    const h2 = Array.from(document.querySelectorAll("h2")).find((x) =>
-      /expérience/i.test(clean(x.textContent))
-    );
-    if (h2) {
-      const sec = h2.closest("section");
-      if (sec) return { mode: "HEADING_FALLBACK", root: sec };
-    }
-
-    return { mode: "NOT_FOUND", root: null };
+    const main = document.querySelector("main") || document.body;
+    const section = findExperienceSectionRoot(main);
+    if (section) return { mode: "HEADING_SECTION", root: section };
+    return { mode: "MAIN_FALLBACK", root: main };
   }
 
   function getExperienceTopLis(expSection) {
@@ -576,15 +706,33 @@
     return Array.from(expSection.querySelectorAll("li")).filter((li) => {
       if (li.closest(".pvs-entity__sub-components")) return false;
       if (!li.querySelector("div.t-bold, span.t-bold")) return false;
-      if (clean(li.innerText || "").length <= 25) return false;
+      if (clean(li.textContent).length <= 25) return false;
       return true;
     });
   }
 
-  function looksLikeDates(s) {
-    const t = clean(s);
-    if (!t) return false;
-    return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
+  function parseExperiencesWithV6(root) {
+    if (!root) return [];
+    const topLis = Array.from(root.querySelectorAll("li")).filter((li) => {
+      if (li.closest(".pvs-entity__sub-components")) return false;
+      if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+      if (clean(li.textContent).length <= 25) return false;
+      return true;
+    });
+
+    const parsed = topLis.flatMap((li) => parseGroupedV6(li));
+    return parsed.map((x) => ({
+      Titre: x.title,
+      Entreprise: x.company,
+      Dates: x.dates,
+      Lieu: x.location || null,
+    }));
+  }
+
+  function parseExperienceFromRoot(root) {
+    if (!root) return [];
+    const expRoot = findExperienceSectionRoot(root) || root;
+    return parseExperiencesWithV6(expRoot);
   }
 
   const WORKPLACE_TYPE_RULES = [
@@ -611,21 +759,6 @@
     const t = clean(s);
     if (!t) return false;
     return EMPLOYMENT_RE.test(t);
-  }
-
-  // strict, pour éviter de prendre une description comme "Lieu"
-  function looksLikeLocation(s) {
-    const t = clean(s);
-    if (!t) return false;
-    if (t.length > 120) return false;
-    if (normalizeWorkplaceType(t)) return false;
-
-    const hasGeo =
-      /(france|paris|île-de-france|ile-de-france|région|region|london|berlin|madrid|barcelona|bruxelles|brussels|amsterdam|lisbon|lisbonne)/i.test(
-        t
-      );
-
-    return hasGeo;
   }
 
   // fallback safe: "Six-fours les plages", "Nice", etc
@@ -666,52 +799,6 @@
     if (DURATION_RE.test(t)) return true;
     if (title && t.toLowerCase() === clean(title).toLowerCase()) return true;
     return false;
-  }
-
-  function getLines(scope) {
-    if (!scope) return [];
-    const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
-    const out = [];
-    let lastKey = null;
-    for (const node of nodes) {
-      const raw = node.textContent || "";
-      const parts = raw.split("\n").map((line) => collapseDouble(line)).filter(Boolean);
-      for (const part of parts) {
-        const key = part.toLowerCase();
-        if (lastKey && key === lastKey) continue;
-        out.push(part);
-        lastKey = key;
-      }
-    }
-    return out;
-  }
-
-  function pickCompanyFromDotLine(scope, title) {
-    const lines = getLines(scope);
-    for (const line of lines) {
-      if (!line.includes("·")) continue;
-      const first = collapseDouble(clean(line.split("·")[0]));
-      if (!first) continue;
-      if (isBadCompanyCandidate(first, title)) continue;
-      return first;
-    }
-    return null;
-  }
-
-  function pickCompanyFallback(scope, title) {
-    const lines = getLines(scope);
-    if (!lines.length) return null;
-    const titleKey = clean(title).toLowerCase();
-    const titleIndex = lines.findIndex((line) => clean(line).toLowerCase() === titleKey);
-    if (titleIndex >= 0 && lines[titleIndex + 1]) {
-      const candidate = collapseDouble(lines[titleIndex + 1]);
-      if (!isBadCompanyCandidate(candidate, title)) return candidate;
-    }
-    for (const line of lines) {
-      const candidate = collapseDouble(line);
-      if (!isBadCompanyCandidate(candidate, title)) return candidate;
-    }
-    return null;
   }
 
   function extractHeaderBoldCompany(groupItem) {
@@ -1120,41 +1207,12 @@
     if (!expSection) return { mode: "NO_ROOT", experiences: [], counts: {} };
 
     const topLis = getExperienceTopLis(expSection);
-    // FIX: LinkedIn SDUI utilise "entity-collection-item-xxxx" (pas "entity-collection-item--")
-    const sduiItems = topLis.filter((li) =>
-      li.matches('[componentkey^="entity-collection-item-"], [componentkey*="entity-collection-item-"]')
-    );
-
-    const sduiLikely = (sduiItems.length ? sduiItems : topLis).filter((it) =>
-      Array.from(it.querySelectorAll("p")).some((p) => looksLikeDates(p.textContent))
-    );
-
-    const { ul: legacyUl, score: legacyScore } = bestUlForLegacy(expSection);
-    const legacyLis = legacyUl
-      ? Array.from(legacyUl.children).filter((li) => li.querySelector('div[data-view-name="profile-component-entity"]'))
-      : [];
-
     const counts = {
       topLis: topLis.length,
-      sduiItems: sduiItems.length,
-      sduiLikely: sduiLikely.length,
-      legacyUlScore: legacyScore,
-      legacyLis: legacyLis.length,
     };
-
-    if (sduiLikely.length) {
-      const parsed = sduiLikely.flatMap((it, i) => parseSduiExperienceItem(it, i));
-      const ok = dedupeExperiences(parsed.filter((x) => x._ok));
-      return { mode: "SDUI_ITEMS", experiences: ok, counts };
-    }
-
-    if (legacyLis.length) {
-      const parsed = legacyLis.flatMap((li, i) => parseLegacyExperienceLiExpanded(li, i));
-      const ok = dedupeExperiences(parsed.filter((x) => x._ok));
-      return { mode: "LEGACY_LIS", experiences: ok, counts };
-    }
-
-    return { mode: "EMPTY", experiences: [], counts };
+    const parsed = parseExperiencesWithV6(expSection);
+    const ok = dedupeExperiences(parsed);
+    return { mode: "V6", experiences: ok, counts };
   }
 
   async function waitForExperienceReady(timeoutMs = 6500) {

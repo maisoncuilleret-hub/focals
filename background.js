@@ -951,90 +951,279 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
 
     try {
       await waitForComplete(tab.id, 15000);
+      await chrome.tabs.update(tab.id, { active: true });
+      await wait(700);
+      await chrome.tabs.update(tab.id, { active: false });
+      await wait(300);
       const prepResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
-          const clean = (t) => (t ? String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() : "");
+          const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
           const getMain = () =>
             document.querySelector('main[role="main"]') ||
             document.querySelector("main") ||
             document.querySelector('[role="main"]') ||
             document.body;
-          const getExperienceSection = (main) => {
-            const anchor = main?.querySelector("#experience");
-            if (anchor) {
-              return anchor.closest("section") || anchor.parentElement?.closest("section") || anchor.parentElement;
-            }
-            const heading = Array.from(main?.querySelectorAll("h1, h2, h3") || []).find((el) =>
+          const findExperienceSectionRoot = (main) => {
+            if (!main) return null;
+            const heading = Array.from(main.querySelectorAll("h1, h2, h3")).find((el) =>
               /exp[ée]rience/i.test(clean(el.textContent))
             );
-            return heading ? heading.closest("section") : null;
+            if (!heading) return null;
+            return heading.closest("section");
           };
           const getTopLis = (scope) =>
             Array.from(scope?.querySelectorAll("li") || []).filter((li) => {
               if (li.closest(".pvs-entity__sub-components")) return false;
               if (!li.querySelector("div.t-bold, span.t-bold")) return false;
-              if (clean(li.innerText || "").length <= 25) return false;
+              if (clean(li.textContent).length <= 25) return false;
               return true;
             });
           const getRoleLisCount = (scope) =>
-            Array.from(scope?.querySelectorAll(".pvs-entity__sub-components li") || []).filter(
-              (li) => li.querySelector("div.t-bold, span.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
-            ).length;
+            Array.from(scope?.querySelectorAll(".pvs-entity__sub-components li") || []).length;
           const waitForContent = async () => {
             for (let i = 0; i < 40; i += 1) {
               const main = getMain();
-              const section = getExperienceSection(main) || main;
-              const liCount = section ? section.querySelectorAll("li").length : 0;
-              if (main && liCount >= 5) {
-                return { liCount, main, section };
+              const section = findExperienceSectionRoot(main);
+              if (main && section) {
+                return { main, section };
               }
               await sleep(250);
             }
             const main = getMain();
-            const section = getExperienceSection(main) || main;
-            return { liCount: section ? section.querySelectorAll("li").length : 0, main, section };
+            const section = findExperienceSectionRoot(main);
+            return { main, section };
           };
 
-          const initial = await waitForContent();
-          let expTopLis = getTopLis(initial.section).length;
-          let roleLisCount = getRoleLisCount(initial.section);
-          const steps = rand(8, 12);
+          await waitForContent();
+          let topLisExp = 0;
+          let rolesCount = 0;
+          const steps = rand(12, 18);
           for (let i = 0; i < steps; i += 1) {
             window.scrollTo(0, document.body.scrollHeight);
             await sleep(rand(280, 480));
             const main = getMain();
-            const section = getExperienceSection(main) || main;
-            expTopLis = getTopLis(section).length;
-            roleLisCount = getRoleLisCount(section);
-            // WHY: on attend assez d'items pour contrer le lazy-load en onglet inactif.
-            if (expTopLis >= 3 && roleLisCount >= 2) break;
+            const section = findExperienceSectionRoot(main);
+            if (section) {
+              topLisExp = getTopLis(section).length;
+              rolesCount = getRoleLisCount(section);
+              if (topLisExp >= 3 && rolesCount >= 3) break;
+            }
           }
           window.scrollTo(0, 0);
           await sleep(250);
           const main = getMain();
-          const section = getExperienceSection(main) || main;
-          const liCount = section ? section.querySelectorAll("li").length : 0;
+          const section = findExperienceSectionRoot(main);
+          const liCountMain = main ? main.querySelectorAll("li").length : 0;
           return {
-            initialLiCount: initial.liCount,
-            finalLiCount: liCount,
-            expTopLis,
-            roleLisCount,
+            topLisExp,
+            rolesCount,
+            liCountMain,
           };
         },
       });
       const prepPayload = Array.isArray(prepResults) ? prepResults?.[0]?.result : null;
-      detailsLog("PREP_DONE", {
-        initialLiCount: prepPayload?.initialLiCount ?? null,
-        finalLiCount: prepPayload?.finalLiCount ?? null,
-        expTopLis: prepPayload?.expTopLis ?? null,
-        roleLisCount: prepPayload?.roleLisCount ?? null,
+      detailsLog("PREP_COUNTS", {
+        topLisExp: prepPayload?.topLisExp ?? null,
+        rolesCount: prepPayload?.rolesCount ?? null,
       });
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: detailsExperienceScraper,
+        func: () => {
+          const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+          const collapseDouble = (s) => {
+            const t = clean(s);
+            if (!t) return "";
+            if (t.length % 2 === 0) {
+              const h = t.length / 2;
+              const a = t.slice(0, h),
+                b = t.slice(h);
+              if (a === b) return a;
+            }
+            const m = t.match(/^(.+?)\1$/);
+            if (m && m[1]) return clean(m[1]);
+            return t;
+          };
+          const monthToken =
+            /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|january|february|march|april|may|june|july|august|september|october|november|december)/i;
+          const looksLikeDates = (t) => {
+            const s = clean(t);
+            if (!s) return false;
+            if (!monthToken.test(s)) return false;
+            return /-/.test(s) && (/\b(19\d{2}|20\d{2})\b/.test(s) || /aujourd|present/i.test(s));
+          };
+          const looksLikeLocation = (t) => {
+            const s = clean(t);
+            if (!s) return false;
+            if (looksLikeDates(s)) return false;
+            if (s.includes("·")) return false;
+            return /(,| Area\b|Région|Île-de-France|France)\b/i.test(s) && s.length <= 140;
+          };
+          const isNoise = (t) => {
+            const s = clean(t);
+            if (!s) return true;
+            if (/^(afficher plus|see more|show more)$/i.test(s)) return true;
+            if (/^\d+\s+(mois|ans?)$/i.test(s)) return true;
+            if (/^de\s/i.test(s) && monthToken.test(s)) return true;
+            return false;
+          };
+          const getLines = (scope) => {
+            const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
+            const raw = nodes.map((n) => collapseDouble(n.textContent)).map(clean).filter(Boolean);
+            const out = [];
+            for (const r of raw) {
+              if (!r) continue;
+              if (out[out.length - 1] === r) continue;
+              out.push(r);
+            }
+            return out;
+          };
+          const pickTitle = (li) => {
+            const n = li.querySelector("div.t-bold span[aria-hidden='true'], div.t-bold, span.t-bold");
+            return collapseDouble(clean(n?.textContent));
+          };
+          const pickHeaderCompany = (groupLi) => {
+            const nodes = Array.from(groupLi.querySelectorAll("div.t-bold, span.t-bold"))
+              .filter((n) => !n.closest(".pvs-entity__sub-components"))
+              .map((n) => collapseDouble(n.textContent))
+              .map(clean)
+              .filter(Boolean);
+            return nodes[0] || "";
+          };
+          const pickDates = (scope, title = "") => {
+            const lines = getLines(scope).filter((l) => l && l !== title);
+            const candidates = lines.filter(looksLikeDates).filter((l) => l.length <= 120);
+            if (!candidates.length) return "";
+            const scored = candidates
+              .map((l) => {
+                let score = 0;
+                if (/\s-\s| - /.test(l)) score += 3;
+                if (/\b(19\d{2}|20\d{2})\b/.test(l)) score += 2;
+                if (/aujourd|present/i.test(l)) score += 1;
+                if (/^De\s/i.test(l)) score -= 1;
+                return [l, score];
+              })
+              .sort((a, b) => b[1] - a[1]);
+            return scored[0][0];
+          };
+          const pickCompanyFromDotLine = (scope, title = "") => {
+            const lines = getLines(scope);
+            const dotLine = lines.find((l) => l.includes("·") && !looksLikeDates(l) && l.length <= 160);
+            if (!dotLine) return "";
+            const first = collapseDouble(clean(dotLine.split("·")[0]));
+            if (!first) return "";
+            if (title && first.toLowerCase() === title.toLowerCase()) return "";
+            if (looksLikeLocation(first)) return "";
+            return first;
+          };
+          const pickCompanyFallback = (scope, title = "") => {
+            const lines = getLines(scope);
+            const idx = lines.findIndex((l) => clean(l).toLowerCase() === clean(title).toLowerCase());
+            if (idx >= 0) {
+              const next = lines[idx + 1] || "";
+              const c = collapseDouble(next);
+              if (c && !looksLikeDates(c) && !looksLikeLocation(c) && !isNoise(c) && c.length <= 120) {
+                return clean(c.split("·")[0]);
+              }
+            }
+            const candidates = lines.filter((l) => {
+              const s = clean(l);
+              if (!s) return false;
+              if (title && s.toLowerCase() === title.toLowerCase()) return false;
+              if (looksLikeDates(s) || looksLikeLocation(s) || isNoise(s)) return false;
+              if (s.length > 140) return false;
+              return true;
+            });
+            if (!candidates.length) return "";
+            return clean(candidates[0].split("·")[0]);
+          };
+          const pickLocation = (scope) =>
+            (getLines(scope).find(looksLikeLocation)
+              ? collapseDouble(getLines(scope).find(looksLikeLocation))
+              : "");
+
+          function parseGroupedV6(groupLi) {
+            const headerCompany = pickHeaderCompany(groupLi);
+            const roleLis = Array.from(groupLi.querySelectorAll(".pvs-entity__sub-components li")).filter(
+              (li) => !!li.querySelector("div.t-bold, span.t-bold")
+            );
+
+            if (!roleLis.length) {
+              const title = pickTitle(groupLi) || "";
+              const dates = pickDates(groupLi, title) || "";
+              let company = headerCompany || pickCompanyFromDotLine(groupLi, title) || "";
+              if (!company || (title && company.toLowerCase() === title.toLowerCase())) {
+                company = pickCompanyFallback(groupLi, title) || company;
+              }
+              const location = pickLocation(groupLi) || "";
+              if (!title || !dates) return [];
+              return [{ title, company: collapseDouble(company), dates, location: collapseDouble(location) }];
+            }
+
+            const out = [];
+            for (const roleLi of roleLis) {
+              const title = pickTitle(roleLi);
+              const dates = pickDates(roleLi, title) || pickDates(groupLi, title);
+              if (!title || !dates) continue;
+
+              let company = headerCompany || "";
+              if (!company || company.toLowerCase() === title.toLowerCase()) {
+                company = pickCompanyFromDotLine(groupLi, title) || pickCompanyFromDotLine(roleLi, title) || "";
+              }
+              if (!company || company.toLowerCase() === title.toLowerCase()) {
+                company = pickCompanyFallback(groupLi, title) || company;
+              }
+              const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
+              out.push({ title, company: collapseDouble(company), dates, location: collapseDouble(location) });
+            }
+
+            const seen = new Set();
+            return out.filter((e) => {
+              const k = [e.title, e.company, e.dates, e.location]
+                .map((x) => clean(x).toLowerCase())
+                .join("||");
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+          }
+
+          function findExperienceSectionRoot(main) {
+            if (!main) return null;
+            const heading = Array.from(main.querySelectorAll("h1, h2, h3")).find((el) =>
+              /exp[ée]rience/i.test(clean(el.textContent))
+            );
+            if (!heading) return null;
+            return heading.closest("section");
+          }
+
+          function parseExperiencesWithV6(root) {
+            if (!root) return [];
+            const topLis = Array.from(root.querySelectorAll("li")).filter((li) => {
+              if (li.closest(".pvs-entity__sub-components")) return false;
+              if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+              if (clean(li.textContent).length <= 25) return false;
+              return true;
+            });
+            const parsed = topLis.flatMap((li) => parseGroupedV6(li));
+            return parsed.map((x) => ({
+              title: x.title,
+              company: x.company,
+              dates: x.dates,
+              location: x.location || null,
+            }));
+          }
+
+          const main =
+            document.querySelector('main[role="main"]') ||
+            document.querySelector("main") ||
+            document.querySelector('[role="main"]') ||
+            document.body;
+          const expRoot = findExperienceSectionRoot(main) || main;
+          return parseExperiencesWithV6(expRoot);
+        },
       });
       const payload = Array.isArray(results) ? results?.[0]?.result : null;
       const experiences = Array.isArray(payload?.experiences)
@@ -1043,6 +1232,7 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
           ? payload
           : [];
       const experienceCount = experiences?.length || 0;
+      detailsLog("SCRAPED_COUNT", { count: experienceCount });
       expLog("DETAILS_SCRAPED", { count: experienceCount, detailsUrl, profileKey });
       if (!experienceCount) {
         expLog("DETAILS_EMPTY", { detailsUrl, profileKey });
