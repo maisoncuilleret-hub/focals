@@ -1698,14 +1698,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
         .then((result) => {
           if (result?.ok) {
-            console.log("[FOCALS RELAY] Message successfully pushed to Supabase");
+            console.log("[FOCALS RELAY] Live message synced to Supabase");
           } else {
-            console.error("[FOCALS RELAY] Supabase error:", result?.error);
+            console.error("[FOCALS RELAY] Sync failed", result?.error);
           }
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("[FOCALS RELAY] Network error:", err);
+          console.error("[FOCALS RELAY] Network error", err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;

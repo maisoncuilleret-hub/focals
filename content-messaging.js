@@ -1737,16 +1737,16 @@ console.log(
         if (!isFromMe) {
           const payload = {
             match_name: sender,
-            text: text,
+            text,
             type: "linkedin_chat",
             received_at: new Date().toISOString(),
           };
-          chrome.runtime.sendMessage({ type: "NEW_LIVE_MESSAGE", data: payload });
           debugLog(
             "LIVE_DETECTION",
-            "[LIVE_DETECTION] Message sent to background relay",
+            "[LIVE_DETECTION] Sending to Background Relay",
             payload
           );
+          chrome.runtime.sendMessage({ type: "NEW_LIVE_MESSAGE", data: payload });
         }
       };
 
