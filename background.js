@@ -956,41 +956,81 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey) {
         func: async () => {
           const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
           const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+          const clean = (t) => (t ? String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() : "");
           const getMain = () =>
             document.querySelector('main[role="main"]') ||
             document.querySelector("main") ||
             document.querySelector('[role="main"]') ||
             document.body;
+          const getExperienceSection = (main) => {
+            const anchor = main?.querySelector("#experience");
+            if (anchor) {
+              return anchor.closest("section") || anchor.parentElement?.closest("section") || anchor.parentElement;
+            }
+            const heading = Array.from(main?.querySelectorAll("h1, h2, h3") || []).find((el) =>
+              /exp[ée]rience/i.test(clean(el.textContent))
+            );
+            return heading ? heading.closest("section") : null;
+          };
+          const getTopLis = (scope) =>
+            Array.from(scope?.querySelectorAll("li") || []).filter((li) => {
+              if (li.closest(".pvs-entity__sub-components")) return false;
+              if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+              if (clean(li.innerText || "").length <= 25) return false;
+              return true;
+            });
+          const getRoleLisCount = (scope) =>
+            Array.from(scope?.querySelectorAll(".pvs-entity__sub-components li") || []).filter(
+              (li) => li.querySelector("div.t-bold, span.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
+            ).length;
           const waitForContent = async () => {
             for (let i = 0; i < 40; i += 1) {
               const main = getMain();
-              const liCount = main ? main.querySelectorAll("li").length : 0;
+              const section = getExperienceSection(main) || main;
+              const liCount = section ? section.querySelectorAll("li").length : 0;
               if (main && liCount >= 5) {
-                return liCount;
+                return { liCount, main, section };
               }
               await sleep(250);
             }
             const main = getMain();
-            return main ? main.querySelectorAll("li").length : 0;
+            const section = getExperienceSection(main) || main;
+            return { liCount: section ? section.querySelectorAll("li").length : 0, main, section };
           };
 
-          const initialLiCount = await waitForContent();
+          const initial = await waitForContent();
+          let expTopLis = getTopLis(initial.section).length;
+          let roleLisCount = getRoleLisCount(initial.section);
           const steps = rand(8, 12);
           for (let i = 0; i < steps; i += 1) {
             window.scrollTo(0, document.body.scrollHeight);
-            await sleep(rand(250, 450));
+            await sleep(rand(280, 480));
+            const main = getMain();
+            const section = getExperienceSection(main) || main;
+            expTopLis = getTopLis(section).length;
+            roleLisCount = getRoleLisCount(section);
+            // WHY: on attend assez d'items pour contrer le lazy-load en onglet inactif.
+            if (expTopLis >= 3 && roleLisCount >= 2) break;
           }
           window.scrollTo(0, 0);
-          await sleep(200);
+          await sleep(250);
           const main = getMain();
-          const liCount = main ? main.querySelectorAll("li").length : 0;
-          return { initialLiCount, finalLiCount: liCount };
+          const section = getExperienceSection(main) || main;
+          const liCount = section ? section.querySelectorAll("li").length : 0;
+          return {
+            initialLiCount: initial.liCount,
+            finalLiCount: liCount,
+            expTopLis,
+            roleLisCount,
+          };
         },
       });
       const prepPayload = Array.isArray(prepResults) ? prepResults?.[0]?.result : null;
       detailsLog("PREP_DONE", {
         initialLiCount: prepPayload?.initialLiCount ?? null,
         finalLiCount: prepPayload?.finalLiCount ?? null,
+        expTopLis: prepPayload?.expTopLis ?? null,
+        roleLisCount: prepPayload?.roleLisCount ?? null,
       });
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
