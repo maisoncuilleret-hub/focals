@@ -1,5 +1,6 @@
-import supabase from "./supabase-client.js";
+import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
+import { loadStoredToken } from "./src/api/supabaseClient.js";
 import { createLogger } from "./src/utils/logger.js";
 
 const logger = createLogger("Background");
@@ -76,6 +77,27 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
   }
 
   return { ok: true, status: response.status, data: payload };
+}
+
+async function relayLiveMessageToSupabase(payload) {
+  const anonKey = await loadStoredToken();
+  const edgeBase = SUPABASE_URL.replace(".supabase.co", ".functions.supabase.co");
+  const response = await fetch(`${edgeBase}/focals-incoming-message`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${anonKey}`,
+    },
+    body: JSON.stringify(payload ?? {}),
+  });
+
+  if (!response.ok) {
+    const error = await response.text().catch(() => "");
+    throw new Error(error || `HTTP ${response.status}`);
+  }
+
+  logger.info("Live message relayed to Supabase", { status: response.status });
+  return true;
 }
 
 const STORAGE_KEYS = {
@@ -1660,6 +1682,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: error?.message || "API request failed" });
         });
 
+      return true;
+    }
+    case "NEW_LIVE_MESSAGE": {
+      const payload = message?.data || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing live message payload" });
+        return false;
+      }
+
+      relayLiveMessageToSupabase(payload)
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => {
+          logger.warn("Live message relay failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
       return true;
     }
     case "BOUNCER_REQUEST": {
