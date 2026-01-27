@@ -1684,6 +1684,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
+      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
       relayLiveMessageToSupabase(payload)
         .then((result) => {
           console.log("[FOCALS RELAY] Live message synced to Supabase");

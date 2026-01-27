@@ -1604,7 +1604,6 @@ console.log(
     let focalsSrTimer = null;
     let focalsLiveDetectionStarted = false;
     let liveRouteWatcherId = null;
-    let liveRetryTimerId = null;
     let lastLiveHref = window.location.href;
 
     const cleanupLiveObservers = () => {
@@ -1615,10 +1614,6 @@ console.log(
       if (window.__FOCALS_MSG_ROOT_OBSERVER__) {
         window.__FOCALS_MSG_ROOT_OBSERVER__.disconnect();
         window.__FOCALS_MSG_ROOT_OBSERVER__ = null;
-      }
-      if (liveRetryTimerId) {
-        clearTimeout(liveRetryTimerId);
-        liveRetryTimerId = null;
       }
     };
 
@@ -1691,8 +1686,20 @@ console.log(
 
       const messageSelector =
         'div.msg-s-event-listitem[data-view-name="message-list-item"]';
-      const processedMessages = new Map();
+      const processedMessageIds = new Set();
       let sendLockUntil = 0;
+
+      const buildMessageId = (messageElement, text, sender) => {
+        const container = messageElement.closest(
+          "[data-event-urn],[data-urn],[data-id]"
+        );
+        const explicitId =
+          container?.getAttribute("data-event-urn") ||
+          container?.getAttribute("data-urn") ||
+          container?.getAttribute("data-id");
+        if (explicitId) return explicitId;
+        return `${hashText(text || "")}:${hashText(sender || "")}`;
+      };
 
       const processMessageElement = (messageElement) => {
         if (!messageElement) return;
@@ -1705,7 +1712,7 @@ console.log(
           return;
         }
 
-        const text = extractLiveMessageText(messageElement);
+        const text = cleanMessageText(messageElement.textContent || "");
         if (shouldIgnoreLiveMessage(messageElement, text)) {
           return;
         }
@@ -1715,13 +1722,13 @@ console.log(
         const isFromMe =
           !!messageElement.closest(".msg-s-message-group--viewer") ||
           sender === MY_NAME;
-        const msgKey = `${isFromMe ? "me" : "them"}:${normalizeText(text)}`;
+        const messageId = buildMessageId(messageElement, text, sender);
 
-        if (processedMessages.has(msgKey)) {
+        if (processedMessageIds.has(messageId)) {
           return;
         }
 
-        processedMessages.set(msgKey, now);
+        processedMessageIds.add(messageId);
 
         if (isFromMe) {
           sendLockUntil = now + 2000;
@@ -1750,23 +1757,29 @@ console.log(
         }
       };
 
-      const root = getLinkedinMessagingRoot();
-      const findListRoot = () =>
-        root.querySelector(".msg-s-message-list-container ul") ||
-        root.querySelector(".msg-convo-wrapper ul") ||
-        root.querySelector(".msg-s-event-listitem__body")?.parentElement;
-
-      const startLiveObserver = (listRoot) => {
+      const startLiveObserver = (bodyTarget) => {
         cleanupLiveObservers();
         const observer = new MutationObserver((mutations) => {
           const candidates = new Set();
           for (const mutation of mutations) {
             mutation.addedNodes.forEach((node) => {
               if (node.nodeType !== Node.ELEMENT_NODE) return;
+              console.log(
+                "[FOCALS-DEBUG] Nouveau noeud détecté :",
+                node.textContent
+              );
               const element = node;
-              if (element.matches?.(messageSelector)) {
+              if (
+                element.matches?.(".msg-s-event-listitem__body") ||
+                element.matches?.(".update-components-text")
+              ) {
                 candidates.add(element);
               }
+              element
+                .querySelectorAll?.(
+                  ".msg-s-event-listitem__body, .update-components-text"
+                )
+                .forEach((messageNode) => candidates.add(messageNode));
               element
                 .querySelectorAll?.(messageSelector)
                 .forEach((messageNode) => candidates.add(messageNode));
@@ -1775,7 +1788,7 @@ console.log(
           candidates.forEach((node) => processMessageElement(node));
         });
 
-        observer.observe(listRoot, { childList: true, subtree: true });
+        observer.observe(bodyTarget, { childList: true, subtree: true });
         window.__FOCALS_MSG_OBSERVER__ = observer;
         debugLog(
           "LIVE_DETECTION",
@@ -1783,43 +1796,14 @@ console.log(
         );
       };
 
-      const existingListRoot = findListRoot();
-      if (existingListRoot) {
-        startLiveObserver(existingListRoot);
-        return;
-      }
-
-      if (liveRetryTimerId) {
-        clearTimeout(liveRetryTimerId);
-      }
-      liveRetryTimerId = setTimeout(() => {
-        liveRetryTimerId = null;
-        focalsLiveDetectionStarted = false;
-        setupLiveMessageObserver();
-      }, 2000);
-
-      if (window.__FOCALS_MSG_ROOT_OBSERVER__) {
-        window.__FOCALS_MSG_ROOT_OBSERVER__.disconnect();
-        window.__FOCALS_MSG_ROOT_OBSERVER__ = null;
-      }
-
-      const rootObserver = new MutationObserver(() => {
-        const listRoot = findListRoot();
-        if (!listRoot) return;
-        startLiveObserver(listRoot);
-      });
-
-      const bodyTarget = root === document ? document.body : root;
-      if (bodyTarget) {
-        rootObserver.observe(bodyTarget, { childList: true, subtree: true });
-        window.__FOCALS_MSG_ROOT_OBSERVER__ = rootObserver;
+      if (document.body) {
+        startLiveObserver(document.body);
       } else {
         debugLog(
           "LIVE_DETECTION",
           "[LIVE_DETECTION] message list root not found, skipping observer"
         );
       }
-
     };
 
     const initMessagingWatcher = () => {
