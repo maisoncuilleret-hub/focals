@@ -464,8 +464,18 @@ async function detailsExperienceScraper() {
   const extractTextWithBreaks = (node) => {
     if (!node) return "";
     const html = node.innerHTML || "";
-    const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
-    return withBreaks.replace(/<[^>]*>/g, "");
+    const withBreaks = html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "\n- ");
+    return withBreaks
+      .replace(/<[^>]*>/g, "")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&quot;/gi, "\"")
+      .replace(/&#39;/gi, "'")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">");
   };
 
   const SKILLS_LABEL_REGEX = /(Comp[ée]tences|Skills)\s*:/i;
@@ -1208,8 +1218,13 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
           const extractTextWithBreaks = (node) => {
             if (!node) return "";
             const html = node.innerHTML || "";
-            const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
-            return withBreaks.replace(/<[^>]*>/g, "");
+            const withBreaks = html
+              .replace(/<br\s*\/?>/gi, "\n")
+              .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+              .replace(/<li[^>]*>/gi, "\n- ");
+            const container = document.createElement("div");
+            container.innerHTML = withBreaks;
+            return container.textContent || container.innerText || "";
           };
           const normalizeDescriptionText = (text) => {
             let normalized = normalizeInfosText(text || "");

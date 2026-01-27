@@ -465,8 +465,13 @@
   const extractTextWithBreaks = (node) => {
     if (!node) return "";
     const html = node.innerHTML || "";
-    const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
-    return withBreaks.replace(/<[^>]*>/g, "");
+    const withBreaks = html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "\n- ");
+    const container = document.createElement("div");
+    container.innerHTML = withBreaks;
+    return container.textContent || container.innerText || "";
   };
 
   const normalizeDescriptionText = (text) => {
