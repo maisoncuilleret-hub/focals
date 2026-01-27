@@ -78,6 +78,20 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
   return { ok: true, status: response.status, data: payload };
 }
 
+async function relayLiveMessageToSupabase(payload) {
+  const result = await fetchApi({
+    endpoint: "/focals-incoming-message",
+    method: "POST",
+    body: payload,
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.error || "Relay failed");
+  }
+
+  return result;
+}
+
 const STORAGE_KEYS = {
   tone: "focals_userTone",
   templates: "focals_templates",
@@ -1660,6 +1674,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: error?.message || "API request failed" });
         });
 
+      return true;
+    }
+    case "NEW_LIVE_MESSAGE": {
+      const payload = message?.data || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing live message payload" });
+        return false;
+      }
+
+      relayLiveMessageToSupabase(payload)
+        .then((result) => {
+          console.log("[FOCALS RELAY] Live message synced to Supabase");
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
       return true;
     }
     case "BOUNCER_REQUEST": {
