@@ -6,7 +6,7 @@
   const dlog = (...a) => DEBUG && console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
 
-  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const clean = (t) => (t ? String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() : "");
   const collapseDouble = (text) => {
     const t = clean(text);
     if (!t) return "";
@@ -571,6 +571,16 @@
     return { mode: "NOT_FOUND", root: null };
   }
 
+  function getExperienceTopLis(expSection) {
+    if (!expSection) return [];
+    return Array.from(expSection.querySelectorAll("li")).filter((li) => {
+      if (li.closest(".pvs-entity__sub-components")) return false;
+      if (!li.querySelector("div.t-bold, span.t-bold")) return false;
+      if (clean(li.innerText || "").length <= 25) return false;
+      return true;
+    });
+  }
+
   function looksLikeDates(s) {
     const t = clean(s);
     if (!t) return false;
@@ -593,12 +603,14 @@
     return rule ? rule.value : null;
   }
 
+  const EMPLOYMENT_RE =
+    /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
+  const DURATION_RE = /\b\d+\s*(an|ans|mois|yr|yrs|year|years|mos|months)\b/i;
+
   function looksLikeEmploymentType(s) {
     const t = clean(s);
     if (!t) return false;
-    return /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i.test(
-      t
-    );
+    return EMPLOYMENT_RE.test(t);
   }
 
   // strict, pour éviter de prendre une description comme "Lieu"
@@ -630,20 +642,28 @@
     return /^[\p{L}\s,'’.\-]+$/u.test(t);
   }
 
-  function splitCompanyLine(line) {
+  function splitCompanyLineSafe(line) {
     if (!line) return { company: null, extras: [] };
-    const parts = dedupeInlineRepeats(line).split("·").map(clean).filter(Boolean);
-    return { company: collapseDouble(parts[0]) || null, extras: parts.slice(1).map(collapseDouble) };
+    const parts = dedupeInlineRepeats(line)
+      .split("·")
+      .map(clean)
+      .filter(Boolean)
+      .map(collapseDouble);
+    if (!parts.length) return { company: null, extras: [] };
+    const first = parts[0];
+    // WHY: éviter de prendre "CDI · 1 an" ou "4 ans 7 mois" comme entreprise.
+    if (EMPLOYMENT_RE.test(first) || DURATION_RE.test(first)) {
+      return { company: null, extras: parts };
+    }
+    return { company: first || null, extras: parts.slice(1) };
   }
-
-  const COMPANY_DURATION_RE = /\b\d+\s*(an|ans|mois|yr|yrs|year|years|mos|months)\b/i;
 
   function isBadCompanyCandidate(company, title) {
     const t = clean(company);
     if (!t) return true;
     if (looksLikeEmploymentType(t)) return true;
     if (looksLikeDates(t)) return true;
-    if (COMPANY_DURATION_RE.test(t)) return true;
+    if (DURATION_RE.test(t)) return true;
     if (title && t.toLowerCase() === clean(title).toLowerCase()) return true;
     return false;
   }
@@ -692,6 +712,30 @@
       if (!isBadCompanyCandidate(candidate, title)) return candidate;
     }
     return null;
+  }
+
+  function extractHeaderBoldCompany(groupItem) {
+    if (!groupItem) return null;
+    const nodes = Array.from(groupItem.querySelectorAll("div.t-bold, span.t-bold")).filter(
+      (node) => !node.closest(".pvs-entity__sub-components")
+    );
+    for (const node of nodes) {
+      const text = collapseDouble(
+        dedupeInlineRepeats(node.querySelector("span[aria-hidden='true']")?.textContent || node.textContent)
+      );
+      if (text) return text;
+    }
+    return null;
+  }
+
+  function extractCompanyLinkText(scope) {
+    if (!scope) return null;
+    const link =
+      scope.querySelector('a[href*="/company/"] span[aria-hidden="true"]') ||
+      scope.querySelector('a[href*="/company/"] span') ||
+      scope.querySelector('a[href*="/company/"]') ||
+      null;
+    return link ? collapseDouble(dedupeInlineRepeats(link.textContent)) : null;
   }
 
   function extractTitleFromContainer(container) {
@@ -850,7 +894,7 @@
     const dates = extractDatesFromContainer(entity) || extractDatesFromContainer(link) || null;
 
     const companyLine = extractCompanyLineFromContainer(entity) || extractCompanyLineFromContainer(link);
-    const { company: companyFromLine, extras } = splitCompanyLine(companyLine);
+    const { company: companyFromLine, extras } = splitCompanyLineSafe(companyLine);
     const metaLines = uniq([...collectMetaLines(entity), ...extras]);
 
     const { location, workplaceType } = extractLocationAndWorkplaceType(
@@ -895,15 +939,18 @@
 
     const innerRoleEntities = Array.from(
       li.querySelectorAll('.pvs-entity__sub-components div[data-view-name="profile-component-entity"]')
-    ).filter((e) => e.querySelector(".pvs-entity__caption-wrapper"));
+    ).filter((e) => e.querySelector(".pvs-entity__caption-wrapper") && e.querySelector("div.t-bold, span.t-bold"));
 
-    if (innerRoleEntities.length) {
+    if (innerRoleEntities.length >= 2) {
       const headerTitle = extractTitleFromContainer(entity);
-      const headerCompanyLine = extractCompanyLineFromContainer(entity);
-      let headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
-      if (isBadCompanyCandidate(headerCompany, headerTitle)) {
-        headerCompany = pickCompanyFromDotLine(li, headerTitle) || pickCompanyFallback(li, headerTitle) || headerCompany;
-      }
+      let headerCompany =
+        // WHY: sur grouped items, la company est le header bold (pas la ligne "CDI · 1 an").
+        extractHeaderBoldCompany(li) ||
+        extractCompanyLinkText(li) ||
+        pickCompanyFromDotLine(li, headerTitle) ||
+        pickCompanyFallback(li, headerTitle) ||
+        null;
+      if (isBadCompanyCandidate(headerCompany, headerTitle)) headerCompany = null;
       const out = [];
       for (let i = 0; i < innerRoleEntities.length; i++) {
         const scopeItem = innerRoleEntities[i].closest("li") || li;
@@ -943,24 +990,29 @@
     const subComponents = item.querySelector(".pvs-entity__sub-components");
     const groupedRoles = subComponents
       ? Array.from(subComponents.querySelectorAll("li")).filter(
-          (li) => li.querySelector("div.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
+          (li) =>
+            li.querySelector("div.t-bold, span.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
         )
       : [];
 
-    if (groupedRoles.length > 1) {
+    if (groupedRoles.length >= 2) {
       const headerTitle = extractTitleFromContainer(item);
-      const headerCompanyLine = extractCompanyLineFromContainer(item);
-      let headerCompany = splitCompanyLine(headerCompanyLine).company || headerTitle || null;
-      if (isBadCompanyCandidate(headerCompany, headerTitle)) {
-        headerCompany =
-          pickCompanyFromDotLine(item, headerTitle) || pickCompanyFallback(item, headerTitle) || headerCompany;
-      }
+      let headerCompany =
+        // WHY: grouped items prennent la company depuis le header bold (pas la companyLine).
+        extractHeaderBoldCompany(item) ||
+        extractCompanyLinkText(item) ||
+        pickCompanyFromDotLine(item, headerTitle) ||
+        pickCompanyFallback(item, headerTitle) ||
+        null;
+      if (isBadCompanyCandidate(headerCompany, headerTitle)) headerCompany = null;
 
       return groupedRoles
         .map((roleItem, roleIndex) => {
           const title = extractTitleFromContainer(roleItem);
           const dates = extractDatesFromContainer(roleItem);
-          const { company: companyFromLine, extras } = splitCompanyLine(extractCompanyLineFromContainer(roleItem));
+          const { company: companyFromLine, extras } = splitCompanyLineSafe(
+            extractCompanyLineFromContainer(roleItem)
+          );
           const metaLines = uniq([...collectMetaLines(roleItem), ...extras]);
           const { location, workplaceType } = extractLocationAndWorkplaceType(
             metaLines.filter((t) => t && t !== dates && t !== title && t !== companyFromLine)
@@ -972,7 +1024,7 @@
             expDlog("SKILLS_DEBUG", { title, company: headerCompany || companyFromLine, skills, skillsMoreCount });
           }
 
-          let company = headerCompany || companyFromLine || null;
+          let company = headerCompany || null;
           if (isBadCompanyCandidate(company, title)) {
             const fallback = pickCompanyFromDotLine(roleItem, title) || pickCompanyFallback(roleItem, title);
             if (fallback) company = fallback;
@@ -1009,7 +1061,7 @@
     const title = extractTitleFromContainer(item) || extractTitleFromContainer(link);
     const dates = extractDatesFromContainer(item) || extractDatesFromContainer(link);
     const companyLine = extractCompanyLineFromContainer(item) || extractCompanyLineFromContainer(link);
-    const { company: companyFromLine, extras } = splitCompanyLine(companyLine);
+    const { company: companyFromLine, extras } = splitCompanyLineSafe(companyLine);
     let company = companyFromLine;
     if (isBadCompanyCandidate(company, title)) {
       company =
@@ -1067,12 +1119,13 @@
   function collectExperiences(expSection) {
     if (!expSection) return { mode: "NO_ROOT", experiences: [], counts: {} };
 
+    const topLis = getExperienceTopLis(expSection);
     // FIX: LinkedIn SDUI utilise "entity-collection-item-xxxx" (pas "entity-collection-item--")
-    const sduiItems = Array.from(
-      expSection.querySelectorAll('[componentkey^="entity-collection-item-"], [componentkey*="entity-collection-item-"]')
+    const sduiItems = topLis.filter((li) =>
+      li.matches('[componentkey^="entity-collection-item-"], [componentkey*="entity-collection-item-"]')
     );
 
-    const sduiLikely = sduiItems.filter((it) =>
+    const sduiLikely = (sduiItems.length ? sduiItems : topLis).filter((it) =>
       Array.from(it.querySelectorAll("p")).some((p) => looksLikeDates(p.textContent))
     );
 
@@ -1082,6 +1135,7 @@
       : [];
 
     const counts = {
+      topLis: topLis.length,
       sduiItems: sduiItems.length,
       sduiLikely: sduiLikely.length,
       legacyUlScore: legacyScore,
