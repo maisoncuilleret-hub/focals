@@ -131,7 +131,15 @@
       }
       const location = pickLocation(groupLi) || "";
       if (!title || !dates) return [];
-      return [{ title, company: collapseDouble(company), dates, location: collapseDouble(location) }];
+      return [
+        {
+          title,
+          company: collapseDouble(company),
+          dates,
+          location: collapseDouble(location),
+          _scope: groupLi,
+        },
+      ];
     }
 
     const out = [];
@@ -148,7 +156,13 @@
         company = pickCompanyFallback(groupLi, title) || company;
       }
       const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
-      out.push({ title, company: collapseDouble(company), dates, location: collapseDouble(location) });
+      out.push({
+        title,
+        company: collapseDouble(company),
+        dates,
+        location: collapseDouble(location),
+        _scope: roleLi,
+      });
     }
 
     const seen = new Set();
@@ -159,6 +173,40 @@
       return true;
     });
   }
+
+  const buildExpKey = (exp) =>
+    [exp?.title, exp?.company, exp?.dates, exp?.location].map((x) => clean(x)).join("||").toLowerCase();
+
+  const enrichDescriptionsFromScopes = (v6Parsed) => {
+    if (!Array.isArray(v6Parsed)) return [];
+    const descByKey = new Map();
+    return v6Parsed.map((item) => {
+      const key = buildExpKey(item);
+      let entry = descByKey.get(key);
+      if (!entry) {
+        let description = null;
+        let descriptionBullets = null;
+        try {
+          if (item?._scope) {
+            clickSeeMoreInItem(item._scope);
+            const extracted = extractExperienceDescription(item._scope);
+            description = extracted?.description || null;
+            descriptionBullets = extracted?.descriptionBullets || null;
+          }
+        } catch (err) {
+          description = null;
+          descriptionBullets = null;
+        }
+        entry = { description, descriptionBullets };
+        descByKey.set(key, entry);
+      }
+      return {
+        ...item,
+        Description: entry?.description || null,
+        DescriptionBullets: entry?.descriptionBullets || null,
+      };
+    });
+  };
 
   function findExperienceSectionRoot(main) {
     if (!main) return null;
@@ -721,12 +769,16 @@
     });
 
     const parsed = topLis.flatMap((li) => parseGroupedV6(li));
-    return parsed.map((x) => ({
+    const enriched = enrichDescriptionsFromScopes(parsed);
+    const experiences = enriched.map((x) => ({
       Titre: x.title,
       Entreprise: x.company,
       Dates: x.dates,
       Lieu: x.location || null,
+      Description: x.Description || null,
+      DescriptionBullets: x.DescriptionBullets || null,
     }));
+    return experiences;
   }
 
   function parseExperienceFromRoot(root) {
