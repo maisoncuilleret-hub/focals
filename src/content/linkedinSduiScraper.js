@@ -177,6 +177,31 @@
   const buildExpKey = (exp) =>
     [exp?.title, exp?.company, exp?.dates, exp?.location].map((x) => clean(x)).join("||").toLowerCase();
 
+  const stripExperienceMetaFromDescription = (description, exp) => {
+    if (!description) return null;
+    const lines = description
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) return null;
+    const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
+      .map((x) => clean(x).toLowerCase())
+      .filter(Boolean);
+    const metaSet = new Set(metaTokens);
+    const filtered = lines.filter((line) => {
+      const key = clean(line).toLowerCase();
+      if (!key) return false;
+      if (metaSet.has(key)) return false;
+      if (looksLikeDates(line)) return false;
+      if (looksLikeLocation(line)) return false;
+      return true;
+    });
+    if (!filtered.length) return null;
+    const finalText = filtered.join("\n").trim();
+    if (!finalText || finalText.length < 30) return null;
+    return finalText;
+  };
+
   const enrichDescriptionsFromScopes = (v6Parsed) => {
     if (!Array.isArray(v6Parsed)) return [];
     const descByKey = new Map();
@@ -191,7 +216,8 @@
             clickSeeMoreInItem(item._scope);
             const extracted = extractExperienceDescription(item._scope);
             description = extracted?.description || null;
-            descriptionBullets = extracted?.descriptionBullets || null;
+            description = stripExperienceMetaFromDescription(description, item);
+            descriptionBullets = description ? extractDescriptionBullets(description) : null;
           }
         } catch (err) {
           description = null;
