@@ -51,15 +51,15 @@ function debugError(stage, details) {
   }
 }
 
-// On popup open: force a scrape so details/experience runs and skills appear.
-async function triggerScrapeOnActiveTab() {
+// On popup open: trigger scrape only when cache is stale.
+async function triggerScrapeOnActiveTab({ reason = "popup_open", force = false } = {}) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
     chrome.tabs.sendMessage(tab.id, {
       type: "FOCALS_TRIGGER_SCRAPE",
-      reason: "popup_open",
-      force: true,
+      reason,
+      force,
     });
   } catch (e) {
     console.warn("[FOCALS][POPUP] triggerScrape failed", e);
@@ -72,11 +72,34 @@ async function triggerScrapeOnActiveTab() {
   };
 
   const DEFAULT_TONE = "professional";
+  const POPUP_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
   function isLinkedinProfileContext(url = "") {
     if (!url) return false;
     return /linkedin\.com\/in\//i.test(url);
   }
+
+  const normalizeProfilePath = (pathname = "") => {
+    const normalized = pathname.replace(/\/$/, "");
+    const match = normalized.match(/^\/in\/[^/]+/i);
+    return match ? match[0] : null;
+  };
+
+  const canonicalProfileUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      parsed.search = "";
+      parsed.hash = "";
+      const basePath = normalizeProfilePath(parsed.pathname);
+      if (!basePath) return null;
+      return `${parsed.origin}${basePath}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
+  const isCacheFresh = (ts) => Number.isFinite(ts) && Date.now() - ts < POPUP_CACHE_TTL_MS;
 
 function withStorage(area = "sync") {
   return {
@@ -131,12 +154,37 @@ function displayProfileData(profile) {
 }
 
 async function loadProfileDataFromStorage(localStore) {
-  const data = await localStore.get("FOCALS_LAST_PROFILE");
-  const profile = data ? data.FOCALS_LAST_PROFILE : null;
+  let profile = null;
+  let cacheFresh = false;
+  let profileKey = null;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url && isLinkedinProfileContext(tab.url)) {
+      profileKey = canonicalProfileUrl(tab.url);
+      if (profileKey) {
+        const key = buildLastResultCacheKey(profileKey);
+        const data = await localStore.get(key);
+        const entry = data ? data[key] : null;
+        profile = entry?.payload || null;
+        cacheFresh = isCacheFresh(entry?.ts);
+      }
+    }
+  } catch (err) {
+    debugWarn("POPUP_CACHE_READ_FAILED", err?.message || err);
+  }
+
+  if (!profile) {
+    const data = await localStore.get("FOCALS_LAST_PROFILE");
+    profile = data ? data.FOCALS_LAST_PROFILE : null;
+    cacheFresh = false;
+  }
+
   state.profile = profile;
   state.profileStatus = profile ? "ready" : "idle";
   SKDBG("popup loaded profile", {
     hasProfile: !!profile,
+    profileKey,
+    cacheFresh,
     name: profile?.name,
     expCount: profile?.experiences?.length ?? 0,
     exp0: profile?.experiences?.[0],
@@ -145,6 +193,7 @@ async function loadProfileDataFromStorage(localStore) {
   });
   displayProfileData(profile);
   renderProfileCard(profile);
+  return { cacheFresh };
 }
 
 let state = {
@@ -185,9 +234,9 @@ async function ensureProfileScripts(tabId) {
   }
 }
 
-function requestProfileFromTab(tabId) {
+function requestProfileFromTab(tabId, { reason = "popup_request", force = false } = {}) {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, { type: "FOCALS_SCRAPE_NOW" }, (response) => {
+    chrome.tabs.sendMessage(tabId, { type: "FOCALS_TRIGGER_SCRAPE", reason, force }, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ error: chrome.runtime.lastError });
         return;
@@ -550,7 +599,7 @@ async function loadState() {
   }
 }
 
-async function refreshProfileFromTab() {
+async function refreshProfileFromTab({ reason = "popup_request", force = false } = {}) {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTab = tabs?.[0];
@@ -565,8 +614,11 @@ async function refreshProfileFromTab() {
     state.profileStatus = "loading";
     state.profileStatusMessage = "";
     renderProfileCard(state.profile);
-    debugLog("POPUP_PROFILE_REQUEST", { tabId: activeTab.id, url: activeTab.url });
-    const { response: initialResponse, error: initialError } = await requestProfileFromTab(activeTab.id);
+    debugLog("POPUP_PROFILE_REQUEST", { tabId: activeTab.id, url: activeTab.url, reason, force });
+    const { response: initialResponse, error: initialError } = await requestProfileFromTab(
+      activeTab.id,
+      { reason, force }
+    );
 
     let response = initialResponse;
     let requestError = initialError;
@@ -578,7 +630,7 @@ async function refreshProfileFromTab() {
       debugLog("POPUP_PROFILE_RETRY", { tabId: activeTab.id, reason: requestError?.message });
       const injected = await ensureProfileScripts(activeTab.id);
       if (injected) {
-        const retry = await requestProfileFromTab(activeTab.id);
+        const retry = await requestProfileFromTab(activeTab.id, { reason, force });
         response = retry.response;
         requestError = retry.error;
       }
@@ -792,13 +844,14 @@ function setupSystemPrompt() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   await loadState();
-  await loadProfileDataFromStorage(localStore);
+  const { cacheFresh } = await loadProfileDataFromStorage(localStore);
   setupTone();
   setupSystemPrompt();
   setupTabs();
   setupProfileActions();
-  await triggerScrapeOnActiveTab();
-  await refreshProfileFromTab();
+  if (!cacheFresh) {
+    await refreshProfileFromTab({ reason: "popup_open", force: true });
+  }
   await loadSupabaseSession();
   debugLog("POPUP_READY", state);
 });
