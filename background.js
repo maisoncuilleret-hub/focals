@@ -1100,6 +1100,83 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
             if (!monthToken.test(s)) return false;
             return /-/.test(s) && (/\b(19\d{2}|20\d{2})\b/.test(s) || /aujourd|present/i.test(s));
           };
+          // --- DESC HELPERS ---
+          function normalizeDescText(raw, { looksLikeDates, clean }) {
+            const text = (raw || "")
+              .replace(/\u00a0/g, " ")
+              .replace(/[ \t]+\n/g, "\n")
+              .replace(/\n{3,}/g, "\n\n")
+              .trim();
+
+            if (!text) return null;
+
+            const lines = text.split("\n").map(clean).filter(Boolean);
+
+            // filtre agressif: on ne garde PAS header/dates/location/contrat
+            const filtered = lines.filter((l) => {
+              if (!l) return false;
+              if (looksLikeDates(l)) return false;
+              if (/^logo de\s/i.test(l)) return false;
+              if (
+                /^\s*(cdi|cdd|stage|alternance|freelance|indépendant|independant|full[- ]time|part[- ]time|contract)\b/i.test(
+                  l
+                )
+              )
+                return false;
+              if (/^\d+\s+(mois|ans?)$/i.test(l)) return false;
+              return true;
+            });
+
+            const out = filtered.join("\n\n").trim();
+
+            // seuil anti-bruit: en dessous => on considère que ce n’est pas une description
+            if (!out || out.length < 40) return null;
+            return out;
+          }
+
+          function findDescriptionBlocks(scope) {
+            // Sur LinkedIn details/experience, les descriptions sont souvent dans:
+            // - div.t-14.t-normal.t-black
+            // - .display-flex .t-14.t-normal.t-black
+            // parfois avec span[aria-hidden] + span.visually-hidden
+            // IMPORTANT: on ne prend pas tous les spans aria-hidden du scope (trop bruité),
+            // on cible uniquement les conteneurs “body”.
+            const containers = Array.from(
+              scope.querySelectorAll("div.t-14.t-normal.t-black, div.display-flex .t-14.t-normal.t-black")
+            );
+
+            // On retourne les spans internes (visually-hidden en priorité), sinon le container.
+            const blocks = [];
+            for (const c of containers) {
+              const vh = c.querySelector(".visually-hidden");
+              if (vh) {
+                blocks.push(vh);
+                continue;
+              }
+              const ah = c.querySelector("span[aria-hidden='true']");
+              if (ah) {
+                blocks.push(ah);
+                continue;
+              }
+              blocks.push(c);
+            }
+            return blocks;
+          }
+
+          function extractDescriptionFromScope(scope, ctx, { looksLikeDates, clean }) {
+            const blocks = findDescriptionBlocks(scope);
+            if (!blocks.length) return null;
+
+            const candidates = blocks
+              .map((n) => normalizeDescText(n.textContent || "", { looksLikeDates, clean }))
+              .filter(Boolean);
+
+            if (!candidates.length) return null;
+
+            // Prendre le plus long (en général le bon, surtout avec visually-hidden)
+            candidates.sort((a, b) => b.length - a.length);
+            return candidates[0];
+          }
           const looksLikeLocation = (t) => {
             const s = clean(t);
             if (!s) return false;
@@ -1402,33 +1479,39 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
           const enrichDescriptionsFromScopes = (v6Parsed) => {
             if (!Array.isArray(v6Parsed)) return [];
             const descByKey = new Map();
-            return v6Parsed.map((item) => {
+            const enriched = v6Parsed.map((item) => {
               const key = buildExpKey(item);
               let entry = descByKey.get(key);
               if (!entry) {
                 let description = null;
-                let descriptionBullets = null;
                 try {
                   if (item?._scope) {
-                    clickSeeMoreInItem(item._scope);
-                    const extracted = extractExperienceDescription(item._scope);
-                    description = extracted?.description || null;
-                    description = stripExperienceMetaFromDescription(description, item);
-                    descriptionBullets = description ? extractDescriptionBullets(description) : null;
+                    description = extractDescriptionFromScope(item._scope, item, { looksLikeDates, clean });
                   }
                 } catch (err) {
                   description = null;
-                  descriptionBullets = null;
                 }
-                entry = { description, descriptionBullets };
+                entry = { description };
                 descByKey.set(key, entry);
               }
+              const hasDesc = !!entry?.description;
+              console.log("[FOCALS][DESC] MATCH", {
+                title: item?.title || null,
+                company: item?.company || null,
+                dates: item?.dates || null,
+                hasDesc,
+                descLen: entry?.description ? entry.description.length : 0,
+              });
               return {
                 ...item,
                 Description: entry?.description || null,
-                DescriptionBullets: entry?.descriptionBullets || null,
+                DescriptionBullets: null,
               };
             });
+            const total = enriched.length;
+            const withDesc = enriched.filter((item) => item.Description).length;
+            console.log("[FOCALS][DESC] SUMMARY", { total, withDesc });
+            return enriched;
           };
 
           function findExperienceSectionRoot(main) {
