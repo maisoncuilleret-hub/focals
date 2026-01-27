@@ -1691,10 +1691,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      relayLiveMessageToSupabase(payload)
-        .then(() => sendResponse({ ok: true }))
+      fetchApi({
+        endpoint: "/focals-incoming-message",
+        method: "POST",
+        body: payload,
+      })
+        .then((result) => {
+          if (result?.ok) {
+            console.log("[FOCALS RELAY] Message successfully pushed to Supabase");
+          } else {
+            console.error("[FOCALS RELAY] Supabase error:", result?.error);
+          }
+          sendResponse(result);
+        })
         .catch((err) => {
-          logger.warn("Live message relay failed", err?.message || err);
+          console.error("[FOCALS RELAY] Network error:", err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;

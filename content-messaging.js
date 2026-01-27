@@ -1669,6 +1669,8 @@ console.log(
       if (focalsLiveDetectionStarted) return;
       focalsLiveDetectionStarted = true;
 
+      const MY_NAME = "Maxime Cuilleret";
+
       if (window.__FOCALS_MSG_OBSERVER__) {
         window.__FOCALS_MSG_OBSERVER__.disconnect();
         window.__FOCALS_MSG_OBSERVER__ = null;
@@ -1708,9 +1710,11 @@ console.log(
           return;
         }
 
-        const isFromMe = !!messageElement.closest(".msg-s-message-group--viewer");
         const sender =
           resolveLiveSenderName(messageElement) || "Unknown sender";
+        const isFromMe =
+          !!messageElement.closest(".msg-s-message-group--viewer") ||
+          sender === MY_NAME;
         const msgKey = `${isFromMe ? "me" : "them"}:${normalizeText(text)}`;
 
         if (processedMessages.has(msgKey)) {
@@ -1733,33 +1737,16 @@ console.log(
         if (!isFromMe) {
           const payload = {
             match_name: sender,
-            text,
+            text: text,
             type: "linkedin_chat",
             received_at: new Date().toISOString(),
           };
-          chrome.runtime.sendMessage(
-            { type: "NEW_LIVE_MESSAGE", data: payload },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                warn(
-                  "LIVE_DETECTION_RELAY_ERROR",
-                  chrome.runtime.lastError.message
-                );
-                return;
-              }
-              if (!response?.ok) {
-                warn(
-                  "LIVE_DETECTION_RELAY_ERROR",
-                  response?.error || "Relay failed"
-                );
-              }
-            }
+          chrome.runtime.sendMessage({ type: "NEW_LIVE_MESSAGE", data: payload });
+          debugLog(
+            "LIVE_DETECTION",
+            "[LIVE_DETECTION] Message sent to background relay",
+            payload
           );
-          debugLog("LIVE_DETECTION", {
-            prefix: "[LIVE_DETECTION]",
-            status: "relay_sent",
-            payload,
-          });
         }
       };
 
