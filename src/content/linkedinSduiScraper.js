@@ -131,7 +131,15 @@
       }
       const location = pickLocation(groupLi) || "";
       if (!title || !dates) return [];
-      return [{ title, company: collapseDouble(company), dates, location: collapseDouble(location) }];
+      return [
+        {
+          title,
+          company: collapseDouble(company),
+          dates,
+          location: collapseDouble(location),
+          _scope: groupLi,
+        },
+      ];
     }
 
     const out = [];
@@ -148,7 +156,13 @@
         company = pickCompanyFallback(groupLi, title) || company;
       }
       const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
-      out.push({ title, company: collapseDouble(company), dates, location: collapseDouble(location) });
+      out.push({
+        title,
+        company: collapseDouble(company),
+        dates,
+        location: collapseDouble(location),
+        _scope: roleLi,
+      });
     }
 
     const seen = new Set();
@@ -159,6 +173,73 @@
       return true;
     });
   }
+
+  const buildExpKey = (exp) =>
+    [exp?.title, exp?.company, exp?.dates, exp?.location].map((x) => clean(x)).join("||").toLowerCase();
+
+  const stripExperienceMetaFromDescription = (description, exp) => {
+    if (!description) return null;
+    const lines = description
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) return null;
+    const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
+      .map((x) => clean(x).toLowerCase())
+      .filter(Boolean);
+    const companyToken = clean(exp?.company).toLowerCase();
+    const employmentLineRe =
+      /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
+    const metaSet = new Set(metaTokens);
+    const filtered = lines.filter((line) => {
+      const key = clean(line).toLowerCase();
+      if (!key) return false;
+      if (metaSet.has(key)) return false;
+      if (companyToken && key.includes(companyToken) && (key.includes("·") || employmentLineRe.test(key))) {
+        return false;
+      }
+      if (looksLikeDates(line)) return false;
+      if (looksLikeLocation(line)) return false;
+      if (looksLikePlainLocationFallback(line)) return false;
+      return true;
+    });
+    if (!filtered.length) return null;
+    const finalText = filtered.join("\n").trim();
+    if (!finalText || finalText.length < 30) return null;
+    return finalText;
+  };
+
+  const enrichDescriptionsFromScopes = (v6Parsed) => {
+    if (!Array.isArray(v6Parsed)) return [];
+    const descByKey = new Map();
+    return v6Parsed.map((item) => {
+      const key = buildExpKey(item);
+      let entry = descByKey.get(key);
+      if (!entry) {
+        let description = null;
+        let descriptionBullets = null;
+        try {
+          if (item?._scope) {
+            clickSeeMoreInItem(item._scope);
+            const extracted = extractExperienceDescription(item._scope);
+            description = extracted?.description || null;
+            description = stripExperienceMetaFromDescription(description, item);
+            descriptionBullets = description ? extractDescriptionBullets(description) : null;
+          }
+        } catch (err) {
+          description = null;
+          descriptionBullets = null;
+        }
+        entry = { description, descriptionBullets };
+        descByKey.set(key, entry);
+      }
+      return {
+        ...item,
+        Description: entry?.description || null,
+        DescriptionBullets: entry?.descriptionBullets || null,
+      };
+    });
+  };
 
   function findExperienceSectionRoot(main) {
     if (!main) return null;
@@ -384,8 +465,13 @@
   const extractTextWithBreaks = (node) => {
     if (!node) return "";
     const html = node.innerHTML || "";
-    const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
-    return withBreaks.replace(/<[^>]*>/g, "");
+    const withBreaks = html
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+      .replace(/<li[^>]*>/gi, "\n- ");
+    const container = document.createElement("div");
+    container.innerHTML = withBreaks;
+    return container.textContent || container.innerText || "";
   };
 
   const normalizeDescriptionText = (text) => {
@@ -460,6 +546,7 @@
       scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
       scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
     }
+    scope.querySelectorAll("ul li, ol li").forEach((node) => candidates.push(node));
 
     const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
     const description = normalizeDescriptionText(raw);
@@ -721,12 +808,16 @@
     });
 
     const parsed = topLis.flatMap((li) => parseGroupedV6(li));
-    return parsed.map((x) => ({
+    const enriched = enrichDescriptionsFromScopes(parsed);
+    const experiences = enriched.map((x) => ({
       Titre: x.title,
       Entreprise: x.company,
       Dates: x.dates,
       Lieu: x.location || null,
+      Description: x.Description || null,
+      DescriptionBullets: x.DescriptionBullets || null,
     }));
+    return experiences;
   }
 
   function parseExperienceFromRoot(root) {
