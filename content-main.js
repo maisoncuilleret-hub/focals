@@ -1584,8 +1584,8 @@
         Dates: exp.Dates || exp.dates || "",
         Lieu: exp.Lieu || exp.location || "",
         WorkplaceType: exp.workplaceType || null,
-        Description: exp.description || null,
-        DescriptionBullets: exp.descriptionBullets || null,
+        Description: exp.Description || exp.description || null,
+        DescriptionBullets: exp.DescriptionBullets || exp.descriptionBullets || null,
         Skills: Array.isArray(exp.skills) ? exp.skills : [],
         SkillsText: Array.isArray(exp.skills) && exp.skills.length ? exp.skills.join(" · ") : null,
       }))
