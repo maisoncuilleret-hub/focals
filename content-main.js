@@ -18,21 +18,24 @@
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
   const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
-  // Système de dédoublonnage pour ne pas spammer Supabase
-  const seenMessageIds = new Set();
+  // 1. Initialisation du cache de dédoublonnage
+  const processedIds = new Set();
 
-  const injectVoyagerGQLSpy = () => {
+  // 2. Le script "Espion" qui sera injecté dans la page
+  const voyagerSpy = () => {
     const script = document.createElement("script");
     script.textContent = `
     (function() {
-      const originalFetch = window.fetch;
+      const { fetch: originalFetch } = window;
       window.fetch = async (...args) => {
         const response = await originalFetch(...args);
         const url = args[0]?.url || args[0] || "";
+
+        // On cible le flux de messages (Historique + Nouveaux)
         if (url.includes('messengerMessages')) {
           const clone = response.clone();
           clone.json().then(data => {
-            window.postMessage({ type: 'FOCALS_GQL_DATA', data }, '*');
+            window.postMessage({ type: 'VOYAGER_RAW_DATA', data }, '*');
           }).catch(() => {});
         }
         return response;
@@ -42,32 +45,35 @@
     (document.head || document.documentElement).appendChild(script);
   };
 
+  // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
-    if (event.data?.type === "FOCALS_GQL_DATA") {
-      const findPayloads = (obj) => {
-        let results = [];
-        if (!obj || typeof obj !== "object") return results;
+    if (event.data?.type === "VOYAGER_RAW_DATA") {
+      // Fonction récursive validée en console F12
+      const extract = (obj) => {
+        let found = [];
+        if (!obj || typeof obj !== "object") return found;
 
-        // Extraction précise du texte et de l'ID unique LinkedIn (entityUrn)
-        if (obj.text && (obj._type?.includes("Text") || obj.messageEvent)) {
-          results.push({ text: obj.text, id: obj.entityUrn || obj.dashEntityUrn });
+        if (obj.text && (obj.messageEvent || obj._type?.includes("Text"))) {
+          found.push({ text: obj.text, id: obj.entityUrn || obj.dashEntityUrn });
         } else if (obj.body?.text) {
-          results.push({ text: obj.body.text, id: obj.entityUrn || obj.dashEntityUrn });
+          found.push({ text: obj.body.text, id: obj.entityUrn || obj.dashEntityUrn });
         }
 
         for (let key in obj) {
-          results = results.concat(findPayloads(obj[key]));
+          found = found.concat(extract(obj[key]));
         }
-        return results;
+        return found;
       };
 
-      const messages = findPayloads(event.data.data);
+      const messages = extract(event.data.data);
+
       messages.forEach((msg) => {
-        if (msg.text && msg.id && !seenMessageIds.has(msg.id)) {
-          seenMessageIds.add(msg.id);
+        if (msg.text && msg.id && !processedIds.has(msg.id)) {
+          processedIds.add(msg.id);
 
-          console.log("📥 [RADAR VOYAGER] Nouveau message détecté :", msg.text);
+          console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
 
+          // Relais final vers le background script
           chrome.runtime.sendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
@@ -81,7 +87,8 @@
     }
   });
 
-  injectVoyagerGQLSpy();
+  // Lancement
+  voyagerSpy();
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
