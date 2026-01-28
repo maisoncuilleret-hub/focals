@@ -1628,6 +1628,7 @@ console.log(
       console.log("[FOCALS SR] observer ON");
     };
 
+
     const initMessagingWatcher = () => {
       console.log("[FOCALS DEBUG] messaging script bootstrap");
       setupMessagingObserver();
