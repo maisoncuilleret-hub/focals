@@ -166,6 +166,12 @@ console.log(
     const getOrCreateUserId = async () => {
       if (cachedUserId) return cachedUserId;
       return new Promise((resolve, reject) => {
+        if (!isStorageAvailable("local")) {
+          const newId = crypto.randomUUID();
+          cachedUserId = newId;
+          resolve(newId);
+          return;
+        }
         try {
           chrome.storage.local.get([USER_ID_STORAGE_KEY], (result) => {
             const existing = result?.[USER_ID_STORAGE_KEY];
@@ -262,6 +268,14 @@ console.log(
       console.error("[Focals][MSG][ERROR]", message, ...args);
     };
 
+    const isStorageAvailable = (area = "local") => {
+      try {
+        return typeof chrome !== "undefined" && !!chrome?.storage?.[area];
+      } catch (err) {
+        return false;
+      }
+    };
+
     const readFileAsText = (file) =>
       new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -272,6 +286,11 @@ console.log(
 
     const getFromStorage = (area, defaults = {}) =>
       new Promise((resolve) => {
+        if (!isStorageAvailable(area)) {
+          warn("STORAGE_UNAVAILABLE", area);
+          resolve(defaults);
+          return;
+        }
         try {
           chrome.storage[area].get(defaults, (result) => {
             resolve(result || defaults);
@@ -284,6 +303,11 @@ console.log(
 
     const setInStorage = (area, values = {}) =>
       new Promise((resolve) => {
+        if (!isStorageAvailable(area)) {
+          warn("STORAGE_UNAVAILABLE", area);
+          resolve(false);
+          return;
+        }
         try {
           chrome.storage[area].set(values, () => resolve(true));
         } catch (err) {
@@ -357,6 +381,11 @@ console.log(
 
     const getLastScrapedProfile = () =>
       new Promise((resolve) => {
+        if (!isStorageAvailable("local")) {
+          warn("PROFILE_CACHE_UNAVAILABLE");
+          resolve(null);
+          return;
+        }
         try {
           chrome.storage.local.get([PROFILE_STORAGE_KEY], (result) => {
             resolve(result?.[PROFILE_STORAGE_KEY] || null);
@@ -526,6 +555,11 @@ console.log(
           resolve(null);
           return;
         }
+        if (!isStorageAvailable("local") || !chrome?.storage?.onChanged?.addListener) {
+          warn("PROFILE_WATCH_UNAVAILABLE");
+          resolve(null);
+          return;
+        }
 
         const matchesTarget = (profile) => {
           if (!profile) return false;
@@ -538,7 +572,9 @@ console.log(
         };
 
         const cleanupAndResolve = (value) => {
-          chrome.storage.onChanged.removeListener(onChange);
+          if (chrome?.storage?.onChanged?.removeListener) {
+            chrome.storage.onChanged.removeListener(onChange);
+          }
           clearTimeout(timeoutId);
           resolve(value);
         };
