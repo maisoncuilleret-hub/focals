@@ -6,27 +6,31 @@ import { createLogger } from "./src/utils/logger.js";
 // Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
-    if (details.method === "POST" && details.requestBody && details.requestBody.raw) {
+    if (details.method === "POST" && details.requestBody) {
       try {
-        const rawBody = details.requestBody.raw[0].bytes;
-        const decoder = new TextDecoder("utf-8");
-        const json = JSON.parse(decoder.decode(rawBody));
+        const urlMatch = details.url.match(
+          /conversationUrn=(urn%3Ali%3Amsg_conversation%3A[^&]+)/
+        );
+        let conversationUrn = urlMatch ? decodeURIComponent(urlMatch[1]) : null;
 
-        // Extraction du texte et de l'URN de conversation
-        const messageText = json.message?.body?.text;
-        const conversationUrn = json.conversationUrn;
+        if (details.requestBody.raw) {
+          const rawBody = details.requestBody.raw[0].bytes;
+          const decoder = new TextDecoder("utf-8");
+          const json = JSON.parse(decoder.decode(rawBody));
 
-        if (messageText) {
-          console.log("🎯 [RADAR] NETWORK message intercepté :", messageText);
+          const messageText = json.message?.body?.text;
+          conversationUrn = conversationUrn || json.conversationUrn;
 
-          // Relais vers ton SaaS via la fonction existante
-          if (typeof relayLiveMessageToSupabase === "function") {
-            relayLiveMessageToSupabase({
-              text: messageText,
-              conversation_urn: conversationUrn,
-              type: "linkedin_chat_dash",
-              received_at: new Date().toISOString(),
-            });
+          if (messageText && conversationUrn) {
+            console.log("🎯 [RADAR] Network Hit:", conversationUrn);
+
+            if (typeof relayLiveMessageToSupabase === "function") {
+              relayLiveMessageToSupabase({
+                text: messageText,
+                conversation_urn: conversationUrn,
+                type: "linkedin_chat_dash",
+              });
+            }
           }
         }
       } catch (e) {
