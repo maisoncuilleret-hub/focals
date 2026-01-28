@@ -162,11 +162,14 @@ async function relayLiveMessageToSupabase(payload) {
   };
 
   const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
-  const matchName =
-    match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "LinkedIn User";
+  let matchName = match_name;
   if (!matchName || matchName.toLowerCase() === "unknown") {
-    console.error("🎯 [RADAR] Missing match_name - relay aborted");
-    return { ok: false, error: "Missing match_name" };
+    if (profileUrl.includes("/in/")) {
+      const slug = profileUrl.split("/in/")[1].split("/")[0].split("-");
+      matchName = slug.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+    } else {
+      matchName = "LinkedIn User";
+    }
   }
 
   const cleanPayload = {
@@ -178,7 +181,7 @@ async function relayLiveMessageToSupabase(payload) {
     received_at: new Date().toISOString(),
   };
 
-  console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
+  console.log("🎯 [RADAR] RELAYING TO SUPABASE:", cleanPayload);
 
   const token = await loadStoredToken();
   const headers = {
@@ -194,11 +197,11 @@ async function relayLiveMessageToSupabase(payload) {
   const responseBody = await response.text();
 
   if (!response.ok) {
-    console.error(`🎯 [RADAR] ❌ [SUPABASE] Error (${response.status}):`, responseBody);
+    console.error(`🎯 [RADAR] ❌ HTTP ERROR ${response.status}`, responseBody);
     return { ok: false, status: response.status, error: responseBody };
   }
 
-  console.log(`🎯 [RADAR] ✅ [SUPABASE] Success (${response.status}):`, responseBody);
+  console.log("🎯 [RADAR] ✅ SYNC SUCCESSFUL", responseBody);
   return { ok: true, status: response.status, data: responseBody };
 }
 
