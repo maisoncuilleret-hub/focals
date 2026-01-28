@@ -1602,6 +1602,20 @@ console.log(
 
     let focalsSrObsStarted = false;
     let focalsSrTimer = null;
+    let focalsLiveDetectionStarted = false;
+    let liveRouteWatcherId = null;
+    let lastLiveHref = window.location.href;
+
+    const cleanupLiveObservers = () => {
+      if (window.__FOCALS_MSG_OBSERVER__) {
+        window.__FOCALS_MSG_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_OBSERVER__ = null;
+      }
+      if (window.__FOCALS_MSG_ROOT_OBSERVER__) {
+        window.__FOCALS_MSG_ROOT_OBSERVER__.disconnect();
+        window.__FOCALS_MSG_ROOT_OBSERVER__ = null;
+      }
+    };
 
     const setupMessagingObserver = () => {
       if (focalsSrObsStarted) return;
@@ -1632,6 +1646,17 @@ console.log(
     const initMessagingWatcher = () => {
       console.log("🚀 [FOCALS] Smart Reply UI Active");
       setupMessagingObserver();
+      setupLiveMessageObserver();
+
+      if (!liveRouteWatcherId) {
+        liveRouteWatcherId = setInterval(() => {
+          if (window.location.href === lastLiveHref) return;
+          lastLiveHref = window.location.href;
+          cleanupLiveObservers();
+          focalsLiveDetectionStarted = false;
+          setupLiveMessageObserver();
+        }, 1000);
+      }
     };
 
     if (document.readyState === "loading") {
