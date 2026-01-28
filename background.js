@@ -119,13 +119,21 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 }
 
 async function relayLiveMessageToSupabase(payload) {
+  const cleanPayload = {
+    text: String(payload?.text || ""),
+    conversation_urn: String(payload?.conversation_urn || "unknown"),
+    type: payload?.type || "linkedin_voyager_gql",
+    received_at: payload?.received_at || new Date().toISOString(),
+  };
+
   const result = await fetchApi({
     endpoint: "/focals-incoming-message",
     method: "POST",
-    body: payload,
+    body: cleanPayload,
   });
 
   if (!result?.ok) {
+    console.error("❌ Erreur Supabase:", result?.error);
     throw new Error(result?.error || "Relay failed");
   }
 
@@ -1727,6 +1735,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       relayLiveMessageToSupabase(payload)
         .then((result) => {
           console.log("[FOCALS RELAY] Live message synced to Supabase");
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
+      return true;
+    }
+    case "FOCALS_INCOMING_RELAY": {
+      const payload = message?.payload || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing incoming relay payload" });
+        return false;
+      }
+
+      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      relayLiveMessageToSupabase(payload)
+        .then((result) => {
+          console.log("[FOCALS RELAY] Incoming message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
