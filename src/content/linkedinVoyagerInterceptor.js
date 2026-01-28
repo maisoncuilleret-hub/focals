@@ -9,7 +9,12 @@
       clone
         .json()
         .then((data) => {
-          window.postMessage({ type: "FOCALS_NETWORK_DATA", data }, "*");
+          const text = data?.text || data?.body?.text;
+          const conversationUrn = data?.conversationUrn || data?.conversation_urn;
+          window.postMessage(
+            { type: "FOCALS_NETWORK_DATA", data: { text, conversationUrn } },
+            "*"
+          );
         })
         .catch(() => {});
     }

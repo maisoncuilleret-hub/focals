@@ -122,6 +122,7 @@ async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
   const cleanText = payload.text
+    .replace(/View profile.*/gi, "")
     .replace(/Voir le profil de.*/gi, "")
     .replace(/Madeleine Maisonneuve.*/gi, "")
     .replace(/\d{1,2}:\d{1,2}/g, "")
@@ -144,7 +145,8 @@ async function relayLiveMessageToSupabase(payload) {
   };
 
   const profileUrl = payload?.profile_url || "https://www.linkedin.com/in/unknown";
-  const matchName = profileUrl.split("/in/")[1]?.replace("/", "") || "unknown";
+  const matchName =
+    payload?.match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "unknown";
 
   const cleanPayload = {
     text: cleanText,

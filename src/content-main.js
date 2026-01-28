@@ -26,37 +26,53 @@
   const signatures = new Set();
 
   const normalizeText = (text) => String(text || "").replace(/\s+/g, " ").trim();
-  const normalizeSignature = (text, conversationUrn, profileUrl) =>
-    `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}`.toLowerCase();
+  const normalizeSignature = (text, conversationUrn, profileUrl, matchName) =>
+    `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}::${matchName || ""}`.toLowerCase();
 
-  const getInterlocutorUrl = () => {
-    const selectors = [
-      ".msg-entity-lockup__entity-title a",
-      ".msg-overlay-bubble-header__title a",
-      "a.msg-thread__link-to-profile",
+  const getInterlocutorContext = () => {
+    const titleSelectors = [
+      ".msg-entity-lockup__entity-title",
+      ".msg-overlay-bubble-header__title",
     ];
+    let matchName = null;
+    let profileUrl = null;
 
-    for (const selector of selectors) {
+    for (const selector of titleSelectors) {
       const el = document.querySelector(selector);
-      if (el?.href) {
-        const url = new URL(el.href);
-        return `${url.origin}${url.pathname}`;
+      if (!matchName) {
+        const text = normalizeText(el?.textContent || "");
+        if (text) matchName = text;
+      }
+      if (!profileUrl) {
+        const link = el?.querySelector?.("a");
+        if (link?.href) {
+          const url = new URL(link.href);
+          profileUrl = `${url.origin}${url.pathname}`;
+        }
       }
     }
 
-    if (window.location.href.includes("/in/")) {
-      const url = new URL(window.location.href);
-      return `${url.origin}${url.pathname}`;
+    if (!profileUrl) {
+      const link = document.querySelector("a.msg-thread__link-to-profile");
+      if (link?.href) {
+        const url = new URL(link.href);
+        profileUrl = `${url.origin}${url.pathname}`;
+      }
     }
 
-    return null;
+    if (!profileUrl && window.location.href.includes("/in/")) {
+      const url = new URL(window.location.href);
+      profileUrl = `${url.origin}${url.pathname}`;
+    }
+
+    return { matchName, profileUrl };
   };
 
   const relayMessage = (text, source, conversationUrn) => {
     const cleanText = normalizeText(text);
     if (cleanText.length <= 2) return;
-    const profileUrl = getInterlocutorUrl();
-    const signature = normalizeSignature(cleanText, conversationUrn, profileUrl);
+    const { matchName, profileUrl } = getInterlocutorContext();
+    const signature = normalizeSignature(cleanText, conversationUrn, profileUrl, matchName);
     if (signatures.has(signature)) return;
 
     signatures.add(signature);
@@ -68,6 +84,7 @@
         text: cleanText,
         conversation_urn: conversationUrn,
         profile_url: profileUrl,
+        match_name: matchName,
         type: `linkedin_${source.toLowerCase()}`,
         received_at: new Date().toISOString(),
       },
@@ -122,7 +139,12 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data?.type !== "FOCALS_NETWORK_DATA") return;
-    const items = extractMessagesFromPayload(event.data.data);
+    const networkPayload = event.data.data;
+    if (networkPayload?.text) {
+      relayMessage(networkPayload.text, "NETWORK", networkPayload.conversationUrn);
+      return;
+    }
+    const items = extractMessagesFromPayload(networkPayload);
     items.forEach(({ text, conversationUrn }) => relayMessage(text, "NETWORK", conversationUrn));
   });
 
