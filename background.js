@@ -121,7 +121,24 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
-  const cleanText = payload.text
+  let { text, conversation_urn, type, match_name, profile_url } = payload;
+
+  if (!profile_url || String(profile_url).includes("unknown")) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        const context = await chrome.tabs.sendMessage(tab.id, { type: "GET_CURRENT_CONTEXT" });
+        if (context) {
+          match_name = context.matchName || context.match_name || match_name;
+          profile_url = context.profileUrl || context.profile_url || profile_url;
+        }
+      }
+    } catch (error) {
+      console.warn("🎯 [RADAR] Échec de récupération du contexte", error);
+    }
+  }
+
+  const cleanText = String(text || "")
     .replace(/View profile.*/gi, "")
     .replace(/Voir le profil de.*/gi, "")
     .replace(/Madeleine Maisonneuve.*/gi, "")
@@ -144,16 +161,16 @@ async function relayLiveMessageToSupabase(payload) {
     return fallback;
   };
 
-  const profileUrl = payload?.profile_url || "https://www.linkedin.com/in/unknown";
+  const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
   const matchName =
-    payload?.match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "unknown";
+    match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "LinkedIn User";
 
   const cleanPayload = {
     text: cleanText,
     match_name: matchName,
     profile_url: profileUrl,
-    conversation_urn: normalizeConversationUrn(payload?.conversation_urn || payload?.conversationUrn),
-    type: payload?.type || "linkedin_live",
+    conversation_urn: normalizeConversationUrn(conversation_urn || payload?.conversationUrn),
+    type: type || "linkedin_live",
     received_at: new Date().toISOString(),
   };
 

@@ -30,43 +30,30 @@
     `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}::${matchName || ""}`.toLowerCase();
 
   const getInterlocutorContext = () => {
-    const titleSelectors = [
-      ".msg-entity-lockup__entity-title",
-      ".msg-overlay-bubble-header__title",
-    ];
-    let matchName = null;
-    let profileUrl = null;
+    const nameEl = document.querySelector(
+      ".msg-entity-lockup__entity-title, .msg-overlay-bubble-header__title, .msg-thread__link-to-profile"
+    );
+    const matchName = normalizeText(nameEl?.innerText || "").split("\n")[0] || "LinkedIn User";
 
-    for (const selector of titleSelectors) {
-      const el = document.querySelector(selector);
-      if (!matchName) {
-        const text = normalizeText(el?.textContent || "");
-        if (text) matchName = text;
-      }
-      if (!profileUrl) {
-        const link = el?.querySelector?.("a");
-        if (link?.href) {
-          const url = new URL(link.href);
-          profileUrl = `${url.origin}${url.pathname}`;
-        }
-      }
-    }
+    const linkEl = document.querySelector('a[href*="/in/"]:not([href*="control_panel"])');
+    let profileUrl = "https://www.linkedin.com/in/unknown";
 
-    if (!profileUrl) {
-      const link = document.querySelector("a.msg-thread__link-to-profile");
-      if (link?.href) {
-        const url = new URL(link.href);
-        profileUrl = `${url.origin}${url.pathname}`;
-      }
-    }
-
-    if (!profileUrl && window.location.href.includes("/in/")) {
-      const url = new URL(window.location.href);
+    if (linkEl?.href) {
+      const url = new URL(linkEl.href);
       profileUrl = `${url.origin}${url.pathname}`;
+    } else if (window.location.href.includes("/in/")) {
+      profileUrl = window.location.href.split("?")[0];
     }
 
     return { matchName, profileUrl };
   };
+
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request?.type === "GET_CURRENT_CONTEXT") {
+      sendResponse(getInterlocutorContext());
+    }
+    return true;
+  });
 
   const relayMessage = (text, source, conversationUrn) => {
     const cleanText = normalizeText(text);
