@@ -123,19 +123,22 @@ async function relayLiveMessageToSupabase(payload) {
 
   let { text, conversation_urn, type, match_name, profile_url } = payload;
 
-  if (!profile_url || String(profile_url).includes("unknown")) {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id) {
-        const context = await chrome.tabs.sendMessage(tab.id, { type: "GET_CURRENT_CONTEXT" });
-        if (context) {
-          match_name = context.matchName || context.match_name || match_name;
-          profile_url = context.profileUrl || context.profile_url || profile_url;
-        }
+  if (payload?.identity) {
+    match_name = payload.identity.match_name || payload.identity.matchName || match_name;
+    profile_url = payload.identity.profile_url || payload.identity.profileUrl || profile_url;
+  }
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      const context = await chrome.tabs.sendMessage(tab.id, { type: "GET_CURRENT_CONTEXT" });
+      if (context) {
+        match_name = context.matchName || context.match_name || match_name;
+        profile_url = context.profileUrl || context.profile_url || profile_url;
       }
-    } catch (error) {
-      console.warn("🎯 [RADAR] Échec de récupération du contexte", error);
     }
+  } catch (error) {
+    console.warn("🎯 [RADAR] Échec de récupération du contexte", error);
   }
 
   const cleanText = String(text || "")
@@ -162,11 +165,34 @@ async function relayLiveMessageToSupabase(payload) {
   };
 
   const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
-  const matchName =
-    match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "LinkedIn User";
-  if (!matchName || matchName.toLowerCase() === "unknown") {
-    console.error("🎯 [RADAR] Missing match_name - relay aborted");
-    return { ok: false, error: "Missing match_name" };
+  const slugToName = (slug) =>
+    slug
+      ? slug
+          .split(/[-_]/g)
+          .filter(Boolean)
+          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(" ")
+      : "";
+  const extractNameFromUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      const match = parsed.pathname.match(/\/in\/([^/]+)/i);
+      if (!match) return "";
+      const slug = match[1].replace(/\/$/, "");
+      return slugToName(slug);
+    } catch {
+      return "";
+    }
+  };
+  let matchName = match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "";
+  if (
+    !matchName ||
+    ["unknown", "linkedin user"].includes(matchName.trim().toLowerCase())
+  ) {
+    matchName = extractNameFromUrl(profileUrl) || matchName;
+  }
+  if (!matchName || matchName.trim().toLowerCase() === "unknown") {
+    matchName = "LinkedIn User";
   }
 
   const cleanPayload = {
@@ -179,6 +205,7 @@ async function relayLiveMessageToSupabase(payload) {
   };
 
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
+  console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
   const token = await loadStoredToken();
   const headers = {
