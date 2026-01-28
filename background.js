@@ -2,6 +2,45 @@ import supabase from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 import { createLogger } from "./src/utils/logger.js";
 
+// Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.method === "POST" && details.requestBody && details.requestBody.raw) {
+      try {
+        const rawBody = details.requestBody.raw[0].bytes;
+        const decoder = new TextDecoder("utf-8");
+        const json = JSON.parse(decoder.decode(rawBody));
+
+        // Extraction du texte et de l'URN de conversation
+        const messageText = json.message?.body?.text;
+        const conversationUrn = json.conversationUrn;
+
+        if (messageText) {
+          console.log("🎯 [RADAR NETWORK] Message intercepté :", messageText);
+
+          // Relais vers ton SaaS via la fonction existante
+          if (typeof relayLiveMessageToSupabase === "function") {
+            relayLiveMessageToSupabase({
+              text: messageText,
+              conversation_urn: conversationUrn,
+              type: "linkedin_chat_dash",
+              received_at: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (e) {
+        // On ignore les requêtes malformées
+      }
+    }
+  },
+  {
+    urls: [
+      "*://www.linkedin.com/voyager/api/voyagerMessagingDashMessengerMessages?action=createMessage*",
+    ],
+  },
+  ["requestBody"]
+);
+
 const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
 const DEBUG_KEEP_DETAILS_TAB = false;
@@ -76,6 +115,20 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
   }
 
   return { ok: true, status: response.status, data: payload };
+}
+
+async function relayLiveMessageToSupabase(payload) {
+  const result = await fetchApi({
+    endpoint: "/focals-incoming-message",
+    method: "POST",
+    body: payload,
+  });
+
+  if (!result?.ok) {
+    throw new Error(result?.error || "Relay failed");
+  }
+
+  return result;
 }
 
 const STORAGE_KEYS = {
@@ -1660,6 +1713,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: error?.message || "API request failed" });
         });
 
+      return true;
+    }
+    case "NEW_LIVE_MESSAGE": {
+      const payload = message?.data || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing live message payload" });
+        return false;
+      }
+
+      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      relayLiveMessageToSupabase(payload)
+        .then((result) => {
+          console.log("[FOCALS RELAY] Live message synced to Supabase");
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
       return true;
     }
     case "BOUNCER_REQUEST": {
