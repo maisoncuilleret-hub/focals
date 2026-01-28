@@ -1701,6 +1701,6 @@ console.log(
       initMessagingWatcher();
     }
   } catch (err) {
-    error("[MSG] Fatal error in content-messaging.js", err);
+    console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
   }
 })();
