@@ -17,7 +17,7 @@ chrome.webRequest.onBeforeRequest.addListener(
         const conversationUrn = json.conversationUrn;
 
         if (messageText) {
-          console.log("🎯 [RADAR NETWORK] Message intercepté :", messageText);
+          console.log("🎯 [RADAR] NETWORK message intercepté :", messageText);
 
           // Relais vers ton SaaS via la fonction existante
           if (typeof relayLiveMessageToSupabase === "function") {
@@ -121,39 +121,64 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
-  let cleanText = payload.text
+  const cleanText = payload.text
+    .replace(/View profile.*/gi, "")
     .replace(/Voir le profil de.*/gi, "")
-    .replace(/Madeleine Maisonneuve\s+\d{1,2}:\d{1,2}/gi, "")
+    .replace(/Madeleine Maisonneuve.*/gi, "")
     .replace(/\d{1,2}:\d{1,2}/g, "")
     .trim();
 
   if (cleanText.length < 2) return;
 
+  const normalizeConversationUrn = (value) => {
+    const fallback = "urn:li:msg_conversation:unknown";
+    if (!value) return fallback;
+    const raw = String(value).trim();
+    if (!raw) return fallback;
+    if (raw.startsWith("urn:li:msg_conversation:")) return raw;
+    if (raw.startsWith("msg_conversation:")) return `urn:li:${raw}`;
+    if (raw.includes("msg_conversation:")) {
+      const idx = raw.indexOf("msg_conversation:");
+      return `urn:li:${raw.slice(idx)}`;
+    }
+    return fallback;
+  };
+
+  const profileUrl = payload?.profile_url || "https://www.linkedin.com/in/unknown";
+  const matchName =
+    payload?.match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "unknown";
+
   const cleanPayload = {
     text: cleanText,
-    conversation_urn:
-      payload?.conversation_urn && payload.conversation_urn !== "unknown"
-        ? String(payload.conversation_urn)
-        : "urn:li:msg_conversation:unknown",
+    match_name: matchName,
+    profile_url: profileUrl,
+    conversation_urn: normalizeConversationUrn(payload?.conversation_urn || payload?.conversationUrn),
     type: payload?.type || "linkedin_live",
     received_at: new Date().toISOString(),
   };
 
-  console.log("🚀 [SUPABASE] Envoi du texte propre :", cleanPayload.text);
+  console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
 
-  const result = await fetchApi({
-    endpoint: "/focals-incoming-message",
+  const token = await loadStoredToken();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+
+  const response = await fetch(`${API_BASE_URL}/focals-incoming-message`, {
     method: "POST",
-    body: cleanPayload,
+    headers,
+    body: JSON.stringify(cleanPayload),
   });
 
-  if (!result?.ok) {
-    console.error("❌ [SUPABASE] Erreur :", result?.error);
-    return { ok: false, error: result?.error };
+  if (!response.ok) {
+    const errorLog = await response.text();
+    console.error(`🎯 [RADAR] SUPABASE REJECT (${response.status}):`, errorLog);
+    return { ok: false, status: response.status, error: errorLog };
   }
 
-  console.log("✅ [SUPABASE] Succès 200 OK !");
-  return result;
+  console.log("🎯 [RADAR] SUPABASE success");
+  return { ok: true, status: response.status };
 }
 
 const STORAGE_KEYS = {
@@ -1747,14 +1772,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      console.log("🎯 [RADAR] Incoming live relay :", payload?.text);
       relayLiveMessageToSupabase(payload)
         .then((result) => {
-          console.log("[FOCALS RELAY] Live message synced to Supabase");
+          console.log("🎯 [RADAR] Live message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          console.error("🎯 [RADAR] Live relay failed", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;
@@ -1766,14 +1791,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      console.log("🎯 [RADAR] Incoming network/dom relay :", payload?.text);
       relayLiveMessageToSupabase(payload)
         .then((result) => {
-          console.log("[FOCALS RELAY] Incoming message synced to Supabase");
+          console.log("🎯 [RADAR] Incoming message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          console.error("🎯 [RADAR] Incoming relay failed", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;

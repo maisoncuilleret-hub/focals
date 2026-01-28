@@ -23,19 +23,68 @@
   const warn = (...a) => logger.warn(...a);
   const DEBUG = false;
 
-  const seenSignatures = new Set();
+  const signatures = new Set();
 
-  const relayMessage = (text, source) => {
-    const cleanText = text.trim();
-    if (cleanText.length <= 2 || seenSignatures.has(cleanText)) return;
+  const normalizeText = (text) => String(text || "").replace(/\s+/g, " ").trim();
+  const normalizeSignature = (text, conversationUrn, profileUrl, matchName) =>
+    `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}::${matchName || ""}`.toLowerCase();
 
-    seenSignatures.add(cleanText);
-    console.log(`🎯 [RADAR ${source}] :`, cleanText);
+  const getInterlocutorContext = () => {
+    const titleSelectors = [
+      ".msg-entity-lockup__entity-title",
+      ".msg-overlay-bubble-header__title",
+    ];
+    let matchName = null;
+    let profileUrl = null;
+
+    for (const selector of titleSelectors) {
+      const el = document.querySelector(selector);
+      if (!matchName) {
+        const text = normalizeText(el?.textContent || "");
+        if (text) matchName = text;
+      }
+      if (!profileUrl) {
+        const link = el?.querySelector?.("a");
+        if (link?.href) {
+          const url = new URL(link.href);
+          profileUrl = `${url.origin}${url.pathname}`;
+        }
+      }
+    }
+
+    if (!profileUrl) {
+      const link = document.querySelector("a.msg-thread__link-to-profile");
+      if (link?.href) {
+        const url = new URL(link.href);
+        profileUrl = `${url.origin}${url.pathname}`;
+      }
+    }
+
+    if (!profileUrl && window.location.href.includes("/in/")) {
+      const url = new URL(window.location.href);
+      profileUrl = `${url.origin}${url.pathname}`;
+    }
+
+    return { matchName, profileUrl };
+  };
+
+  const relayMessage = (text, source, conversationUrn) => {
+    const cleanText = normalizeText(text);
+    if (cleanText.length <= 2) return;
+    const { matchName, profileUrl } = getInterlocutorContext();
+    const signature = normalizeSignature(cleanText, conversationUrn, profileUrl, matchName);
+    if (signatures.has(signature)) return;
+
+    signatures.add(signature);
+    console.log(`🎯 [RADAR ${source}]`, cleanText);
 
     chrome.runtime.sendMessage({
       type: "FOCALS_INCOMING_RELAY",
       payload: {
         text: cleanText,
+        conversation_urn: conversationUrn,
+        profile_url: profileUrl,
+        match_name: matchName,
         type: `linkedin_${source.toLowerCase()}`,
         received_at: new Date().toISOString(),
       },
@@ -49,16 +98,54 @@
     (document.head || document.documentElement).appendChild(s);
   };
 
+  const extractMessagesFromPayload = (payload) => {
+    const items = [];
+    const visited = new WeakSet();
+    let conversationUrn = null;
+
+    const recordConversationUrn = (candidate) => {
+      if (!candidate || typeof candidate !== "string") return;
+      if (!conversationUrn) conversationUrn = candidate;
+    };
+
+    const visit = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      if (typeof node.conversationUrn === "string") recordConversationUrn(node.conversationUrn);
+      if (typeof node.conversation_urn === "string") recordConversationUrn(node.conversation_urn);
+
+      if (typeof node.text === "string") {
+        items.push({ text: node.text, conversationUrn });
+      }
+
+      if (node.body && typeof node.body.text === "string") {
+        items.push({ text: node.body.text, conversationUrn });
+      }
+
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+
+      Object.values(node).forEach(visit);
+    };
+
+    visit(payload);
+    return items;
+  };
+
   window.addEventListener("message", (event) => {
-    if (event.data?.type === "FOCALS_NETWORK_DATA") {
-      const extract = (obj) => {
-        if (!obj || typeof obj !== "object") return;
-        if (typeof obj.text === "string") relayMessage(obj.text, "NETWORK");
-        if (obj.body && typeof obj.body.text === "string") relayMessage(obj.body.text, "NETWORK");
-        for (let key in obj) extract(obj[key]);
-      };
-      extract(event.data.data);
+    if (event.source !== window) return;
+    if (event.data?.type !== "FOCALS_NETWORK_DATA") return;
+    const networkPayload = event.data.data;
+    if (networkPayload?.text) {
+      relayMessage(networkPayload.text, "NETWORK", networkPayload.conversationUrn);
+      return;
     }
+    const items = extractMessagesFromPayload(networkPayload);
+    items.forEach(({ text, conversationUrn }) => relayMessage(text, "NETWORK", conversationUrn));
   });
 
   // --- RADAR DOM (LIVE) ---
