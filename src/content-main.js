@@ -23,19 +23,26 @@
   const warn = (...a) => logger.warn(...a);
   const DEBUG = false;
 
-  const seenSignatures = new Set();
+  const signatures = new Set();
 
-  const relayMessage = (text, source) => {
-    const cleanText = text.trim();
-    if (cleanText.length <= 2 || seenSignatures.has(cleanText)) return;
+  const normalizeText = (text) => String(text || "").replace(/\s+/g, " ").trim();
+  const normalizeSignature = (text, conversationUrn) =>
+    `${normalizeText(text)}::${conversationUrn || ""}`.toLowerCase();
 
-    seenSignatures.add(cleanText);
-    console.log(`🎯 [RADAR ${source}] :`, cleanText);
+  const relayMessage = (text, source, conversationUrn) => {
+    const cleanText = normalizeText(text);
+    if (cleanText.length <= 2) return;
+    const signature = normalizeSignature(cleanText, conversationUrn);
+    if (signatures.has(signature)) return;
+
+    signatures.add(signature);
+    console.log(`🎯 [RADAR ${source}]`, cleanText);
 
     chrome.runtime.sendMessage({
       type: "FOCALS_INCOMING_RELAY",
       payload: {
         text: cleanText,
+        conversation_urn: conversationUrn,
         type: `linkedin_${source.toLowerCase()}`,
         received_at: new Date().toISOString(),
       },
@@ -49,16 +56,49 @@
     (document.head || document.documentElement).appendChild(s);
   };
 
+  const extractMessagesFromPayload = (payload) => {
+    const items = [];
+    const visited = new WeakSet();
+    let conversationUrn = null;
+
+    const recordConversationUrn = (candidate) => {
+      if (!candidate || typeof candidate !== "string") return;
+      if (!conversationUrn) conversationUrn = candidate;
+    };
+
+    const visit = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      if (typeof node.conversationUrn === "string") recordConversationUrn(node.conversationUrn);
+      if (typeof node.conversation_urn === "string") recordConversationUrn(node.conversation_urn);
+
+      if (typeof node.text === "string") {
+        items.push({ text: node.text, conversationUrn });
+      }
+
+      if (node.body && typeof node.body.text === "string") {
+        items.push({ text: node.body.text, conversationUrn });
+      }
+
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+
+      Object.values(node).forEach(visit);
+    };
+
+    visit(payload);
+    return items;
+  };
+
   window.addEventListener("message", (event) => {
-    if (event.data?.type === "FOCALS_NETWORK_DATA") {
-      const extract = (obj) => {
-        if (!obj || typeof obj !== "object") return;
-        if (typeof obj.text === "string") relayMessage(obj.text, "NETWORK");
-        if (obj.body && typeof obj.body.text === "string") relayMessage(obj.body.text, "NETWORK");
-        for (let key in obj) extract(obj[key]);
-      };
-      extract(event.data.data);
-    }
+    if (event.source !== window) return;
+    if (event.data?.type !== "FOCALS_NETWORK_DATA") return;
+    const items = extractMessagesFromPayload(event.data.data);
+    items.forEach(({ text, conversationUrn }) => relayMessage(text, "NETWORK", conversationUrn));
   });
 
   // --- RADAR DOM (LIVE) ---
