@@ -18,6 +18,54 @@
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
   const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
+  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const uniq = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) {
+      const v = clean(x);
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  };
+
+  const getIdentity = () => {
+    const activeElement = document.activeElement;
+    const focusedBubble =
+      activeElement?.closest?.(".msg-overlay-bubble, .msg-overlay-conversation-bubble") ||
+      document.querySelector(
+        ".msg-overlay-bubble--is-focused, .msg-overlay-bubble--is-active, .msg-overlay-bubble--active, .msg-overlay-bubble--is-open"
+      ) ||
+      document.querySelector(".msg-overlay-bubble, .msg-overlay-conversation-bubble");
+
+    const profileLink = focusedBubble?.querySelector(".msg-overlay-bubble-header__link");
+    const profileUrl = profileLink?.href || null;
+    const nameCandidates = [
+      focusedBubble?.querySelector(".msg-overlay-bubble-header__name"),
+      focusedBubble?.querySelector(".msg-overlay-bubble-header__title"),
+      focusedBubble?.querySelector(".msg-overlay-bubble-header__details"),
+      profileLink,
+    ];
+    const matchName =
+      nameCandidates.map((node) => clean(node?.textContent)).find((value) => value) ||
+      "unknown";
+
+    if (profileUrl) {
+      return { match_name: matchName, profile_url: profileUrl };
+    }
+
+    if (/linkedin\.com\/in\//i.test(window.location.href)) {
+      return { match_name: matchName, profile_url: window.location.href };
+    }
+
+    return { match_name: matchName, profile_url: "unknown" };
+  };
+
   // 1. Initialisation du cache de dédoublonnage
   const processedIds = new Set();
 
@@ -52,6 +100,7 @@
       };
 
       const messages = extract(event.data.data);
+      const identity = getIdentity();
 
       messages.forEach((msg) => {
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
@@ -66,6 +115,7 @@
               text: msg.text,
               type: "linkedin_voyager_gql",
               received_at: new Date().toISOString(),
+              identity,
             },
           });
         }
@@ -105,22 +155,6 @@
   };
 
   setupLiveObserver();
-
-  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  const uniq = (arr) => {
-    const seen = new Set();
-    const out = [];
-    for (const x of arr) {
-      const v = clean(x);
-      if (!v) continue;
-      if (seen.has(v)) continue;
-      seen.add(v);
-      out.push(v);
-    }
-    return out;
-  };
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const normalizeProfilePath = (pathname = "") => {
@@ -2023,6 +2057,11 @@
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request?.type === "FOCALS_PING") {
         sendResponse({ status: "pong" });
+        return true;
+      }
+
+      if (request?.type === "GET_CURRENT_CONTEXT") {
+        sendResponse(getIdentity());
         return true;
       }
 
