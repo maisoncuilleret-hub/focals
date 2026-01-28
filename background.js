@@ -119,16 +119,40 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 }
 
 async function relayLiveMessageToSupabase(payload) {
+  if (!payload?.text) return;
+
+  let cleanText = payload.text
+    .replace(/Voir le profil de.*/gi, "")
+    .replace(/Madeleine Maisonneuve\s+\d{1,2}:\d{1,2}/gi, "")
+    .replace(/\d{1,2}:\d{1,2}/g, "")
+    .trim();
+
+  if (cleanText.length < 2) return;
+
+  const cleanPayload = {
+    text: cleanText,
+    conversation_urn:
+      payload?.conversation_urn && payload.conversation_urn !== "unknown"
+        ? String(payload.conversation_urn)
+        : "urn:li:msg_conversation:unknown",
+    type: payload?.type || "linkedin_live",
+    received_at: new Date().toISOString(),
+  };
+
+  console.log("🚀 [SUPABASE] Envoi du texte propre :", cleanPayload.text);
+
   const result = await fetchApi({
     endpoint: "/focals-incoming-message",
     method: "POST",
-    body: payload,
+    body: cleanPayload,
   });
 
   if (!result?.ok) {
-    throw new Error(result?.error || "Relay failed");
+    console.error("❌ [SUPABASE] Erreur :", result?.error);
+    return { ok: false, error: result?.error };
   }
 
+  console.log("✅ [SUPABASE] Succès 200 OK !");
   return result;
 }
 
@@ -1727,6 +1751,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       relayLiveMessageToSupabase(payload)
         .then((result) => {
           console.log("[FOCALS RELAY] Live message synced to Supabase");
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
+      return true;
+    }
+    case "FOCALS_INCOMING_RELAY": {
+      const payload = message?.payload || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing incoming relay payload" });
+        return false;
+      }
+
+      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      relayLiveMessageToSupabase(payload)
+        .then((result) => {
+          console.log("[FOCALS RELAY] Incoming message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
