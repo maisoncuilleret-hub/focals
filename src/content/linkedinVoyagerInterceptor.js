@@ -4,11 +4,7 @@
     const response = await originalFetch(...args);
     const url = args[0]?.url || args[0] || "";
 
-    if (
-      url.includes("voyagerMessaging") ||
-      url.includes("messengerMessages") ||
-      url.includes("messengerEvents")
-    ) {
+    if (url.includes("messengerMessages") || url.includes("messengerEvents")) {
       const clone = response.clone();
       clone
         .json()
