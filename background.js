@@ -17,19 +17,15 @@ chrome.webRequest.onBeforeRequest.addListener(
         const conversationUrn = json.conversationUrn;
 
         if (messageText) {
-          const payload = {
-            match_name: "LinkedIn Dash Contact",
-            text: messageText,
-            conversation_urn: conversationUrn,
-            type: "linkedin_chat_dash",
-            received_at: new Date().toISOString(),
-          };
-
-          console.log("🎯 [RADAR NETWORK] Message envoyé au SaaS :", messageText);
+          console.log("🎯 [RADAR NETWORK] Message intercepté :", messageText);
 
           // Relais vers ton SaaS via la fonction existante
           if (typeof relayLiveMessageToSupabase === "function") {
-            relayLiveMessageToSupabase(payload);
+            relayLiveMessageToSupabase({
+              text: messageText,
+              conversation_urn: conversationUrn,
+              type: "linkedin_chat_dash",
+            });
           }
         }
       } catch (e) {
