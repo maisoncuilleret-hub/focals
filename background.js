@@ -143,8 +143,13 @@ async function relayLiveMessageToSupabase(payload) {
     return fallback;
   };
 
+  const profileUrl = payload?.profile_url || "https://www.linkedin.com/in/unknown";
+  const matchName = profileUrl.split("/in/")[1]?.replace("/", "") || "unknown";
+
   const cleanPayload = {
     text: cleanText,
+    match_name: matchName,
+    profile_url: profileUrl,
     conversation_urn: normalizeConversationUrn(payload?.conversation_urn || payload?.conversationUrn),
     type: payload?.type || "linkedin_live",
     received_at: new Date().toISOString(),

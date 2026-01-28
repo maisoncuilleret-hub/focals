@@ -26,13 +26,37 @@
   const signatures = new Set();
 
   const normalizeText = (text) => String(text || "").replace(/\s+/g, " ").trim();
-  const normalizeSignature = (text, conversationUrn) =>
-    `${normalizeText(text)}::${conversationUrn || ""}`.toLowerCase();
+  const normalizeSignature = (text, conversationUrn, profileUrl) =>
+    `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}`.toLowerCase();
+
+  const getInterlocutorUrl = () => {
+    const selectors = [
+      ".msg-entity-lockup__entity-title a",
+      ".msg-overlay-bubble-header__title a",
+      "a.msg-thread__link-to-profile",
+    ];
+
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      if (el?.href) {
+        const url = new URL(el.href);
+        return `${url.origin}${url.pathname}`;
+      }
+    }
+
+    if (window.location.href.includes("/in/")) {
+      const url = new URL(window.location.href);
+      return `${url.origin}${url.pathname}`;
+    }
+
+    return null;
+  };
 
   const relayMessage = (text, source, conversationUrn) => {
     const cleanText = normalizeText(text);
     if (cleanText.length <= 2) return;
-    const signature = normalizeSignature(cleanText, conversationUrn);
+    const profileUrl = getInterlocutorUrl();
+    const signature = normalizeSignature(cleanText, conversationUrn, profileUrl);
     if (signatures.has(signature)) return;
 
     signatures.add(signature);
@@ -43,6 +67,7 @@
       payload: {
         text: cleanText,
         conversation_urn: conversationUrn,
+        profile_url: profileUrl,
         type: `linkedin_${source.toLowerCase()}`,
         received_at: new Date().toISOString(),
       },
