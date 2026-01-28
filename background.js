@@ -164,6 +164,10 @@ async function relayLiveMessageToSupabase(payload) {
   const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
   const matchName =
     match_name || profileUrl.split("/in/")[1]?.replace("/", "") || "LinkedIn User";
+  if (!matchName || matchName.toLowerCase() === "unknown") {
+    console.error("🎯 [RADAR] Missing match_name - relay aborted");
+    return { ok: false, error: "Missing match_name" };
+  }
 
   const cleanPayload = {
     text: cleanText,
@@ -187,15 +191,15 @@ async function relayLiveMessageToSupabase(payload) {
     headers,
     body: JSON.stringify(cleanPayload),
   });
+  const responseBody = await response.text();
 
   if (!response.ok) {
-    const errorLog = await response.text();
-    console.error(`🎯 [RADAR] SUPABASE REJECT (${response.status}):`, errorLog);
-    return { ok: false, status: response.status, error: errorLog };
+    console.error(`🎯 [RADAR] ❌ [SUPABASE] Error (${response.status}):`, responseBody);
+    return { ok: false, status: response.status, error: responseBody };
   }
 
-  console.log("🎯 [RADAR] SUPABASE success");
-  return { ok: true, status: response.status };
+  console.log(`🎯 [RADAR] ✅ [SUPABASE] Success (${response.status}):`, responseBody);
+  return { ok: true, status: response.status, data: responseBody };
 }
 
 const STORAGE_KEYS = {

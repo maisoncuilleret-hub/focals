@@ -1,3 +1,5 @@
+console.log("🎯 [RADAR] Content Script Loaded");
+
 (async () => {
   if (window !== window.top) return;
 
@@ -30,19 +32,19 @@
     `${normalizeText(text)}::${conversationUrn || ""}::${profileUrl || ""}::${matchName || ""}`.toLowerCase();
 
   const getInterlocutorContext = () => {
-    const nameEl = document.querySelector(
-      ".msg-entity-lockup__entity-title, .msg-overlay-bubble-header__title, .msg-thread__link-to-profile"
-    );
+    const nameEl = document.querySelector(".msg-entity-lockup__entity-title");
     const matchName = normalizeText(nameEl?.innerText || "").split("\n")[0] || "LinkedIn User";
 
     const linkEl = document.querySelector('a[href*="/in/"]:not([href*="control_panel"])');
-    let profileUrl = "https://www.linkedin.com/in/unknown";
+    let profileUrl = "";
 
     if (linkEl?.href) {
       const url = new URL(linkEl.href);
       profileUrl = `${url.origin}${url.pathname}`;
     } else if (window.location.href.includes("/in/")) {
       profileUrl = window.location.href.split("?")[0];
+    } else {
+      profileUrl = `${window.location.origin}${window.location.pathname}`;
     }
 
     return { matchName, profileUrl };
