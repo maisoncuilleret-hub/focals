@@ -1735,6 +1735,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       return true;
     }
+    case "FOCALS_INCOMING_RELAY": {
+      const payload = message?.payload || null;
+      if (!payload) {
+        sendResponse({ ok: false, error: "Missing incoming relay payload" });
+        return false;
+      }
+
+      console.log("[BACKGROUND] Relais Supabase activé pour :", payload?.text);
+      relayLiveMessageToSupabase(payload)
+        .then((result) => {
+          console.log("[FOCALS RELAY] Incoming message synced to Supabase");
+          sendResponse(result);
+        })
+        .catch((err) => {
+          console.error("[FOCALS RELAY] Sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "Relay failed" });
+        });
+      return true;
+    }
     case "BOUNCER_REQUEST": {
       const { endpoint, options = {} } = message || {};
       if (!endpoint) {
