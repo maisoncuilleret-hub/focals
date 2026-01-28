@@ -121,17 +121,25 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
+  let cleanText = payload.text
+    .replace(/Voir le profil de.*/gi, "")
+    .replace(/Madeleine Maisonneuve\s+\d{1,2}:\d{1,2}/gi, "")
+    .replace(/\d{1,2}:\d{1,2}/g, "")
+    .trim();
+
+  if (cleanText.length < 2) return;
+
   const cleanPayload = {
-    text: String(payload.text).trim(),
+    text: cleanText,
     conversation_urn:
       payload?.conversation_urn && payload.conversation_urn !== "unknown"
         ? String(payload.conversation_urn)
-        : "urn:li:msg_conversation:(urn:li:fsd_profile:UNKNOWN,2-LIVE-SYNC)",
-    type: payload?.type || "linkedin_voyager_gql",
-    received_at: payload?.received_at || new Date().toISOString(),
+        : "urn:li:msg_conversation:unknown",
+    type: payload?.type || "linkedin_live",
+    received_at: new Date().toISOString(),
   };
 
-  console.log("🚀 [RELAY] Envoi vers Supabase :", cleanPayload.text);
+  console.log("🚀 [SUPABASE] Envoi du texte propre :", cleanPayload.text);
 
   const result = await fetchApi({
     endpoint: "/focals-incoming-message",
@@ -140,11 +148,11 @@ async function relayLiveMessageToSupabase(payload) {
   });
 
   if (!result?.ok) {
-    console.error("❌ [SUPABASE] Erreur détaillée :", result?.error);
+    console.error("❌ [SUPABASE] Erreur :", result?.error);
     return { ok: false, error: result?.error };
   }
 
-  console.log("✅ [SUPABASE] Message synchronisé !");
+  console.log("✅ [SUPABASE] Succès 200 OK !");
   return result;
 }
 
