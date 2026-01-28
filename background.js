@@ -25,7 +25,7 @@ chrome.webRequest.onBeforeRequest.addListener(
             received_at: new Date().toISOString(),
           };
 
-          console.log("🎯 [FOCALS DASH] Capture réseau réussie :", messageText);
+          console.log("🎯 [RADAR NETWORK] Message envoyé au SaaS :", messageText);
 
           // Relais vers ton SaaS via la fonction existante
           if (typeof relayLiveMessageToSupabase === "function") {
