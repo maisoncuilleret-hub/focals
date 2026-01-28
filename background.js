@@ -120,24 +120,19 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 
 async function relayLiveMessageToSupabase(payload) {
   const cleanPayload = {
-    text: String(payload?.text || ""),
+    text: String(payload?.text || "").trim(),
     conversation_urn: String(payload?.conversation_urn || "unknown"),
-    type: payload?.type || "linkedin_voyager_gql",
+    type: payload?.type || "linkedin_live",
     received_at: payload?.received_at || new Date().toISOString(),
   };
 
-  const result = await fetchApi({
+  if (!cleanPayload.text || cleanPayload.text.length < 2) return;
+
+  return await fetchApi({
     endpoint: "/focals-incoming-message",
     method: "POST",
     body: cleanPayload,
   });
-
-  if (!result?.ok) {
-    console.error("❌ Erreur Supabase:", result?.error);
-    throw new Error(result?.error || "Relay failed");
-  }
-
-  return result;
 }
 
 const STORAGE_KEYS = {
