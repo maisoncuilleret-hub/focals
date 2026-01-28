@@ -57,7 +57,7 @@
         "src/scrape/domObservers.js",
         "src/api/config.js"
       ],
-      "matches": ["https://www.linkedin.com/*"]
+      "matches": ["*://www.linkedin.com/*"]
     }
   ]
 }

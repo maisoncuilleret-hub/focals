@@ -1,18 +1,19 @@
 (function () {
   const { fetch: originalFetch } = window;
-  if (typeof originalFetch !== "function") return;
-
   window.fetch = async (...args) => {
     const response = await originalFetch(...args);
     const url = args[0]?.url || args[0] || "";
 
-    // On cible le flux de messages (Historique + Nouveaux)
-    if (url.includes("messengerMessages")) {
+    if (
+      url.includes("voyagerMessaging") ||
+      url.includes("messengerMessages") ||
+      url.includes("messengerEvents")
+    ) {
       const clone = response.clone();
       clone
         .json()
         .then((data) => {
-          window.postMessage({ type: "VOYAGER_RAW_DATA", data }, "*");
+          window.postMessage({ type: "FOCALS_NETWORK_DATA", data }, "*");
         })
         .catch(() => {});
     }

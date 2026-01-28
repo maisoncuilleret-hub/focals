@@ -23,6 +23,64 @@
   const warn = (...a) => logger.warn(...a);
   const DEBUG = false;
 
+  const seenSignatures = new Set();
+
+  const relayMessage = (text, source) => {
+    const cleanText = text.trim();
+    if (cleanText.length <= 2 || seenSignatures.has(cleanText)) return;
+
+    seenSignatures.add(cleanText);
+    console.log(`🎯 [RADAR ${source}] :`, cleanText);
+
+    chrome.runtime.sendMessage({
+      type: "FOCALS_INCOMING_RELAY",
+      payload: {
+        text: cleanText,
+        type: `linkedin_${source.toLowerCase()}`,
+        received_at: new Date().toISOString(),
+      },
+    });
+  };
+
+  // --- RADAR RÉSEAU ---
+  const injectNetworkSpy = () => {
+    const s = document.createElement("script");
+    s.src = chrome.runtime.getURL("src/content/linkedinVoyagerInterceptor.js");
+    (document.head || document.documentElement).appendChild(s);
+  };
+
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "FOCALS_NETWORK_DATA") {
+      const extract = (obj) => {
+        if (!obj || typeof obj !== "object") return;
+        if (typeof obj.text === "string") relayMessage(obj.text, "NETWORK");
+        if (obj.body && typeof obj.body.text === "string") relayMessage(obj.body.text, "NETWORK");
+        for (let key in obj) extract(obj[key]);
+      };
+      extract(event.data.data);
+    }
+  });
+
+  // --- RADAR DOM (LIVE) ---
+  const setupDomObserver = () => {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === 1) {
+            const bubbles = node.querySelectorAll(
+              ".msg-s-event-listitem__body, .msg-s-event-listitem__message-bubble"
+            );
+            bubbles.forEach((b) => relayMessage(b.innerText, "DOM_LIVE"));
+          }
+        });
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  };
+
+  injectNetworkSpy();
+  setupDomObserver();
+
   const scrapeUrl = safeGetURL("src/scrape/ScrapeController.js");
   if (!scrapeUrl) {
     logger.error("Fatal: Invalid ScrapeController Path");
