@@ -1623,19 +1623,19 @@ console.log(
 
       const root = getLinkedinMessagingRoot();
 
-      console.log(
-        "[FOCALS DEBUG] setupMessagingObserver on root =",
-        root === document ? "document" : "interop-shadow-root"
-      );
-
       const schedule = () => {
         clearTimeout(focalsSrTimer);
         focalsSrTimer = setTimeout(injectAllSmartReplyButtons, 80);
       };
 
-      const observer = new MutationObserver(schedule);
+      const observer = new MutationObserver(() => {
+        injectAllSmartReplyButtons();
+      });
 
-      observer.observe(root, { childList: true, subtree: true });
+      const target =
+        root.querySelector(".msg-conversations-container__conversations-list") ||
+        document.body;
+      observer.observe(target, { childList: true, subtree: true });
 
       injectAllSmartReplyButtons();
 
@@ -1644,7 +1644,7 @@ console.log(
 
 
     const initMessagingWatcher = () => {
-      console.log("[FOCALS DEBUG] messaging script bootstrap");
+      console.log("🚀 [FOCALS] Smart Reply UI Active");
       setupMessagingObserver();
       setupLiveMessageObserver();
 
