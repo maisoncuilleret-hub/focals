@@ -119,13 +119,21 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 }
 
 async function relayLiveMessageToSupabase(payload) {
+  const cleanPayload = {
+    text: String(payload?.text || ""),
+    conversation_urn: String(payload?.conversation_urn || "unknown"),
+    type: payload?.type || "linkedin_voyager_gql",
+    received_at: payload?.received_at || new Date().toISOString(),
+  };
+
   const result = await fetchApi({
     endpoint: "/focals-incoming-message",
     method: "POST",
-    body: payload,
+    body: cleanPayload,
   });
 
   if (!result?.ok) {
+    console.error("❌ Erreur Supabase:", result?.error);
     throw new Error(result?.error || "Relay failed");
   }
 

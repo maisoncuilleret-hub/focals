@@ -24,24 +24,10 @@
   // 2. Le script "Espion" qui sera injecté dans la page
   const voyagerSpy = () => {
     const script = document.createElement("script");
-    script.textContent = `
-    (function() {
-      const { fetch: originalFetch } = window;
-      window.fetch = async (...args) => {
-        const response = await originalFetch(...args);
-        const url = args[0]?.url || args[0] || "";
-
-        // On cible le flux de messages (Historique + Nouveaux)
-        if (url.includes('messengerMessages')) {
-          const clone = response.clone();
-          clone.json().then(data => {
-            window.postMessage({ type: 'VOYAGER_RAW_DATA', data }, '*');
-          }).catch(() => {});
-        }
-        return response;
-      };
-    })();
-  `;
+    script.src = chrome.runtime.getURL("src/content/linkedinVoyagerInterceptor.js");
+    script.onload = function () {
+      this.remove();
+    };
     (document.head || document.documentElement).appendChild(script);
   };
 
