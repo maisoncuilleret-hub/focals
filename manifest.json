@@ -51,12 +51,13 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "src/content/linkedinVoyagerInterceptor.js",
         "src/utils/logger.js",
         "src/scrape/ScrapeController.js",
         "src/scrape/domObservers.js",
         "src/api/config.js"
       ],
-      "matches": ["https://www.linkedin.com/*"]
+      "matches": ["*://www.linkedin.com/*"]
     }
   ]
 }

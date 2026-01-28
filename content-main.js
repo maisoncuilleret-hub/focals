@@ -18,6 +18,64 @@
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
   const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
+  // 1. Initialisation du cache de dédoublonnage
+  const processedIds = new Set();
+
+  // 2. Le script "Espion" qui sera injecté dans la page
+  const voyagerSpy = () => {
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("src/content/linkedinVoyagerInterceptor.js");
+    script.onload = function () {
+      this.remove();
+    };
+    (document.head || document.documentElement).appendChild(script);
+  };
+
+  // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
+  window.addEventListener("message", (event) => {
+    if (event.data?.type === "VOYAGER_RAW_DATA") {
+      // Fonction récursive validée en console F12
+      const extract = (obj) => {
+        let found = [];
+        if (!obj || typeof obj !== "object") return found;
+
+        if (obj.text && (obj.messageEvent || obj._type?.includes("Text"))) {
+          found.push({ text: obj.text, id: obj.entityUrn || obj.dashEntityUrn });
+        } else if (obj.body?.text) {
+          found.push({ text: obj.body.text, id: obj.entityUrn || obj.dashEntityUrn });
+        }
+
+        for (let key in obj) {
+          found = found.concat(extract(obj[key]));
+        }
+        return found;
+      };
+
+      const messages = extract(event.data.data);
+
+      messages.forEach((msg) => {
+        if (msg.text && msg.id && !processedIds.has(msg.id)) {
+          processedIds.add(msg.id);
+
+          console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
+
+          // Relais final vers le background script
+          chrome.runtime.sendMessage({
+            type: "FOCALS_INCOMING_RELAY",
+            payload: {
+              text: msg.text,
+              type: "linkedin_voyager_gql",
+              received_at: new Date().toISOString(),
+            },
+          });
+        }
+      });
+    }
+  });
+
+  // Lancement
+  voyagerSpy();
+
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
