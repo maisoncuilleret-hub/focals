@@ -119,20 +119,33 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
 }
 
 async function relayLiveMessageToSupabase(payload) {
+  if (!payload?.text) return;
+
   const cleanPayload = {
-    text: String(payload?.text || "").trim(),
-    conversation_urn: String(payload?.conversation_urn || "unknown"),
-    type: payload?.type || "linkedin_live",
+    text: String(payload.text).trim(),
+    conversation_urn:
+      payload?.conversation_urn && payload.conversation_urn !== "unknown"
+        ? String(payload.conversation_urn)
+        : "urn:li:msg_conversation:(urn:li:fsd_profile:UNKNOWN,2-LIVE-SYNC)",
+    type: payload?.type || "linkedin_voyager_gql",
     received_at: payload?.received_at || new Date().toISOString(),
   };
 
-  if (!cleanPayload.text || cleanPayload.text.length < 2) return;
+  console.log("🚀 [RELAY] Envoi vers Supabase :", cleanPayload.text);
 
-  return await fetchApi({
+  const result = await fetchApi({
     endpoint: "/focals-incoming-message",
     method: "POST",
     body: cleanPayload,
   });
+
+  if (!result?.ok) {
+    console.error("❌ [SUPABASE] Erreur détaillée :", result?.error);
+    return { ok: false, error: result?.error };
+  }
+
+  console.log("✅ [SUPABASE] Message synchronisé !");
+  return result;
 }
 
 const STORAGE_KEYS = {

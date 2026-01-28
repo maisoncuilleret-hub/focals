@@ -33,7 +33,7 @@
 
   // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
-    if (event.data?.type === "VOYAGER_RAW_DATA") {
+    if (event.data?.type === "FOCALS_NETWORK_DATA") {
       // Fonction récursive validée en console F12
       const extract = (obj) => {
         let found = [];
@@ -75,6 +75,36 @@
 
   // Lancement
   voyagerSpy();
+
+  const seenSignatures = new Set();
+
+  const setupLiveObserver = () => {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === 1) {
+            const incomingMessages = node.querySelectorAll(
+              ".msg-s-event-listitem__body, .msg-s-event-listitem--other"
+            );
+            incomingMessages.forEach((msg) => {
+              const text = msg.innerText?.trim();
+              if (text && text.length > 2 && !seenSignatures.has(text)) {
+                seenSignatures.add(text);
+                console.log("🎯 [RADAR DOM LIVE] :", text);
+                chrome.runtime.sendMessage({
+                  type: "FOCALS_INCOMING_RELAY",
+                  payload: { text, type: "linkedin_dom_live" },
+                });
+              }
+            });
+          }
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  };
+
+  setupLiveObserver();
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
