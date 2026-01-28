@@ -1678,6 +1678,19 @@ console.log(
       console.log("[FOCALS SR] observer ON");
     };
 
+    const setupLiveMessageObserver = () => {
+      if (focalsLiveDetectionStarted) return;
+      focalsLiveDetectionStarted = true;
+
+      const root = getLinkedinMessagingRoot();
+      if (!root) return;
+
+      const observer = new MutationObserver(() => {});
+      window.__FOCALS_MSG_OBSERVER__ = observer;
+      observer.observe(root, { childList: true, subtree: true });
+      console.log("🎯 [RADAR] Live message observer active");
+    };
+
 
     const initMessagingWatcher = () => {
       console.log("🚀 [FOCALS] Smart Reply UI Active");
