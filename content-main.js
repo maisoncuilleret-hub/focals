@@ -34,36 +34,39 @@
     return out;
   };
 
+  const captureIdentityForDomRadar = () => {
+    const bubble =
+      document.querySelector(".msg-overlay-conversation-bubble:focus-within") ||
+      document.querySelector(".msg-overlay-conversation-bubble");
+
+    if (!bubble) return null;
+
+    const nameEl = bubble.querySelector(
+      ".msg-overlay-bubble-header__title, .msg-entity-lockup__entity-title"
+    );
+    let cleanName = nameEl ? nameEl.innerText.split("\n")[0] : "Unknown";
+    cleanName = cleanName
+      .replace(/Gérer le prospect|Manage prospect|Voir le profil/gi, "")
+      .trim();
+
+    const linkEl = bubble.querySelector('a[href*="/in/"]');
+    const internalUrl = linkEl ? linkEl.href.split("?")[0] : "unknown";
+
+    return {
+      match_name: cleanName,
+      profile_url: internalUrl,
+    };
+  };
+
   const getIdentity = () => {
-    const activeElement = document.activeElement;
-    const focusedBubble =
-      activeElement?.closest?.(".msg-overlay-bubble, .msg-overlay-conversation-bubble") ||
-      document.querySelector(
-        ".msg-overlay-bubble--is-focused, .msg-overlay-bubble--is-active, .msg-overlay-bubble--active, .msg-overlay-bubble--is-open"
-      ) ||
-      document.querySelector(".msg-overlay-bubble, .msg-overlay-conversation-bubble");
-
-    const profileLink = focusedBubble?.querySelector(".msg-overlay-bubble-header__link");
-    const profileUrl = profileLink?.href || null;
-    const nameCandidates = [
-      focusedBubble?.querySelector(".msg-overlay-bubble-header__name"),
-      focusedBubble?.querySelector(".msg-overlay-bubble-header__title"),
-      focusedBubble?.querySelector(".msg-overlay-bubble-header__details"),
-      profileLink,
-    ];
-    const matchName =
-      nameCandidates.map((node) => clean(node?.textContent)).find((value) => value) ||
-      "unknown";
-
-    if (profileUrl) {
-      return { match_name: matchName, profile_url: profileUrl };
-    }
+    const identity = captureIdentityForDomRadar();
+    if (identity) return identity;
 
     if (/linkedin\.com\/in\//i.test(window.location.href)) {
-      return { match_name: matchName, profile_url: window.location.href };
+      return { match_name: "Unknown", profile_url: window.location.href };
     }
 
-    return { match_name: matchName, profile_url: "unknown" };
+    return { match_name: "Unknown", profile_url: "unknown" };
   };
 
   // 1. Initialisation du cache de dédoublonnage
@@ -100,7 +103,7 @@
       };
 
       const messages = extract(event.data.data);
-      const identity = getIdentity();
+      const identity = captureIdentityForDomRadar() || getIdentity();
 
       messages.forEach((msg) => {
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
@@ -143,7 +146,11 @@
                 console.log("🎯 [RADAR DOM LIVE] :", text);
                 chrome.runtime.sendMessage({
                   type: "FOCALS_INCOMING_RELAY",
-                  payload: { text, type: "linkedin_dom_live" },
+                  payload: {
+                    text,
+                    type: "linkedin_dom_live",
+                    identity: captureIdentityForDomRadar(),
+                  },
                 });
               }
             });
