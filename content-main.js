@@ -18,6 +18,57 @@
   const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
   const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
+  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const uniq = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) {
+      const v = clean(x);
+      if (!v) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+    }
+    return out;
+  };
+
+  const captureIdentityForDomRadar = () => {
+    const bubble =
+      document.querySelector(".msg-overlay-conversation-bubble:focus-within") ||
+      document.querySelector(".msg-overlay-conversation-bubble");
+
+    if (!bubble) return null;
+
+    const nameEl = bubble.querySelector(
+      ".msg-overlay-bubble-header__title, .msg-entity-lockup__entity-title"
+    );
+    let cleanName = nameEl ? nameEl.innerText.split("\n")[0] : "Unknown";
+    cleanName = cleanName
+      .replace(/Gérer le prospect|Manage prospect|Voir le profil/gi, "")
+      .trim();
+
+    const linkEl = bubble.querySelector('a[href*="/in/"]');
+    const internalUrl = linkEl ? linkEl.href.split("?")[0] : "unknown";
+
+    return {
+      match_name: cleanName,
+      profile_url: internalUrl,
+    };
+  };
+
+  const getIdentity = () => {
+    const identity = captureIdentityForDomRadar();
+    if (identity) return identity;
+
+    if (/linkedin\.com\/in\//i.test(window.location.href)) {
+      return { match_name: "Unknown", profile_url: window.location.href };
+    }
+
+    return { match_name: "Unknown", profile_url: "unknown" };
+  };
+
   // 1. Initialisation du cache de dédoublonnage
   const processedIds = new Set();
 
@@ -52,6 +103,7 @@
       };
 
       const messages = extract(event.data.data);
+      const identity = captureIdentityForDomRadar() || getIdentity();
 
       messages.forEach((msg) => {
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
@@ -66,6 +118,7 @@
               text: msg.text,
               type: "linkedin_voyager_gql",
               received_at: new Date().toISOString(),
+              identity,
             },
           });
         }
@@ -93,7 +146,11 @@
                 console.log("🎯 [RADAR DOM LIVE] :", text);
                 chrome.runtime.sendMessage({
                   type: "FOCALS_INCOMING_RELAY",
-                  payload: { text, type: "linkedin_dom_live" },
+                  payload: {
+                    text,
+                    type: "linkedin_dom_live",
+                    identity: captureIdentityForDomRadar(),
+                  },
                 });
               }
             });
@@ -105,22 +162,6 @@
   };
 
   setupLiveObserver();
-
-  const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  const uniq = (arr) => {
-    const seen = new Set();
-    const out = [];
-    for (const x of arr) {
-      const v = clean(x);
-      if (!v) continue;
-      if (seen.has(v)) continue;
-      seen.add(v);
-      out.push(v);
-    }
-    return out;
-  };
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const normalizeProfilePath = (pathname = "") => {
@@ -2023,6 +2064,11 @@
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request?.type === "FOCALS_PING") {
         sendResponse({ status: "pong" });
+        return true;
+      }
+
+      if (request?.type === "GET_CURRENT_CONTEXT") {
+        sendResponse(getIdentity());
         return true;
       }
 
