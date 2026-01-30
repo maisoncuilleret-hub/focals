@@ -169,27 +169,30 @@
           const messageNodes = node.classList?.contains("msg-s-event-listitem")
             ? [node]
             : Array.from(node.querySelectorAll(".msg-s-event-listitem"));
+          const messageNode = messageNodes[messageNodes.length - 1];
+          if (!messageNode) return;
 
-          messageNodes.forEach((messageNode) => {
-            const text =
-              messageNode.querySelector(".msg-s-event-listitem__body")?.innerText?.trim() ||
-              "";
+          const text =
+            messageNode.querySelector(".msg-s-event-listitem__body")?.innerText?.trim() ||
+            "";
 
-            if (!text || text.length <= 2 || seenSignatures.has(text)) return;
+          if (!text || text.length <= 2 || seenSignatures.has(text)) return;
 
-            const identity = captureIsolatedIdentity(messageNode);
-            if (!identity) return;
+          const identity = captureIsolatedIdentity(messageNode);
+          if (!identity) return;
 
-            seenSignatures.add(text);
-            console.log("🎯 [RADAR DOM LIVE] :", text);
-            chrome.runtime.sendMessage({
-              type: "FOCALS_INCOMING_RELAY",
-              payload: {
-                text,
-                type: "linkedin_dom_live",
-                identity,
-              },
-            });
+          const isFromMe = !messageNode.classList.contains("msg-s-event-listitem--other");
+
+          seenSignatures.add(text);
+          console.log("🎯 [RADAR DOM LIVE] :", text);
+          chrome.runtime.sendMessage({
+            type: "FOCALS_INCOMING_RELAY",
+            payload: {
+              text,
+              type: "linkedin_dom_live",
+              identity,
+              is_from_me: isFromMe,
+            },
           });
         });
       });
