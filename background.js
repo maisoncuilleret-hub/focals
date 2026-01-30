@@ -1817,6 +1817,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       return true;
     }
+    case "FOCALS_UPSERT_INTERACTIONS": {
+      const payload = message?.payload;
+      if (!Array.isArray(payload) || !payload.length) {
+        sendResponse({ ok: false, error: "Missing interactions payload" });
+        return false;
+      }
+
+      supabase
+        .from("interactions")
+        .upsert(payload, { onConflict: "external_id" })
+        .then(({ error }) => {
+          if (error) {
+            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
+            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true, count: payload.length });
+        })
+        .catch((err) => {
+          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
+        });
+
+      return true;
+    }
+    case "FOCALS_VOYAGER_CONVERSATIONS": {
+      const payload = message?.payload;
+      if (!payload || typeof payload !== "object") {
+        sendResponse({ ok: false, error: "Missing voyager payload" });
+        return false;
+      }
+
+      const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+      const records = elements
+        .map((item) => {
+          const externalId = item?.entityUrn || null;
+          const participant = item?.participants?.[0]?.messagingMember || null;
+          const contactName = participant?.miniProfile?.firstName || null;
+          const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
+          if (!externalId) return null;
+          return {
+            external_id: externalId,
+            contact_name: contactName,
+            last_message: lastMessage,
+            source: "linkedin_voyager",
+            synced_at: new Date().toISOString(),
+            sync_reason: "intercepted",
+          };
+        })
+        .filter(Boolean);
+
+      if (!records.length) {
+        sendResponse({ ok: true, count: 0 });
+        return false;
+      }
+
+      supabase
+        .from("interactions")
+        .upsert(records, { onConflict: "external_id" })
+        .then(({ error }) => {
+          if (error) {
+            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
+            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true, count: records.length });
+        })
+        .catch((err) => {
+          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
+        });
+
+      return true;
+    }
     case "NEW_LIVE_MESSAGE": {
       const payload = message?.data || null;
       if (!payload) {
