@@ -163,6 +163,15 @@
     }
   });
 
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const payload = event?.detail?.data || null;
+    if (!payload || typeof payload !== "object") return;
+    chrome.runtime.sendMessage({
+      type: "FOCALS_VOYAGER_CONVERSATIONS",
+      payload,
+    });
+  });
+
   // Lancement
   voyagerSpy();
 
