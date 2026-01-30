@@ -1929,6 +1929,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       return true;
     }
+    case "NEW_LINKEDIN_MESSAGES": {
+      const payload = message?.payload || null;
+      const messages = payload?.messages;
+      if (!Array.isArray(messages) || !messages.length) {
+        sendResponse({ ok: false, error: "Missing LinkedIn messages payload" });
+        return false;
+      }
+
+      const normalizeDate = (value) => {
+        if (!value) return null;
+        if (typeof value === "number") return new Date(value).toISOString();
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? null : date.toISOString();
+      };
+
+      Promise.all(
+        messages.map((messageItem) =>
+          relayLiveMessageToSupabase({
+            text: messageItem?.text,
+            conversation_urn: messageItem?.conversation_urn,
+            type: "linkedin_voyager_gql",
+            received_at: normalizeDate(messageItem?.created_at),
+            identity: messageItem?.actor_name
+              ? { match_name: messageItem.actor_name }
+              : null,
+          })
+        )
+      )
+        .then(() => {
+          sendResponse({ ok: true, count: messages.length });
+        })
+        .catch((err) => {
+          console.error("🎯 [RADAR] LinkedIn message sync failed", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "LinkedIn sync failed" });
+        });
+
+      return true;
+    }
     case "BOUNCER_REQUEST": {
       const { endpoint, options = {} } = message || {};
       if (!endpoint) {

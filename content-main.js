@@ -163,12 +163,129 @@
     }
   });
 
+  const buildProfileDirectory = (payload) => {
+    const directory = new Map();
+    const visit = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+
+      const miniProfile = node.miniProfile || node;
+      const firstName = miniProfile?.firstName || node.firstName;
+      const lastName = miniProfile?.lastName || node.lastName;
+      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+      const urn =
+        miniProfile?.entityUrn ||
+        miniProfile?.objectUrn ||
+        node.entityUrn ||
+        node.objectUrn ||
+        node.publicIdentifier ||
+        node.profileUrn;
+      if (urn && name && !directory.has(urn)) {
+        directory.set(urn, { urn, name });
+      }
+
+      Object.values(node).forEach(visit);
+    };
+
+    if (payload?.included) visit(payload.included);
+    if (payload?.data) visit(payload.data);
+    return directory;
+  };
+
+  const extractMessageText = (node) => {
+    if (!node || typeof node !== "object") return null;
+    const text =
+      node?.eventContent?.attributedBody?.text ||
+      node?.eventContent?.messageEvent?.body?.text ||
+      node?.eventContent?.messageEvent?.text ||
+      node?.attributedBody?.text ||
+      node?.body?.text ||
+      node?.message?.text ||
+      node?.text;
+    return typeof text === "string" ? text : null;
+  };
+
+  const extractActorUrn = (node) =>
+    node?.actorUrn ||
+    node?.eventContent?.messageEvent?.actorUrn ||
+    node?.eventContent?.actorUrn ||
+    node?.from?.entityUrn ||
+    node?.from?.messagingMember?.entityUrn ||
+    node?.from?.messagingMember?.miniProfile?.entityUrn ||
+    node?.from?.miniProfile?.entityUrn ||
+    null;
+
+  const extractMessageTimestamp = (node) =>
+    node?.createdTime ||
+    node?.createdAt ||
+    node?.eventCreatedAt ||
+    node?.eventOccurredAt ||
+    node?.timestamp ||
+    node?.eventTime ||
+    null;
+
+  const extractVoyagerMessages = (payload) => {
+    const directory = buildProfileDirectory(payload);
+    const messages = [];
+    const visited = new WeakSet();
+    const seen = new Set();
+
+    const visit = (node, conversationUrn = null) => {
+      if (!node || typeof node !== "object") return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
+      if (Array.isArray(node)) {
+        node.forEach((item) => visit(item, conversationUrn));
+        return;
+      }
+
+      let nextConversationUrn = conversationUrn;
+      if (typeof node.conversationUrn === "string") {
+        nextConversationUrn = node.conversationUrn;
+      } else if (typeof node.entityUrn === "string" && node.entityUrn.includes("msg_conversation")) {
+        nextConversationUrn = node.entityUrn;
+      }
+
+      const text = extractMessageText(node);
+      const actorUrn = extractActorUrn(node);
+      if (text && actorUrn) {
+        const messageUrn = node.entityUrn || node.dashEntityUrn || node.messageUrn;
+        const signature = messageUrn || `${actorUrn}:${text}:${extractMessageTimestamp(node) || ""}`;
+        if (!seen.has(signature)) {
+          seen.add(signature);
+          const actor = directory.get(actorUrn);
+          messages.push({
+            text,
+            actor_urn: actorUrn,
+            actor_name: actor?.name || null,
+            created_at: extractMessageTimestamp(node),
+            conversation_urn: nextConversationUrn,
+          });
+        }
+      }
+
+      Object.values(node).forEach((value) => visit(value, nextConversationUrn));
+    };
+
+    visit(payload);
+    return messages;
+  };
+
   window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
-    const payload = event?.detail?.data || null;
-    if (!payload || typeof payload !== "object") return;
+    const { url, data } = event?.detail || {};
+    if (!data || typeof data !== "object") return;
+    const messages = extractVoyagerMessages(data);
+    if (!messages.length) return;
     chrome.runtime.sendMessage({
-      type: "FOCALS_VOYAGER_CONVERSATIONS",
-      payload,
+      type: "NEW_LINKEDIN_MESSAGES",
+      payload: {
+        url,
+        messages,
+      },
     });
   });
 
