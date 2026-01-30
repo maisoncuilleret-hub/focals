@@ -113,6 +113,14 @@
 
   // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
+    if (event.data?.type === "FOCALS_VOYAGER_CONVERSATIONS") {
+      chrome.runtime.sendMessage({
+        type: "FOCALS_VOYAGER_CONVERSATIONS",
+        payload: event.data?.data || null,
+      });
+      return;
+    }
+
     if (event.data?.type === "FOCALS_NETWORK_DATA") {
       // Fonction récursive validée en console F12
       const extract = (obj) => {

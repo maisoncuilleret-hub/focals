@@ -1,3 +1,34 @@
+(() => {
+  if (window.__FOCALS_XHR_INTERCEPTOR__) return;
+  window.__FOCALS_XHR_INTERCEPTOR__ = true;
+
+  const XHR = XMLHttpRequest.prototype;
+  const open = XHR.open;
+  const send = XHR.send;
+
+  XHR.open = function (method, url) {
+    this._url = url;
+    return open.apply(this, arguments);
+  };
+
+  XHR.send = function () {
+    this.addEventListener("load", function () {
+      if (this._url && this._url.includes("voyager/api/messaging/conversations")) {
+        try {
+          const responseData = JSON.parse(this.responseText);
+          console.log("🎯 [SaaS-Debug] Flux de conversations intercepté !");
+          if (typeof window.processInterceptedMessages === "function") {
+            window.processInterceptedMessages(responseData);
+          }
+        } catch (e) {
+          console.error("❌ [SaaS-Debug] Erreur lecture interception:", e);
+        }
+      }
+    });
+    return send.apply(this, arguments);
+  };
+})();
+
 console.log('[FOCALS DEBUG] messaging content script loaded – v3');
 console.log(
   '[FOCALS DEBUG] messaging content script context:',
@@ -43,6 +74,69 @@ console.log(
     // Fallback : comportement classique (pas de Shadow DOM)
     return document;
   }
+
+  let lastInterceptedPayload = null;
+
+  async function processInterceptedMessages(payload, { reason = "auto" } = {}) {
+    lastInterceptedPayload = payload;
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    const messages = elements
+      .map((item) => {
+        const externalId = item?.entityUrn || null;
+        const participant =
+          item?.participants?.[0]?.messagingMember ||
+          item?.participants?.[0]?.["com.linkedin.voyager.messaging.MessagingMember"] ||
+          item?.participants?.[0] ||
+          null;
+        const contactName =
+          participant?.miniProfile?.firstName ||
+          participant?.profile?.firstName ||
+          participant?.firstName ||
+          null;
+        const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
+        if (!externalId) return null;
+        return {
+          external_id: externalId,
+          contact_name: contactName,
+          last_message: lastMessage,
+          source: "linkedin_voyager",
+          synced_at: new Date().toISOString(),
+          sync_reason: reason,
+        };
+      })
+      .filter(Boolean);
+
+    console.log("💾 [SaaS-Debug] Données prêtes pour Supabase", messages);
+    if (!messages.length) {
+      return { ok: true, count: 0 };
+    }
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: "FOCALS_UPSERT_INTERACTIONS",
+          payload: messages,
+        },
+        (result) => {
+          if (chrome.runtime.lastError) {
+            console.error(
+              "[SaaS-Debug] Supabase relay failed:",
+              chrome.runtime.lastError.message
+            );
+            resolve({
+              ok: false,
+              error: chrome.runtime.lastError.message,
+            });
+            return;
+          }
+          resolve(result || { ok: false, error: "No response" });
+        }
+      );
+    });
+  }
+
+  window.processInterceptedMessages = (payload) =>
+    processInterceptedMessages(payload, { reason: "intercepted" });
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
@@ -1708,11 +1802,35 @@ console.log(
       }
     };
 
+    if (chrome?.runtime?.onMessage?.addListener) {
+      chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request?.type === "FOCALS_SYNC_LINKEDIN_MESSAGES") {
+          if (!lastInterceptedPayload) {
+            sendResponse({
+              ok: false,
+              error: "No intercepted data yet. Open LinkedIn messaging first.",
+            });
+            return false;
+          }
+          processInterceptedMessages(lastInterceptedPayload, {
+            reason: request?.reason || "manual",
+          })
+            .then((result) => sendResponse(result))
+            .catch((error) =>
+              sendResponse({ ok: false, error: error?.message || "SYNC_FAILED" })
+            );
+          return true;
+        }
+        return false;
+      });
+    }
+
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", initMessagingWatcher);
     } else {
       initMessagingWatcher();
     }
+
   } catch (err) {
     console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
   }
