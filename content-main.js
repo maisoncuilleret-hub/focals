@@ -195,25 +195,6 @@
     return directory;
   };
 
-  const extractParticipant = (participant, directory) => {
-    if (!participant || typeof participant !== "object") return null;
-    const member = participant.messagingMember || participant;
-    const miniProfile = member.miniProfile || member;
-    const urn =
-      miniProfile?.entityUrn ||
-      miniProfile?.objectUrn ||
-      member.entityUrn ||
-      member.objectUrn ||
-      member.profileUrn;
-    const name = [miniProfile?.firstName || member.firstName, miniProfile?.lastName || member.lastName]
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-    if (urn && directory?.has(urn)) return directory.get(urn);
-    if (name) return { urn: urn || null, name };
-    return null;
-  };
-
   const extractMessageText = (node) => {
     if (!node || typeof node !== "object") return null;
     const text =
@@ -227,153 +208,85 @@
     return typeof text === "string" ? text : null;
   };
 
-  const extractTimestamp = (node) => {
-    const ts =
-      node?.eventCreatedAt ||
-      node?.eventOccurredAt ||
-      node?.createdAt ||
-      node?.timestamp ||
-      node?.eventTime;
-    return typeof ts === "number" ? ts : null;
-  };
+  const extractActorUrn = (node) =>
+    node?.actorUrn ||
+    node?.eventContent?.messageEvent?.actorUrn ||
+    node?.eventContent?.actorUrn ||
+    node?.from?.entityUrn ||
+    node?.from?.messagingMember?.entityUrn ||
+    node?.from?.messagingMember?.miniProfile?.entityUrn ||
+    node?.from?.miniProfile?.entityUrn ||
+    null;
 
-  const extractConversationRecords = (payload) => {
+  const extractMessageTimestamp = (node) =>
+    node?.createdTime ||
+    node?.createdAt ||
+    node?.eventCreatedAt ||
+    node?.eventOccurredAt ||
+    node?.timestamp ||
+    node?.eventTime ||
+    null;
+
+  const extractVoyagerMessages = (payload) => {
     const directory = buildProfileDirectory(payload);
-    const conversations = new Map();
+    const messages = [];
+    const visited = new WeakSet();
+    const seen = new Set();
 
-    const upsertConversation = (urn, update) => {
-      if (!urn) return;
-      const entry = conversations.get(urn) || {
-        participants: new Map(),
-        lastMessage: null,
-        lastTimestamp: null,
-      };
-
-      if (Array.isArray(update?.participants)) {
-        update.participants.forEach((participant) => {
-          if (!participant) return;
-          const key = participant.urn || participant.name;
-          if (key && !entry.participants.has(key)) {
-            entry.participants.set(key, participant);
-          }
-        });
-      }
-
-      if (update?.lastMessage) {
-        const nextTimestamp = update.lastTimestamp ?? null;
-        const shouldUpdate =
-          entry.lastTimestamp == null ||
-          (nextTimestamp != null && nextTimestamp >= entry.lastTimestamp);
-        if (shouldUpdate) {
-          entry.lastMessage = update.lastMessage;
-          entry.lastTimestamp = nextTimestamp ?? entry.lastTimestamp;
-        }
-      }
-
-      conversations.set(urn, entry);
-    };
-
-    const visit = (node) => {
+    const visit = (node, conversationUrn = null) => {
       if (!node || typeof node !== "object") return;
+      if (visited.has(node)) return;
+      visited.add(node);
+
       if (Array.isArray(node)) {
-        node.forEach(visit);
+        node.forEach((item) => visit(item, conversationUrn));
         return;
       }
 
-      const conversationUrn =
-        typeof node.conversationUrn === "string"
-          ? node.conversationUrn
-          : typeof node.entityUrn === "string" && node.entityUrn.includes("msg_conversation")
-            ? node.entityUrn
-            : null;
-
-      const participants = Array.isArray(node.participants)
-        ? node.participants.map((participant) => extractParticipant(participant, directory)).filter(Boolean)
-        : [];
-
-      if (conversationUrn && participants.length) {
-        upsertConversation(conversationUrn, { participants });
-      }
-
-      const directText = extractMessageText(node);
-      if (conversationUrn && directText) {
-        upsertConversation(conversationUrn, {
-          lastMessage: directText,
-          lastTimestamp: extractTimestamp(node),
-          participants,
-        });
-      }
-
-      if (conversationUrn && Array.isArray(node.events)) {
-        let bestText = null;
-        let bestTimestamp = null;
-        node.events.forEach((event) => {
-          const text = extractMessageText(event);
-          if (!text) return;
-          const ts = extractTimestamp(event);
-          if (bestText == null || (ts != null && (bestTimestamp == null || ts > bestTimestamp))) {
-            bestText = text;
-            bestTimestamp = ts;
-          }
-        });
-        if (bestText) {
-          upsertConversation(conversationUrn, {
-            lastMessage: bestText,
-            lastTimestamp: bestTimestamp,
-            participants,
-          });
-        }
-      }
-
+      let nextConversationUrn = conversationUrn;
       if (typeof node.conversationUrn === "string") {
-        const inlineText = extractMessageText(node);
-        if (inlineText) {
-          upsertConversation(node.conversationUrn, {
-            lastMessage: inlineText,
-            lastTimestamp: extractTimestamp(node),
+        nextConversationUrn = node.conversationUrn;
+      } else if (typeof node.entityUrn === "string" && node.entityUrn.includes("msg_conversation")) {
+        nextConversationUrn = node.entityUrn;
+      }
+
+      const text = extractMessageText(node);
+      const actorUrn = extractActorUrn(node);
+      if (text && actorUrn) {
+        const messageUrn = node.entityUrn || node.dashEntityUrn || node.messageUrn;
+        const signature = messageUrn || `${actorUrn}:${text}:${extractMessageTimestamp(node) || ""}`;
+        if (!seen.has(signature)) {
+          seen.add(signature);
+          const actor = directory.get(actorUrn);
+          messages.push({
+            text,
+            actor_urn: actorUrn,
+            actor_name: actor?.name || null,
+            created_at: extractMessageTimestamp(node),
+            conversation_urn: nextConversationUrn,
           });
         }
       }
 
-      Object.values(node).forEach(visit);
+      Object.values(node).forEach((value) => visit(value, nextConversationUrn));
     };
 
     visit(payload);
-
-    const now = new Date().toISOString();
-    const records = [];
-    conversations.forEach((entry, urn) => {
-      const participants = Array.from(entry.participants.values());
-      const contactName = participants.map((p) => p.name).filter(Boolean).join(", ") || null;
-      if (!urn) return;
-      records.push({
-        external_id: urn,
-        contact_name: contactName,
-        last_message: entry.lastMessage || null,
-        source: "linkedin_voyager",
-        synced_at: now,
-        sync_reason: "intercepted",
-      });
-    });
-    return records.filter((record) => record.external_id && (record.last_message || record.contact_name));
+    return messages;
   };
 
   window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
-    const payload = event?.detail?.data || null;
-    if (!payload || typeof payload !== "object") return;
-    const records = extractConversationRecords(payload);
-    if (!records.length) return;
-    chrome.runtime.sendMessage(
-      {
-        type: "FOCALS_UPSERT_INTERACTIONS",
-        payload: records,
+    const { url, data } = event?.detail || {};
+    if (!data || typeof data !== "object") return;
+    const messages = extractVoyagerMessages(data);
+    if (!messages.length) return;
+    chrome.runtime.sendMessage({
+      type: "NEW_LINKEDIN_MESSAGES",
+      payload: {
+        url,
+        messages,
       },
-      (response) => {
-        if (response?.ok === false) {
-          warn("Voyager upsert failed", response?.error || response);
-        }
-      }
-    );
+    });
   });
 
   // Lancement
