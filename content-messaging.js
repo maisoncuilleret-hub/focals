@@ -44,6 +44,102 @@ console.log(
     return document;
   }
 
+  function getCsrfTokenFromCookies() {
+    const cookie = document.cookie || "";
+    const match = cookie.match(/JSESSIONID=\"([^\"]+)\"/);
+    const token = match ? match[1] : "";
+    console.log("[SaaS-Debug] Token extraction:", token ? "found" : "missing");
+    return token;
+  }
+
+  async function syncLinkedInMessages({ reason = "auto" } = {}) {
+    const csrfToken = getCsrfTokenFromCookies();
+    if (!csrfToken) {
+      console.warn("[SaaS-Debug] Missing csrf-token, aborting sync");
+      return { ok: false, error: "Missing csrf-token" };
+    }
+
+    const url =
+      "https://www.linkedin.com/voyager/api/messaging/conversations?count=20&q=all";
+    let response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        headers: {
+          accept: "application/vnd.linkedin.normalized+json+2.1",
+          "csrf-token": csrfToken,
+          "x-restli-protocol-version": "2.0.0",
+          "x-li-track": "{\"clientVersion\":\"1.13.42216\",\"mpName\":\"voyager-web\"}",
+        },
+      });
+    } catch (error) {
+      console.error("[SaaS-Debug] Request failed:", error?.message || error);
+      return { ok: false, error: error?.message || "Network error" };
+    }
+
+    console.log("[SaaS-Debug] Response status:", response.status);
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.warn("[SaaS-Debug] Non-200 response:", text);
+      return { ok: false, error: `HTTP ${response.status}` };
+    }
+
+    const payload = await response.json().catch(() => null);
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    const messages = elements
+      .map((item) => {
+        const externalId = item?.entityUrn || null;
+        const participant =
+          item?.participants?.[0]?.["com.linkedin.voyager.messaging.MessagingMember"] ||
+          item?.participants?.[0] ||
+          null;
+        const contactName =
+          participant?.firstName ||
+          participant?.miniProfile?.firstName ||
+          participant?.profile?.firstName ||
+          null;
+        const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
+        if (!externalId) return null;
+        return {
+          external_id: externalId,
+          contact_name: contactName,
+          last_message: lastMessage,
+          source: "linkedin_voyager",
+          synced_at: new Date().toISOString(),
+          sync_reason: reason,
+        };
+      })
+      .filter(Boolean);
+
+    console.log("[SaaS-Debug] Messages retrieved:", messages.length);
+    if (!messages.length) {
+      return { ok: true, count: 0 };
+    }
+
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          type: "FOCALS_UPSERT_INTERACTIONS",
+          payload: messages,
+        },
+        (result) => {
+          if (chrome.runtime.lastError) {
+            console.error(
+              "[SaaS-Debug] Supabase relay failed:",
+              chrome.runtime.lastError.message
+            );
+            resolve({
+              ok: false,
+              error: chrome.runtime.lastError.message,
+            });
+            return;
+          }
+          resolve(result || { ok: false, error: "No response" });
+        }
+      );
+    });
+  }
+
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       const payload = { type: "API_REQUEST", endpoint, method, body, params };
@@ -1708,10 +1804,33 @@ console.log(
       }
     };
 
+    if (chrome?.runtime?.onMessage?.addListener) {
+      chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request?.type === "FOCALS_SYNC_LINKEDIN_MESSAGES") {
+          syncLinkedInMessages({ reason: request?.reason || "manual" })
+            .then((result) => sendResponse(result))
+            .catch((error) =>
+              sendResponse({ ok: false, error: error?.message || "SYNC_FAILED" })
+            );
+          return true;
+        }
+        return false;
+      });
+    }
+
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", initMessagingWatcher);
     } else {
       initMessagingWatcher();
+    }
+
+    if (!window.__FOCALS_LINKEDIN_MESSAGES_SYNCED__) {
+      window.__FOCALS_LINKEDIN_MESSAGES_SYNCED__ = true;
+      setTimeout(() => {
+        syncLinkedInMessages({ reason: "auto" }).catch((error) =>
+          console.warn("[SaaS-Debug] Auto sync failed:", error?.message || error)
+        );
+      }, 2000);
     }
   } catch (err) {
     console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);

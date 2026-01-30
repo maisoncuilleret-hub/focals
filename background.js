@@ -1817,6 +1817,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       return true;
     }
+    case "FOCALS_UPSERT_INTERACTIONS": {
+      const payload = message?.payload;
+      if (!Array.isArray(payload) || !payload.length) {
+        sendResponse({ ok: false, error: "Missing interactions payload" });
+        return false;
+      }
+
+      supabase
+        .from("interactions")
+        .upsert(payload, { onConflict: "external_id" })
+        .then(({ error }) => {
+          if (error) {
+            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
+            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true, count: payload.length });
+        })
+        .catch((err) => {
+          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
+        });
+
+      return true;
+    }
     case "NEW_LIVE_MESSAGE": {
       const payload = message?.data || null;
       if (!payload) {
