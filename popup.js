@@ -765,6 +765,7 @@ function setupProfileActions() {
   const refreshBtn = document.getElementById("refreshProfile");
   const associateBtn = document.getElementById("associateProfile");
   const copyJsonBtn = document.getElementById("copyProfileJson");
+  const syncBtn = document.getElementById("syncLinkedInMessages");
   const statusEl = document.getElementById("profileStatus");
 
   if (refreshBtn) {
@@ -787,6 +788,33 @@ function setupProfileActions() {
 
   if (copyJsonBtn) {
     copyJsonBtn.addEventListener("click", () => handleCopyProfileJson());
+  }
+
+  if (syncBtn) {
+    syncBtn.addEventListener("click", async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) {
+        statusEl.innerText = "Impossible de détecter l'onglet actif.";
+        return;
+      }
+
+      statusEl.innerText = "Synchronisation des messages... ⏳";
+      chrome.tabs.sendMessage(
+        tab.id,
+        { type: "FOCALS_SYNC_LINKEDIN_MESSAGES", reason: "popup_manual" },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            statusEl.innerText = "Erreur lors de la synchronisation.";
+            return;
+          }
+          if (response?.ok) {
+            statusEl.innerText = `Synchronisation terminée (${response.count || 0}).`;
+          } else {
+            statusEl.innerText = "Synchronisation impossible.";
+          }
+        }
+      );
+    });
   }
 }
 
