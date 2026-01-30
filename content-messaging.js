@@ -1,3 +1,34 @@
+(() => {
+  if (window.__FOCALS_XHR_INTERCEPTOR__) return;
+  window.__FOCALS_XHR_INTERCEPTOR__ = true;
+
+  const XHR = XMLHttpRequest.prototype;
+  const open = XHR.open;
+  const send = XHR.send;
+
+  XHR.open = function (method, url) {
+    this._url = url;
+    return open.apply(this, arguments);
+  };
+
+  XHR.send = function () {
+    this.addEventListener("load", function () {
+      if (this._url && this._url.includes("voyager/api/messaging/conversations")) {
+        try {
+          const responseData = JSON.parse(this.responseText);
+          console.log("🎯 [SaaS-Debug] Flux de conversations intercepté !");
+          if (typeof window.processInterceptedMessages === "function") {
+            window.processInterceptedMessages(responseData);
+          }
+        } catch (e) {
+          console.error("❌ [SaaS-Debug] Erreur lecture interception:", e);
+        }
+      }
+    });
+    return send.apply(this, arguments);
+  };
+})();
+
 console.log('[FOCALS DEBUG] messaging content script loaded – v3');
 console.log(
   '[FOCALS DEBUG] messaging content script context:',
@@ -44,59 +75,23 @@ console.log(
     return document;
   }
 
-  function getCsrfTokenFromCookies() {
-    const cookie = document.cookie || "";
-    const match = cookie.match(/JSESSIONID=\"([^\"]+)\"/);
-    const token = match ? match[1] : "";
-    console.log("[SaaS-Debug] Token extraction:", token ? "found" : "missing");
-    return token;
-  }
+  let lastInterceptedPayload = null;
 
-  async function syncLinkedInMessages({ reason = "auto" } = {}) {
-    const csrfToken = getCsrfTokenFromCookies();
-    if (!csrfToken) {
-      console.warn("[SaaS-Debug] Missing csrf-token, aborting sync");
-      return { ok: false, error: "Missing csrf-token" };
-    }
-
-    const url =
-      "https://www.linkedin.com/voyager/api/messaging/conversations?count=20&q=all";
-    let response;
-    try {
-      response = await fetch(url, {
-        method: "GET",
-        headers: {
-          accept: "application/vnd.linkedin.normalized+json+2.1",
-          "csrf-token": csrfToken,
-          "x-restli-protocol-version": "2.0.0",
-          "x-li-track": "{\"clientVersion\":\"1.13.42216\",\"mpName\":\"voyager-web\"}",
-        },
-      });
-    } catch (error) {
-      console.error("[SaaS-Debug] Request failed:", error?.message || error);
-      return { ok: false, error: error?.message || "Network error" };
-    }
-
-    console.log("[SaaS-Debug] Response status:", response.status);
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      console.warn("[SaaS-Debug] Non-200 response:", text);
-      return { ok: false, error: `HTTP ${response.status}` };
-    }
-
-    const payload = await response.json().catch(() => null);
+  async function processInterceptedMessages(payload, { reason = "auto" } = {}) {
+    lastInterceptedPayload = payload;
     const elements = Array.isArray(payload?.elements) ? payload.elements : [];
     const messages = elements
       .map((item) => {
         const externalId = item?.entityUrn || null;
         const participant =
+          item?.participants?.[0]?.messagingMember ||
           item?.participants?.[0]?.["com.linkedin.voyager.messaging.MessagingMember"] ||
           item?.participants?.[0] ||
           null;
         const contactName =
-          participant?.firstName ||
           participant?.miniProfile?.firstName ||
           participant?.profile?.firstName ||
+          participant?.firstName ||
           null;
         const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
         if (!externalId) return null;
@@ -111,7 +106,7 @@ console.log(
       })
       .filter(Boolean);
 
-    console.log("[SaaS-Debug] Messages retrieved:", messages.length);
+    console.log("💾 [SaaS-Debug] Données prêtes pour Supabase", messages);
     if (!messages.length) {
       return { ok: true, count: 0 };
     }
@@ -139,6 +134,9 @@ console.log(
       );
     });
   }
+
+  window.processInterceptedMessages = (payload) =>
+    processInterceptedMessages(payload, { reason: "intercepted" });
 
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
@@ -1807,7 +1805,16 @@ console.log(
     if (chrome?.runtime?.onMessage?.addListener) {
       chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request?.type === "FOCALS_SYNC_LINKEDIN_MESSAGES") {
-          syncLinkedInMessages({ reason: request?.reason || "manual" })
+          if (!lastInterceptedPayload) {
+            sendResponse({
+              ok: false,
+              error: "No intercepted data yet. Open LinkedIn messaging first.",
+            });
+            return false;
+          }
+          processInterceptedMessages(lastInterceptedPayload, {
+            reason: request?.reason || "manual",
+          })
             .then((result) => sendResponse(result))
             .catch((error) =>
               sendResponse({ ok: false, error: error?.message || "SYNC_FAILED" })
@@ -1824,14 +1831,6 @@ console.log(
       initMessagingWatcher();
     }
 
-    if (!window.__FOCALS_LINKEDIN_MESSAGES_SYNCED__) {
-      window.__FOCALS_LINKEDIN_MESSAGES_SYNCED__ = true;
-      setTimeout(() => {
-        syncLinkedInMessages({ reason: "auto" }).catch((error) =>
-          console.warn("[SaaS-Debug] Auto sync failed:", error?.message || error)
-        );
-      }, 2000);
-    }
   } catch (err) {
     console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
   }
