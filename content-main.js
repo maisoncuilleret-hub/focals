@@ -34,6 +34,35 @@
     return out;
   };
 
+  const captureIsolatedIdentity = (messageNode) => {
+    const bubble = messageNode?.closest(
+      ".msg-convo-wrapper, .msg-overlay-conversation-bubble"
+    );
+
+    if (!bubble) {
+      warn("🎯 [RADAR] Message détecté hors d'une bulle connue.");
+      return null;
+    }
+
+    const nameEl = bubble.querySelector(
+      ".msg-overlay-bubble-header__title, .msg-entity-lockup__entity-title, .msg-entity-lockup__title"
+    );
+    let cleanName = nameEl ? nameEl.innerText.split("\n")[0] : "Unknown";
+    cleanName = cleanName
+      .replace(/Gérer le prospect|Manage prospect|Voir le profil/gi, "")
+      .trim();
+
+    const linkEl = bubble.querySelector('a[href*="/in/"]');
+    const internalUrl = linkEl ? linkEl.href.split("?")[0] : "unknown";
+
+    console.log(`🎯 [RADAR] Identité isolée : ${cleanName} (${internalUrl})`);
+
+    return {
+      match_name: cleanName,
+      profile_url: internalUrl,
+    };
+  };
+
   const captureIdentityForDomRadar = () => {
     const bubble =
       document.querySelector(".msg-overlay-conversation-bubble:focus-within") ||
@@ -42,7 +71,7 @@
     if (!bubble) return null;
 
     const nameEl = bubble.querySelector(
-      ".msg-overlay-bubble-header__title, .msg-entity-lockup__entity-title"
+      ".msg-overlay-bubble-header__title, .msg-entity-lockup__entity-title, .msg-entity-lockup__title"
     );
     let cleanName = nameEl ? nameEl.innerText.split("\n")[0] : "Unknown";
     cleanName = cleanName
@@ -135,26 +164,33 @@
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
-          if (node.nodeType === 1) {
-            const incomingMessages = node.querySelectorAll(
-              ".msg-s-event-listitem__body, .msg-s-event-listitem--other"
-            );
-            incomingMessages.forEach((msg) => {
-              const text = msg.innerText?.trim();
-              if (text && text.length > 2 && !seenSignatures.has(text)) {
-                seenSignatures.add(text);
-                console.log("🎯 [RADAR DOM LIVE] :", text);
-                chrome.runtime.sendMessage({
-                  type: "FOCALS_INCOMING_RELAY",
-                  payload: {
-                    text,
-                    type: "linkedin_dom_live",
-                    identity: captureIdentityForDomRadar(),
-                  },
-                });
-              }
+          if (node.nodeType !== 1) return;
+
+          const messageNodes = node.classList?.contains("msg-s-event-listitem")
+            ? [node]
+            : Array.from(node.querySelectorAll(".msg-s-event-listitem"));
+
+          messageNodes.forEach((messageNode) => {
+            const text =
+              messageNode.querySelector(".msg-s-event-listitem__body")?.innerText?.trim() ||
+              "";
+
+            if (!text || text.length <= 2 || seenSignatures.has(text)) return;
+
+            const identity = captureIsolatedIdentity(messageNode);
+            if (!identity) return;
+
+            seenSignatures.add(text);
+            console.log("🎯 [RADAR DOM LIVE] :", text);
+            chrome.runtime.sendMessage({
+              type: "FOCALS_INCOMING_RELAY",
+              payload: {
+                text,
+                type: "linkedin_dom_live",
+                identity,
+              },
             });
-          }
+          });
         });
       });
     });
