@@ -75,6 +75,83 @@ console.log(
     return document;
   }
 
+  const sentMessageIds = new Set();
+  const authorNameByUrn = new Map();
+
+  const getFallbackAuthorName = () => {
+    const node = document.querySelector(".msg-entity-lockup__entity-title");
+    const text = node?.textContent?.trim();
+    return text || null;
+  };
+
+  const collectProfileNames = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+
+    const entityUrn = obj.entityUrn || obj.entityUrnId || obj.profileUrn;
+    const firstName = obj.firstName || obj?.miniProfile?.firstName;
+    const lastName = obj.lastName || obj?.miniProfile?.lastName;
+    if (entityUrn && (firstName || lastName)) {
+      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+      if (name) authorNameByUrn.set(entityUrn, name);
+    }
+
+    for (const key of Object.keys(obj)) {
+      collectProfileNames(obj[key]);
+    }
+  };
+
+  const extractMessagesFromPayload = (payload = {}) => {
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    return elements
+      .map((item) => {
+        const messageId = item?.backendUrn || item?.entityUrn;
+        const threadId =
+          item?.conversation?.entityUrn ||
+          item?.thread?.entityUrn ||
+          item?.conversationUrn ||
+          null;
+        const authorUrn =
+          item?.from?.messagingMember?.entityUrn ||
+          item?.from?.entityUrn ||
+          item?.sender?.entityUrn ||
+          null;
+        const content = item?.body?.text || item?.eventContent?.attributedBody?.text || null;
+        const createdAt = item?.createdAt || item?.time || item?.createdAtMs || null;
+        return {
+          message_id: messageId,
+          thread_id: threadId,
+          author_urn: authorUrn,
+          content,
+          created_at: createdAt ? new Date(createdAt).toISOString() : null,
+        };
+      })
+      .filter((item) => item.message_id && item.content);
+  };
+
+  const syncLinkedinMessagesFromPayload = (payload) => {
+    collectProfileNames(payload);
+    const messages = extractMessagesFromPayload(payload);
+
+    messages.forEach((message) => {
+      if (sentMessageIds.has(message.message_id)) return;
+      sentMessageIds.add(message.message_id);
+
+      const authorName =
+        authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
+
+      chrome.runtime.sendMessage({
+        type: "SYNC_LINKEDIN_MESSAGE",
+        payload: {
+          message_id: message.message_id,
+          thread_id: message.thread_id,
+          author_name: authorName,
+          content: message.content,
+          created_at: message.created_at,
+        },
+      });
+    });
+  };
+
   let lastInterceptedPayload = null;
 
   async function processInterceptedMessages(payload, { reason = "auto" } = {}) {
@@ -194,6 +271,12 @@ console.log(
       sendWithRetry();
     });
   }
+
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const payload = event?.detail?.data || null;
+    if (!payload || typeof payload !== "object") return;
+    syncLinkedinMessagesFromPayload(payload);
+  });
 
   const env = {
     href: window.location.href,

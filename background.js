@@ -1891,6 +1891,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       return true;
     }
+    case "SYNC_LINKEDIN_MESSAGE": {
+      const payload = message?.payload;
+      if (!payload?.message_id) {
+        sendResponse({ ok: false, error: "Missing message_id" });
+        return false;
+      }
+
+      const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
+      const SUPABASE_ANON_KEY =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+      fetch(`${SUPABASE_URL}/rest/v1/linkedin_messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_ANON_KEY,
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const errorText = await response.text();
+            sendResponse({ ok: false, error: errorText || "SUPABASE_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, error: err?.message || "SUPABASE_FAILED" });
+        });
+
+      return true;
+    }
     case "NEW_LIVE_MESSAGE": {
       const payload = message?.data || null;
       if (!payload) {
