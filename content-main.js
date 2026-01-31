@@ -152,32 +152,39 @@
       const identity = captureIdentityForDomRadar() || getIdentity();
 
       messages.forEach((msg) => {
-        const signature = `${identity?.match_name || "unknown"}::${msg.text || ""}`;
+        const normalizedText = clean(msg.text || "");
+        const signature = `${identity?.match_name || "unknown"}::${normalizedText}`;
         if (
           processedSignatures.has(signature) ||
-          processedTexts.has(msg.text || "") ||
-          recentVoyagerMessages.has(msg.text || "") ||
-          voyagerLock.has(msg.text || "") ||
+          processedTexts.has(normalizedText) ||
+          recentVoyagerMessages.has(normalizedText) ||
+          voyagerLock.has(normalizedText) ||
           processedIds.has(msg.id)
         )
           return;
-        if (msg.text && msg.id && !processedIds.has(msg.id)) {
+        if (normalizedText && msg.id && !processedIds.has(msg.id)) {
           processedIds.add(msg.id);
           processedSignatures.add(signature);
+          processedTexts.add(normalizedText);
+          recentVoyagerMessages.add(normalizedText);
+          voyagerLock.add(normalizedText);
           const voyagerIdentity = identityMap.get(identity?.match_name || "");
           const conversationUrn = voyagerIdentity?.conversation_urn || null;
+          const profileUrl = voyagerIdentity?.profile_url || identity?.profile_url || null;
 
-          console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
+          console.log("📥 [RADAR VOYAGER] Capture :", normalizedText);
 
           // Relais final vers le background script
           chrome.runtime.sendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
-              text: msg.text,
+              text: normalizedText,
               type: "linkedin_voyager_gql",
               received_at: new Date().toISOString(),
               identity,
               conversation_urn: conversationUrn || identity?.conversation_urn || null,
+              message_urn: msg.id || null,
+              profile_url: profileUrl,
               source: "dom",
             },
           });
@@ -186,19 +193,40 @@
     }
   });
 
+  const buildProfileUrl = (miniProfile) => {
+    const publicIdentifier =
+      miniProfile?.publicIdentifier ||
+      miniProfile?.public_identifier ||
+      miniProfile?.publicId ||
+      null;
+    if (!publicIdentifier) return null;
+    return `https://www.linkedin.com/in/${publicIdentifier}`;
+  };
+
   window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
     const payload = event?.detail?.data || null;
     if (!payload || typeof payload !== "object") return;
     const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    elements.forEach((item) => {
+    const enrichedElements = elements.map((item) => ({
+      ...item,
+      message_urn: item?.backendUrn || item?.entityUrn || null,
+      conversation_urn: item?.backendConversationUrn || item?.conversationUrn || null,
+      profile_url: buildProfileUrl(
+        item?.sender?.member?.miniProfile ||
+          item?.from?.messagingMember?.miniProfile ||
+          item?.from?.messagingMember ||
+          null
+      ),
+    }));
+    enrichedElements.forEach((item) => {
       const sender =
         item?.sender?.member ||
         item?.from?.messagingMember?.miniProfile ||
         item?.from?.messagingMember ||
         null;
       const name = [sender?.firstName, sender?.lastName].filter(Boolean).join(" ").trim();
-      const conversationUrn = item?.backendConversationUrn || item?.conversationUrn || null;
-      const messageUrn = item?.backendUrn || null;
+      const conversationUrn = item?.conversation_urn || null;
+      const messageUrn = item?.message_urn || null;
       const text = item?.body?.text || null;
       if (messageUrn) processedIds.add(messageUrn);
       if (name && text) {
@@ -208,12 +236,16 @@
         identityMap.set(name, {
           name,
           conversation_urn: conversationUrn,
+          profile_url: item?.profile_url || null,
         });
       }
     });
     chrome.runtime.sendMessage({
       type: "FOCALS_VOYAGER_CONVERSATIONS",
-      payload,
+      payload: {
+        ...payload,
+        elements: enrichedElements,
+      },
     });
   });
 
@@ -246,6 +278,8 @@
             !text ||
             text.length <= 2 ||
             seenSignatures.has(text) ||
+            recentVoyagerMessages.has(text) ||
+            voyagerLock.has(text) ||
             processedSignatures.has(signature)
           )
             return;
