@@ -1826,14 +1826,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
-          const { data: sessionData } = await supabase.auth.getSession().catch(() => ({
-            data: { session: null },
-          }));
-          if (sessionData?.session?.access_token) {
-            console.log("[SaaS-Debug] Supabase session refreshed");
+          const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+          const session = sessionData?.session || null;
+          if (sessionError || !session) {
+            console.error(
+              "❌ [Focals] Session non trouvée. L'utilisateur doit être connecté."
+            );
+            sendResponse({ ok: false, error: "AUTH_REQUIRED" });
+            return;
           }
-          const { data } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
-          const syncedBy = data?.user?.id || null;
+          const syncedBy = session.user?.id || null;
           const records = payload.map((item) => ({
             ...item,
             synced_by: syncedBy,
@@ -1846,13 +1848,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             .from("interactions")
             .upsert(records, { onConflict, ignoreDuplicates: true });
           if (error) {
-            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
+            console.error("❌ [Focals] Supabase Error:", error?.message || error);
             sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
             return;
           }
+          console.log("✅ [Focals] Message synchronisé avec succès !");
           sendResponse({ ok: true, count: records.length });
         } catch (err) {
-          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
+          console.error("❌ [Focals] Supabase Error:", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
         }
       })();

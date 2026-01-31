@@ -84,6 +84,8 @@ console.log(
     window._focalsProcessedTexts || new Set());
   const processedSignatures = (window._focalsProcessedSignatures =
     window._focalsProcessedSignatures || new Set());
+  const recentVoyagerMessages = (window._recentVoyagerMessages =
+    window._recentVoyagerMessages || new Set());
   const authorNameByHostUrn = new Map();
 
   const getFallbackAuthorName = () => {
@@ -192,6 +194,7 @@ console.log(
       sentMessageIds.add(message.message_id);
       if (message.message_id) processedUrns.add(message.message_id);
       if (message.content) processedTexts.add(message.content);
+      if (message.content) recentVoyagerMessages.add(message.content);
 
       const authorName =
         authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
@@ -274,6 +277,7 @@ console.log(
         sentInteractionMessageIds.add(message.linkedin_message_urn);
         processedUrns.add(message.linkedin_message_urn);
         if (message.content) processedTexts.add(message.content);
+        if (message.content) recentVoyagerMessages.add(message.content);
         const signature = `${message.author_name || fallbackAuthorName || "unknown"}::${message.content}`;
         if (message.content) processedSignatures.add(signature);
         return {
