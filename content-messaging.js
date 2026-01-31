@@ -84,8 +84,9 @@ console.log(
     window._focalsProcessedTexts || new Set());
   const processedSignatures = (window._focalsProcessedSignatures =
     window._focalsProcessedSignatures || new Set());
-  const recentVoyagerMessages = (window._recentVoyagerMessages =
-    window._recentVoyagerMessages || new Set());
+  const recentVoyagerMessages = (window._focalsRecentMessages =
+    window._focalsRecentMessages || new Set());
+  window._recentVoyagerMessages = recentVoyagerMessages;
   const authorNameByHostUrn = new Map();
 
   const getFallbackAuthorName = () => {

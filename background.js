@@ -1826,9 +1826,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
+          let session = null;
           const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-          const session = sessionData?.session || null;
-          if (sessionError || !session) {
+          session = sessionData?.session || null;
+
+          if (!session) {
+            const stored = await new Promise((resolve) => {
+              chrome.storage.local.get(
+                ["focals_supabase_session", "focals_supabase_token"],
+                (res) => resolve(res)
+              );
+            });
+            session = stored?.focals_supabase_session || null;
+            if (!session && stored?.focals_supabase_token) {
+              session = { access_token: stored.focals_supabase_token, user: null };
+            }
+          }
+
+          if (sessionError || !session || !session.user?.id) {
             console.error(
               "❌ [Focals] Session non trouvée. L'utilisateur doit être connecté."
             );

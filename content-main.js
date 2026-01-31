@@ -104,8 +104,9 @@
     window._focalsProcessedSignatures || new Set());
   const processedTexts = (window._focalsProcessedTexts =
     window._focalsProcessedTexts || new Set());
-  const recentVoyagerMessages = (window._recentVoyagerMessages =
-    window._recentVoyagerMessages || new Set());
+  const recentVoyagerMessages = (window._focalsRecentMessages =
+    window._focalsRecentMessages || new Set());
+  window._recentVoyagerMessages = recentVoyagerMessages;
   const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
 
   // 2. Le script "Espion" qui sera injecté dans la page
