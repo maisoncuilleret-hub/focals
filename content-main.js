@@ -102,6 +102,8 @@
   const processedIds = new Set();
   const processedSignatures = (window._focalsProcessedSignatures =
     window._focalsProcessedSignatures || new Set());
+  const processedTexts = (window._focalsProcessedTexts =
+    window._focalsProcessedTexts || new Set());
   const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
 
   // 2. Le script "Espion" qui sera injecté dans la page
@@ -147,7 +149,7 @@
 
       messages.forEach((msg) => {
         const signature = `${identity?.match_name || "unknown"}::${msg.text || ""}`;
-        if (processedSignatures.has(signature)) return;
+        if (processedSignatures.has(signature) || processedTexts.has(msg.text || "")) return;
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
           processedIds.add(msg.id);
           processedSignatures.add(signature);

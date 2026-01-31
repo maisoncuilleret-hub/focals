@@ -79,6 +79,10 @@ console.log(
   const sentInteractionMessageIds = new Set();
   const authorNameByUrn = new Map();
   const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
+  const processedUrns = (window._focalsProcessedUrns = window._focalsProcessedUrns || new Set());
+  const processedTexts = (window._focalsProcessedTexts =
+    window._focalsProcessedTexts || new Set());
+  const authorNameByHostUrn = new Map();
 
   const getFallbackAuthorName = () => {
     const node = document.querySelector(".msg-entity-lockup__entity-title");
@@ -109,6 +113,44 @@ console.log(
     for (const key of Object.keys(obj)) {
       collectProfileNames(obj[key]);
     }
+  };
+
+  const collectHostIdentityNames = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+
+    const hostUrn = obj.hostIdentityUrn || obj.hostIdentity || obj.entityUrn;
+    const firstName = obj.firstName || obj?.miniProfile?.firstName;
+    const lastName = obj.lastName || obj?.miniProfile?.lastName;
+    if (hostUrn && (firstName || lastName)) {
+      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+      if (name && name !== "LinkedIn User") authorNameByHostUrn.set(hostUrn, name);
+    }
+
+    for (const key of Object.keys(obj)) {
+      collectHostIdentityNames(obj[key]);
+    }
+  };
+
+  const extractVoyagerMessages = (payload) => {
+    const results = [];
+    const stack = [payload];
+
+    while (stack.length) {
+      const current = stack.pop();
+      if (!current || typeof current !== "object") continue;
+
+      if (current.backendUrn && current.body?.text) {
+        results.push(current);
+      }
+
+      for (const value of Object.values(current)) {
+        if (value && typeof value === "object") {
+          stack.push(value);
+        }
+      }
+    }
+
+    return results;
   };
 
   const extractMessagesFromPayload = (payload = {}) => {
@@ -146,9 +188,14 @@ console.log(
     messages.forEach((message) => {
       if (sentMessageIds.has(message.message_id)) return;
       sentMessageIds.add(message.message_id);
+      if (message.message_id) processedUrns.add(message.message_id);
+      if (message.content) processedTexts.add(message.content);
 
       const authorName =
         authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
+      if (authorName && authorName !== "LinkedIn User" && message.author_urn) {
+        authorNameByHostUrn.set(message.author_urn, authorName);
+      }
 
       chrome.runtime.sendMessage({
         type: "SYNC_LINKEDIN_MESSAGE",
@@ -164,8 +211,8 @@ console.log(
   };
 
   const extractInteractionMessagesFromPayload = (payload = {}) => {
-    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    return elements
+    const items = extractVoyagerMessages(payload);
+    return items
       .map((item) => {
         const messageId = item?.backendUrn || null;
         const threadId = item?.backendConversationUrn || null;
@@ -174,10 +221,12 @@ console.log(
         const senderMember = item?.sender?.member || item?.sender?.messagingMember || null;
         const distance = senderMember?.distance || senderMember?.member?.distance || null;
         const direction = distance === "SELF" ? "outbound" : "inbound";
+        const hostUrn = senderMember?.hostIdentityUrn || senderMember?.hostIdentity || null;
         const authorName =
           senderMember?.firstName ||
           senderMember?.miniProfile?.firstName ||
           senderMember?.name ||
+          authorNameByHostUrn.get(hostUrn) ||
           null;
         const authorHeadline =
           senderMember?.headline ||
@@ -189,6 +238,9 @@ console.log(
             name: authorName,
             conversation_urn: threadId,
           });
+        }
+        if (authorName && authorName !== "LinkedIn User" && hostUrn) {
+          authorNameByHostUrn.set(hostUrn, authorName);
         }
         return {
           linkedin_message_urn: messageId,
@@ -205,6 +257,7 @@ console.log(
   };
 
   const syncInteractionMessagesFromPayload = (payload) => {
+    collectHostIdentityNames(payload);
     const messages = extractInteractionMessagesFromPayload(payload);
     if (!messages.length) return;
 
@@ -214,9 +267,14 @@ console.log(
       .map((message) => {
         if (sentInteractionMessageIds.has(message.linkedin_message_urn)) return null;
         sentInteractionMessageIds.add(message.linkedin_message_urn);
+        processedUrns.add(message.linkedin_message_urn);
+        if (message.content) processedTexts.add(message.content);
         return {
           ...message,
-          author_name: message.author_name || fallbackAuthorName,
+          author_name:
+            message.author_name && message.author_name !== "LinkedIn User"
+              ? message.author_name
+              : fallbackAuthorName,
           author_headline: message.author_headline || fallbackAuthorHeadline || null,
         };
       })
