@@ -100,6 +100,9 @@
 
   // 1. Initialisation du cache de dédoublonnage
   const processedIds = new Set();
+  const processedSignatures = (window._focalsProcessedSignatures =
+    window._focalsProcessedSignatures || new Set());
+  const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
 
   // 2. Le script "Espion" qui sera injecté dans la page
   const voyagerSpy = () => {
@@ -113,6 +116,14 @@
 
   // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
+    if (event.data?.type === "FOCALS_VOYAGER_CONVERSATIONS") {
+      chrome.runtime.sendMessage({
+        type: "FOCALS_VOYAGER_CONVERSATIONS",
+        payload: event.data?.data || null,
+      });
+      return;
+    }
+
     if (event.data?.type === "FOCALS_NETWORK_DATA") {
       // Fonction récursive validée en console F12
       const extract = (obj) => {
@@ -135,8 +146,13 @@
       const identity = captureIdentityForDomRadar() || getIdentity();
 
       messages.forEach((msg) => {
+        const signature = `${identity?.match_name || "unknown"}::${msg.text || ""}`;
+        if (processedSignatures.has(signature)) return;
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
           processedIds.add(msg.id);
+          processedSignatures.add(signature);
+          const voyagerIdentity = identityMap.get(identity?.match_name || "");
+          const conversationUrn = voyagerIdentity?.conversation_urn || null;
 
           console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
 
@@ -148,11 +164,44 @@
               type: "linkedin_voyager_gql",
               received_at: new Date().toISOString(),
               identity,
+              conversation_urn: conversationUrn || identity?.conversation_urn || null,
+              source: "dom",
             },
           });
         }
       });
     }
+  });
+
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const payload = event?.detail?.data || null;
+    if (!payload || typeof payload !== "object") return;
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    elements.forEach((item) => {
+      const sender =
+        item?.sender?.member ||
+        item?.from?.messagingMember?.miniProfile ||
+        item?.from?.messagingMember ||
+        null;
+      const name = [sender?.firstName, sender?.lastName].filter(Boolean).join(" ").trim();
+      const conversationUrn = item?.backendConversationUrn || item?.conversationUrn || null;
+      const messageUrn = item?.backendUrn || null;
+      const text = item?.body?.text || null;
+      if (messageUrn) processedIds.add(messageUrn);
+      if (name && text) {
+        processedSignatures.add(`${name}::${text}`);
+      }
+      if (name) {
+        identityMap.set(name, {
+          name,
+          conversation_urn: conversationUrn,
+        });
+      }
+    });
+    chrome.runtime.sendMessage({
+      type: "FOCALS_VOYAGER_CONVERSATIONS",
+      payload,
+    });
   });
 
   // Lancement
@@ -176,12 +225,20 @@
             messageNode.querySelector(".msg-s-event-listitem__body")?.innerText?.trim() ||
             "";
 
-          if (!text || text.length <= 2 || seenSignatures.has(text)) return;
-
           const identity = captureIsolatedIdentity(messageNode);
           if (!identity) return;
 
+          const signature = `${identity?.name || identity?.match_name || "unknown"}::${text}`;
+          if (
+            !text ||
+            text.length <= 2 ||
+            seenSignatures.has(text) ||
+            processedSignatures.has(signature)
+          )
+            return;
+
           const isFromMe = !messageNode.classList.contains("msg-s-event-listitem--other");
+          const voyagerIdentity = identityMap.get(identity?.name || identity?.match_name || "");
 
           seenSignatures.add(text);
           console.log("🎯 [RADAR DOM LIVE] :", text);
@@ -192,6 +249,8 @@
               type: "linkedin_dom_live",
               identity,
               is_from_me: isFromMe,
+              conversation_urn: voyagerIdentity?.conversation_urn || null,
+              source: "dom",
             },
           });
         });
