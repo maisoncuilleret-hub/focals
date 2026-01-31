@@ -75,6 +75,150 @@ console.log(
     return document;
   }
 
+  const sentMessageIds = new Set();
+  const sentInteractionMessageIds = new Set();
+  const authorNameByUrn = new Map();
+
+  const getFallbackAuthorName = () => {
+    const node = document.querySelector(".msg-entity-lockup__entity-title");
+    const text = node?.textContent?.trim();
+    return text || null;
+  };
+
+  const getFallbackAuthorHeadline = () => {
+    const node = document.querySelector(".msg-entity-lockup__subtitle");
+    const text = node?.textContent?.trim();
+    return text || null;
+  };
+
+  const collectProfileNames = (obj) => {
+    if (!obj || typeof obj !== "object") return;
+
+    const entityUrn = obj.entityUrn || obj.entityUrnId || obj.profileUrn;
+    const firstName = obj.firstName || obj?.miniProfile?.firstName;
+    const lastName = obj.lastName || obj?.miniProfile?.lastName;
+    if (entityUrn && (firstName || lastName)) {
+      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+      if (name) authorNameByUrn.set(entityUrn, name);
+    }
+
+    for (const key of Object.keys(obj)) {
+      collectProfileNames(obj[key]);
+    }
+  };
+
+  const extractMessagesFromPayload = (payload = {}) => {
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    return elements
+      .map((item) => {
+        const messageId = item?.backendUrn || item?.entityUrn;
+        const threadId =
+          item?.conversation?.entityUrn ||
+          item?.thread?.entityUrn ||
+          item?.conversationUrn ||
+          null;
+        const authorUrn =
+          item?.from?.messagingMember?.entityUrn ||
+          item?.from?.entityUrn ||
+          item?.sender?.entityUrn ||
+          null;
+        const content = item?.body?.text || item?.eventContent?.attributedBody?.text || null;
+        const createdAt = item?.createdAt || item?.time || item?.createdAtMs || null;
+        return {
+          message_id: messageId,
+          thread_id: threadId,
+          author_urn: authorUrn,
+          content,
+          created_at: createdAt ? new Date(createdAt).toISOString() : null,
+        };
+      })
+      .filter((item) => item.message_id && item.content);
+  };
+
+  const syncLinkedinMessagesFromPayload = (payload) => {
+    collectProfileNames(payload);
+    const messages = extractMessagesFromPayload(payload);
+
+    messages.forEach((message) => {
+      if (sentMessageIds.has(message.message_id)) return;
+      sentMessageIds.add(message.message_id);
+
+      const authorName =
+        authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
+
+      chrome.runtime.sendMessage({
+        type: "SYNC_LINKEDIN_MESSAGE",
+        payload: {
+          message_id: message.message_id,
+          thread_id: message.thread_id,
+          author_name: authorName,
+          content: message.content,
+          created_at: message.created_at,
+        },
+      });
+    });
+  };
+
+  const extractInteractionMessagesFromPayload = (payload = {}) => {
+    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+    return elements
+      .map((item) => {
+        const messageId = item?.backendUrn || null;
+        const threadId = item?.backendConversationUrn || null;
+        const content = item?.body?.text || null;
+        const deliveredAt = item?.deliveredAt || null;
+        const senderMember = item?.sender?.member || item?.sender?.messagingMember || null;
+        const distance = senderMember?.distance || senderMember?.member?.distance || null;
+        const direction = distance === "SELF" ? "outbound" : "inbound";
+        const authorName =
+          senderMember?.firstName ||
+          senderMember?.miniProfile?.firstName ||
+          senderMember?.name ||
+          null;
+        const authorHeadline =
+          senderMember?.headline ||
+          senderMember?.miniProfile?.headline ||
+          senderMember?.occupation ||
+          null;
+        return {
+          linkedin_message_urn: messageId,
+          thread_id: threadId,
+          content,
+          direction,
+          author_name: authorName,
+          author_headline: authorHeadline,
+          delivered_at: deliveredAt ? new Date(deliveredAt).toISOString() : null,
+        };
+      })
+      .filter((item) => item.linkedin_message_urn && item.content);
+  };
+
+  const syncInteractionMessagesFromPayload = (payload) => {
+    const messages = extractInteractionMessagesFromPayload(payload);
+    if (!messages.length) return;
+
+    const fallbackAuthorName = getFallbackAuthorName();
+    const fallbackAuthorHeadline = getFallbackAuthorHeadline();
+    const payloads = messages
+      .map((message) => {
+        if (sentInteractionMessageIds.has(message.linkedin_message_urn)) return null;
+        sentInteractionMessageIds.add(message.linkedin_message_urn);
+        return {
+          ...message,
+          author_name: message.author_name || fallbackAuthorName,
+          author_headline: message.author_headline || fallbackAuthorHeadline || null,
+        };
+      })
+      .filter(Boolean);
+
+    if (!payloads.length) return;
+
+    chrome.runtime.sendMessage({
+      type: "FOCALS_UPSERT_INTERACTIONS",
+      payload: payloads,
+    });
+  };
+
   let lastInterceptedPayload = null;
 
   async function processInterceptedMessages(payload, { reason = "auto" } = {}) {
@@ -194,6 +338,13 @@ console.log(
       sendWithRetry();
     });
   }
+
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const payload = event?.detail?.data || null;
+    if (!payload || typeof payload !== "object") return;
+    syncLinkedinMessagesFromPayload(payload);
+    syncInteractionMessagesFromPayload(payload);
+  });
 
   const env = {
     href: window.location.href,
