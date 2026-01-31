@@ -1817,6 +1817,161 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       return true;
     }
+    case "FOCALS_UPSERT_INTERACTIONS": {
+      const payload = message?.payload;
+      if (!Array.isArray(payload) || !payload.length) {
+        sendResponse({ ok: false, error: "Missing interactions payload" });
+        return false;
+      }
+
+      (async () => {
+        try {
+          let session = null;
+          const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+          session = sessionData?.session || null;
+
+          if (!session) {
+            const stored = await new Promise((resolve) => {
+              chrome.storage.local.get(
+                ["focals_supabase_session", "focals_supabase_token"],
+                (res) => resolve(res)
+              );
+            });
+            session = stored?.focals_supabase_session || null;
+            if (!session && stored?.focals_supabase_token) {
+              session = { access_token: stored.focals_supabase_token, user: null };
+            }
+          }
+
+          if (sessionError || !session || !session.user?.id) {
+            console.warn("[Focals] Session absente pour upsert interactions.");
+          }
+
+          const hasLinkedinUrn = payload.some((item) => item?.linkedin_message_urn);
+          const sourceLabel = hasLinkedinUrn ? "💾 Source: Voyager" : "👁️ Source: DOM";
+          console.log(sourceLabel);
+
+          const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
+          const SUPABASE_ANON_KEY =
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+          const response = await fetch(
+            `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({
+                interactions: payload,
+                user_id: session?.user?.id || null,
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error("❌ [Focals] Supabase Error:", errorText || response.status);
+            sendResponse({ ok: false, error: errorText || "UPSERT_FAILED" });
+            return;
+          }
+
+          console.log("✅ [Focals] Message synchronisé avec succès !");
+          sendResponse({ ok: true, count: payload.length });
+        } catch (err) {
+          console.error("❌ [Focals] Supabase Error:", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
+        }
+      })();
+
+      return true;
+    }
+    case "FOCALS_VOYAGER_CONVERSATIONS": {
+      const payload = message?.payload;
+      if (!payload || typeof payload !== "object") {
+        sendResponse({ ok: false, error: "Missing voyager payload" });
+        return false;
+      }
+
+      const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+      const records = elements
+        .map((item) => {
+          const externalId = item?.entityUrn || null;
+          const participant = item?.participants?.[0]?.messagingMember || null;
+          const contactName = participant?.miniProfile?.firstName || null;
+          const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
+          if (!externalId) return null;
+          return {
+            external_id: externalId,
+            contact_name: contactName,
+            last_message: lastMessage,
+            source: "linkedin_voyager",
+            synced_at: new Date().toISOString(),
+            sync_reason: "intercepted",
+          };
+        })
+        .filter(Boolean);
+
+      if (!records.length) {
+        sendResponse({ ok: true, count: 0 });
+        return false;
+      }
+
+      supabase
+        .from("interactions")
+        .upsert(records, { onConflict: "external_id" })
+        .then(({ error }) => {
+          if (error) {
+            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
+            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true, count: records.length });
+        })
+        .catch((err) => {
+          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
+          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
+        });
+
+      return true;
+    }
+    case "SYNC_LINKEDIN_MESSAGE": {
+      const payload = message?.payload;
+      if (!payload?.message_id) {
+        sendResponse({ ok: false, error: "Missing message_id" });
+        return false;
+      }
+
+      const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
+      const SUPABASE_ANON_KEY =
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+      fetch(`${SUPABASE_URL}/rest/v1/linkedin_messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_ANON_KEY,
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify(payload),
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            const errorText = await response.text();
+            sendResponse({ ok: false, error: errorText || "SUPABASE_FAILED" });
+            return;
+          }
+          sendResponse({ ok: true });
+        })
+        .catch((err) => {
+          sendResponse({ ok: false, error: err?.message || "SUPABASE_FAILED" });
+        });
+
+      return true;
+    }
     case "NEW_LIVE_MESSAGE": {
       const payload = message?.data || null;
       if (!payload) {

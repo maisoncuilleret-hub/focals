@@ -1,5 +1,9 @@
 // Injected on the web app domain to sync Supabase session to the extension.
 (() => {
+  const allowedHosts = ["focals.app", "localhost", "127.0.0.1"];
+  if (!allowedHosts.some((host) => window.location.hostname.includes(host))) {
+    return;
+  }
   const SUPABASE_AUTH_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
 
   console.log("[Focals] 🚀 session-bridge.js exécuté");
@@ -14,6 +18,11 @@
         hasAccessToken: !!session.access_token,
         hasRefreshToken: !!session.refresh_token,
         hasUser: !!session.user,
+      });
+
+      chrome.storage?.local?.set?.({
+        focals_supabase_session: session,
+        focals_supabase_token: session.access_token || "",
       });
 
       chrome.runtime.sendMessage(
