@@ -1844,31 +1844,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           if (sessionError || !session || !session.user?.id) {
-            console.error(
-              "❌ [Focals] Session non trouvée. L'utilisateur doit être connecté."
-            );
-            sendResponse({ ok: false, error: "AUTH_REQUIRED" });
-            return;
+            console.warn("[Focals] Session absente pour upsert interactions.");
           }
-          const syncedBy = session.user?.id || null;
-          const records = payload.map((item) => ({
-            ...item,
-            synced_by: syncedBy,
-          }));
-          const hasLinkedinUrn = records.some((item) => item?.linkedin_message_urn);
-          const onConflict = hasLinkedinUrn ? "linkedin_message_urn" : "external_id";
+
+          const hasLinkedinUrn = payload.some((item) => item?.linkedin_message_urn);
           const sourceLabel = hasLinkedinUrn ? "💾 Source: Voyager" : "👁️ Source: DOM";
           console.log(sourceLabel);
-          const { error } = await supabase
-            .from("interactions")
-            .upsert(records, { onConflict, ignoreDuplicates: true });
-          if (error) {
-            console.error("❌ [Focals] Supabase Error:", error?.message || error);
-            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
+
+          const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
+          const SUPABASE_ANON_KEY =
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+
+          const response = await fetch(
+            `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({
+                interactions: payload,
+                user_id: session?.user?.id || null,
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error("❌ [Focals] Supabase Error:", errorText || response.status);
+            sendResponse({ ok: false, error: errorText || "UPSERT_FAILED" });
             return;
           }
+
           console.log("✅ [Focals] Message synchronisé avec succès !");
-          sendResponse({ ok: true, count: records.length });
+          sendResponse({ ok: true, count: payload.length });
         } catch (err) {
           console.error("❌ [Focals] Supabase Error:", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
