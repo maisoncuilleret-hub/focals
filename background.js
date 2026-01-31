@@ -1826,6 +1826,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       (async () => {
         try {
+          const { data: sessionData } = await supabase.auth.getSession().catch(() => ({
+            data: { session: null },
+          }));
+          if (sessionData?.session?.access_token) {
+            console.log("[SaaS-Debug] Supabase session refreshed");
+          }
           const { data } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
           const syncedBy = data?.user?.id || null;
           const records = payload.map((item) => ({

@@ -82,6 +82,8 @@ console.log(
   const processedUrns = (window._focalsProcessedUrns = window._focalsProcessedUrns || new Set());
   const processedTexts = (window._focalsProcessedTexts =
     window._focalsProcessedTexts || new Set());
+  const processedSignatures = (window._focalsProcessedSignatures =
+    window._focalsProcessedSignatures || new Set());
   const authorNameByHostUrn = new Map();
 
   const getFallbackAuthorName = () => {
@@ -193,6 +195,9 @@ console.log(
 
       const authorName =
         authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
+      if (authorName && message.content) {
+        processedSignatures.add(`${authorName}::${message.content}`);
+      }
       if (authorName && authorName !== "LinkedIn User" && message.author_urn) {
         authorNameByHostUrn.set(message.author_urn, authorName);
       }
@@ -269,6 +274,8 @@ console.log(
         sentInteractionMessageIds.add(message.linkedin_message_urn);
         processedUrns.add(message.linkedin_message_urn);
         if (message.content) processedTexts.add(message.content);
+        const signature = `${message.author_name || fallbackAuthorName || "unknown"}::${message.content}`;
+        if (message.content) processedSignatures.add(signature);
         return {
           ...message,
           author_name:

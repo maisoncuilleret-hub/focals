@@ -149,7 +149,12 @@
 
       messages.forEach((msg) => {
         const signature = `${identity?.match_name || "unknown"}::${msg.text || ""}`;
-        if (processedSignatures.has(signature) || processedTexts.has(msg.text || "")) return;
+        if (
+          processedSignatures.has(signature) ||
+          processedTexts.has(msg.text || "") ||
+          processedIds.has(msg.id)
+        )
+          return;
         if (msg.text && msg.id && !processedIds.has(msg.id)) {
           processedIds.add(msg.id);
           processedSignatures.add(signature);
