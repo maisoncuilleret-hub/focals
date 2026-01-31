@@ -14,7 +14,8 @@
         const response = await originalFetch.apply(this, args);
         if (
           url?.includes("voyagerMessagingGraphQL") ||
-          url?.includes("messaging/conversations")
+          url?.includes("messaging/conversations") ||
+          url?.includes("messengerMessages.5846eeb71c981f11e0134cb6626cc314")
         ) {
           const clone = response.clone();
           clone

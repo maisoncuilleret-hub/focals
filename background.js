@@ -1834,6 +1834,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }));
           const hasLinkedinUrn = records.some((item) => item?.linkedin_message_urn);
           const onConflict = hasLinkedinUrn ? "linkedin_message_urn" : "external_id";
+          const sourceLabel = hasLinkedinUrn ? "💾 Source: Voyager" : "👁️ Source: DOM";
+          console.log(sourceLabel);
           const { error } = await supabase
             .from("interactions")
             .upsert(records, { onConflict, ignoreDuplicates: true });

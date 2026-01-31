@@ -78,6 +78,7 @@ console.log(
   const sentMessageIds = new Set();
   const sentInteractionMessageIds = new Set();
   const authorNameByUrn = new Map();
+  const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
 
   const getFallbackAuthorName = () => {
     const node = document.querySelector(".msg-entity-lockup__entity-title");
@@ -99,7 +100,10 @@ console.log(
     const lastName = obj.lastName || obj?.miniProfile?.lastName;
     if (entityUrn && (firstName || lastName)) {
       const name = [firstName, lastName].filter(Boolean).join(" ").trim();
-      if (name) authorNameByUrn.set(entityUrn, name);
+      if (name) {
+        authorNameByUrn.set(entityUrn, name);
+        identityMap.set(name, { name, member_urn: entityUrn });
+      }
     }
 
     for (const key of Object.keys(obj)) {
@@ -180,6 +184,12 @@ console.log(
           senderMember?.miniProfile?.headline ||
           senderMember?.occupation ||
           null;
+        if (authorName && threadId) {
+          identityMap.set(authorName, {
+            name: authorName,
+            conversation_urn: threadId,
+          });
+        }
         return {
           linkedin_message_urn: messageId,
           thread_id: threadId,
@@ -188,6 +198,7 @@ console.log(
           author_name: authorName,
           author_headline: authorHeadline,
           delivered_at: deliveredAt ? new Date(deliveredAt).toISOString() : null,
+          source: "voyager",
         };
       })
       .filter((item) => item.linkedin_message_urn && item.content);

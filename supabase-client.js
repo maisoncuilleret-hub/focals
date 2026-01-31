@@ -119,7 +119,9 @@ function from(table) {
       }
       const query = params.toString();
       const url = query ? `${SUPABASE_URL}/rest/v1/${table}?${query}` : `${SUPABASE_URL}/rest/v1/${table}`;
-      const resolution = options?.preferResolution || "merge-duplicates";
+      const resolution = options?.ignoreDuplicates
+        ? "ignore-duplicates"
+        : options?.preferResolution || "merge-duplicates";
       const preferParts = [`resolution=${resolution}`];
       preferParts.push(options?.returning ? `return=${options.returning}` : "return=minimal");
       const { ok, data, error } = await fetchJson(url, {
