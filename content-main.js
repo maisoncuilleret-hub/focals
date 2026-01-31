@@ -152,28 +152,32 @@
       const identity = captureIdentityForDomRadar() || getIdentity();
 
       messages.forEach((msg) => {
-        const signature = `${identity?.match_name || "unknown"}::${msg.text || ""}`;
+        const normalizedText = clean(msg.text || "");
+        const signature = `${identity?.match_name || "unknown"}::${normalizedText}`;
         if (
           processedSignatures.has(signature) ||
-          processedTexts.has(msg.text || "") ||
-          recentVoyagerMessages.has(msg.text || "") ||
-          voyagerLock.has(msg.text || "") ||
+          processedTexts.has(normalizedText) ||
+          recentVoyagerMessages.has(normalizedText) ||
+          voyagerLock.has(normalizedText) ||
           processedIds.has(msg.id)
         )
           return;
-        if (msg.text && msg.id && !processedIds.has(msg.id)) {
+        if (normalizedText && msg.id && !processedIds.has(msg.id)) {
           processedIds.add(msg.id);
           processedSignatures.add(signature);
+          processedTexts.add(normalizedText);
+          recentVoyagerMessages.add(normalizedText);
+          voyagerLock.add(normalizedText);
           const voyagerIdentity = identityMap.get(identity?.match_name || "");
           const conversationUrn = voyagerIdentity?.conversation_urn || null;
 
-          console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
+          console.log("📥 [RADAR VOYAGER] Capture :", normalizedText);
 
           // Relais final vers le background script
           chrome.runtime.sendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
-              text: msg.text,
+              text: normalizedText,
               type: "linkedin_voyager_gql",
               received_at: new Date().toISOString(),
               identity,
@@ -246,6 +250,8 @@
             !text ||
             text.length <= 2 ||
             seenSignatures.has(text) ||
+            recentVoyagerMessages.has(text) ||
+            voyagerLock.has(text) ||
             processedSignatures.has(signature)
           )
             return;
