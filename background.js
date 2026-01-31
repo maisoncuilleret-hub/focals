@@ -54,6 +54,8 @@ const expLog = (...a) => console.log(EXP_TAG, ...a);
 const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
 const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -211,16 +213,55 @@ async function relayLiveMessageToSupabase(payload) {
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
   console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
-  const token = await loadStoredToken();
+  let session = null;
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    session = sessionData?.session || null;
+  } catch (err) {
+    logger.warn("SUPABASE session lookup failed", err?.message || err);
+  }
+  if (!session) {
+    const stored = await new Promise((resolve) => {
+      chrome.storage.local.get(
+        ["focals_supabase_session", "focals_supabase_token"],
+        (res) => resolve(res)
+      );
+    });
+    session = stored?.focals_supabase_session || null;
+    if (!session && stored?.focals_supabase_token) {
+      session = { access_token: stored.focals_supabase_token, user: null };
+    }
+  }
+
+  const token = (await loadStoredToken()) || session?.access_token || SUPABASE_ANON_KEY;
   const headers = {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    Authorization: `Bearer ${token}`,
+    apikey: SUPABASE_ANON_KEY,
   };
 
-  const response = await fetch(`${API_BASE_URL}/focals-incoming-message`, {
+  const interaction = {
+    thread_id: cleanPayload.conversation_urn,
+    content: cleanPayload.text,
+    author_name: cleanPayload.match_name,
+    profile_url: cleanPayload.profile_url,
+    delivered_at: cleanPayload.received_at,
+    source: cleanPayload.type,
+    direction:
+      payload?.is_from_me === true
+        ? "outbound"
+        : payload?.is_from_me === false
+          ? "inbound"
+          : null,
+  };
+
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/focals-upsert-interactions`, {
     method: "POST",
     headers,
-    body: JSON.stringify(cleanPayload),
+    body: JSON.stringify({
+      interactions: [interaction],
+      user_id: session?.user?.id || null,
+    }),
   });
   const responseBody = await response.text();
 
@@ -1755,10 +1796,6 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
 }
 
 async function saveProfileToSupabaseExternal(profileData) {
-  const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
-  const SUPABASE_ANON_KEY =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
-
   console.log(
     "[Focals] Sauvegarde vers Supabase:",
     profileData.linkedin_url || profileData.linkedinProfileUrl
@@ -1851,10 +1888,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const sourceLabel = hasLinkedinUrn ? "💾 Source: Voyager" : "👁️ Source: DOM";
           console.log(sourceLabel);
 
-          const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
-          const SUPABASE_ANON_KEY =
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
-
           const response = await fetch(
             `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
             {
@@ -1943,10 +1976,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: "Missing message_id" });
         return false;
       }
-
-      const SUPABASE_URL = "https://ppawceknsedxaejpeylu.supabase.co";
-      const SUPABASE_ANON_KEY =
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
 
       fetch(`${SUPABASE_URL}/rest/v1/linkedin_messages`, {
         method: "POST",
