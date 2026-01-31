@@ -182,6 +182,7 @@
               received_at: new Date().toISOString(),
               identity,
               conversation_urn: conversationUrn || identity?.conversation_urn || null,
+              message_urn: msg.id || null,
               source: "dom",
             },
           });
@@ -194,15 +195,20 @@
     const payload = event?.detail?.data || null;
     if (!payload || typeof payload !== "object") return;
     const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    elements.forEach((item) => {
+    const enrichedElements = elements.map((item) => ({
+      ...item,
+      message_urn: item?.backendUrn || item?.entityUrn || null,
+      conversation_urn: item?.backendConversationUrn || item?.conversationUrn || null,
+    }));
+    enrichedElements.forEach((item) => {
       const sender =
         item?.sender?.member ||
         item?.from?.messagingMember?.miniProfile ||
         item?.from?.messagingMember ||
         null;
       const name = [sender?.firstName, sender?.lastName].filter(Boolean).join(" ").trim();
-      const conversationUrn = item?.backendConversationUrn || item?.conversationUrn || null;
-      const messageUrn = item?.backendUrn || null;
+      const conversationUrn = item?.conversation_urn || null;
+      const messageUrn = item?.message_urn || null;
       const text = item?.body?.text || null;
       if (messageUrn) processedIds.add(messageUrn);
       if (name && text) {
@@ -217,7 +223,10 @@
     });
     chrome.runtime.sendMessage({
       type: "FOCALS_VOYAGER_CONVERSATIONS",
-      payload,
+      payload: {
+        ...payload,
+        elements: enrichedElements,
+      },
     });
   });
 

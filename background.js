@@ -56,6 +56,7 @@ const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
+const liveMessageUrnDedup = new Set();
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -206,6 +207,8 @@ async function relayLiveMessageToSupabase(payload) {
     match_name: matchName,
     profile_url: profileUrl,
     conversation_urn: normalizeConversationUrn(conversation_urn || payload?.conversationUrn),
+    linkedin_message_urn:
+      payload?.message_urn || payload?.linkedin_message_urn || payload?.backendUrn || null,
     type: type || "linkedin_live",
     received_at: new Date().toISOString(),
   };
@@ -240,8 +243,20 @@ async function relayLiveMessageToSupabase(payload) {
     apikey: SUPABASE_ANON_KEY,
   };
 
+  if (cleanPayload.linkedin_message_urn) {
+    if (liveMessageUrnDedup.has(cleanPayload.linkedin_message_urn)) {
+      console.log(
+        "🎯 [RADAR] Skip duplicate linkedin_message_urn:",
+        cleanPayload.linkedin_message_urn
+      );
+      return { ok: true, status: 200, data: "deduped" };
+    }
+    liveMessageUrnDedup.add(cleanPayload.linkedin_message_urn);
+  }
+
   const interaction = {
     thread_id: cleanPayload.conversation_urn,
+    linkedin_message_urn: cleanPayload.linkedin_message_urn,
     content: cleanPayload.text,
     author_name: cleanPayload.match_name,
     profile_url: cleanPayload.profile_url,
