@@ -170,6 +170,7 @@
           voyagerLock.add(normalizedText);
           const voyagerIdentity = identityMap.get(identity?.match_name || "");
           const conversationUrn = voyagerIdentity?.conversation_urn || null;
+          const profileUrl = voyagerIdentity?.profile_url || identity?.profile_url || null;
 
           console.log("📥 [RADAR VOYAGER] Capture :", normalizedText);
 
@@ -183,6 +184,7 @@
               identity,
               conversation_urn: conversationUrn || identity?.conversation_urn || null,
               message_urn: msg.id || null,
+              profile_url: profileUrl,
               source: "dom",
             },
           });
@@ -190,6 +192,16 @@
       });
     }
   });
+
+  const buildProfileUrl = (miniProfile) => {
+    const publicIdentifier =
+      miniProfile?.publicIdentifier ||
+      miniProfile?.public_identifier ||
+      miniProfile?.publicId ||
+      null;
+    if (!publicIdentifier) return null;
+    return `https://www.linkedin.com/in/${publicIdentifier}`;
+  };
 
   window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
     const payload = event?.detail?.data || null;
@@ -199,6 +211,12 @@
       ...item,
       message_urn: item?.backendUrn || item?.entityUrn || null,
       conversation_urn: item?.backendConversationUrn || item?.conversationUrn || null,
+      profile_url: buildProfileUrl(
+        item?.sender?.member?.miniProfile ||
+          item?.from?.messagingMember?.miniProfile ||
+          item?.from?.messagingMember ||
+          null
+      ),
     }));
     enrichedElements.forEach((item) => {
       const sender =
@@ -218,6 +236,7 @@
         identityMap.set(name, {
           name,
           conversation_urn: conversationUrn,
+          profile_url: item?.profile_url || null,
         });
       }
     });

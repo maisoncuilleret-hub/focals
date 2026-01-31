@@ -206,9 +206,15 @@ async function relayLiveMessageToSupabase(payload) {
     text: cleanText,
     match_name: matchName,
     profile_url: profileUrl,
-    conversation_urn: normalizeConversationUrn(conversation_urn || payload?.conversationUrn),
+    conversation_urn: normalizeConversationUrn(
+      conversation_urn || payload?.conversation_urn || payload?.conversationUrn
+    ),
     linkedin_message_urn:
-      payload?.message_urn || payload?.linkedin_message_urn || payload?.backendUrn || null,
+      payload?.message_urn ||
+      payload?.linkedin_message_urn ||
+      payload?.backendUrn ||
+      payload?.messageUrn ||
+      null,
     type: type || "linkedin_live",
     received_at: new Date().toISOString(),
   };
