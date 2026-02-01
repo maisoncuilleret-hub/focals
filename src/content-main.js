@@ -135,7 +135,7 @@
     if (!currentUrl || currentUrl === lastLinkedinIdSync) return;
 
     const ids = extractLinkedinIds();
-    const nameEl = document.querySelector("h1");
+    const nameEl = document.querySelector('h1.text-heading-xlarge, h1');
     const name = nameEl ? nameEl.innerText.trim() : "";
 
     if (currentUrl && ids.linkedin_internal_id) {
