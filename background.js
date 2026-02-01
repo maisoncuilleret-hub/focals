@@ -230,6 +230,10 @@ async function relayLiveMessageToSupabase(payload) {
     matchName = "LinkedIn User";
   }
 
+  if (isTechnicalLinkedinProfileUrl(profileUrl)) {
+    console.log(`✅ Match réussi via ID Technique pour ${matchName}`);
+  }
+
   const cleanPayload = {
     text: cleanText,
     match_name: matchName,
