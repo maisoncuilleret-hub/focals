@@ -52,6 +52,62 @@
     }
   });
 
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const rawData = event?.detail?.data || null;
+    if (!rawData) return;
+
+    // On cible la structure SyncToken (Bulk) ou standard (Temps réel)
+    const elements =
+      rawData?.data?.messengerMessagesBySyncToken?.elements || rawData?.elements || [];
+
+    if (elements.length === 0) return;
+
+    if (!window._focalsIdentityMap) {
+      window._focalsIdentityMap = new Map();
+    }
+
+    const enrichedElements = elements.map((item) => {
+      // 🔍 Extraction de l'identité via le chemin robuste participantType
+      const p =
+        item?.sender?.participantType?.member ||
+        item?.actor?.participantType?.member ||
+        item?.sender?.member ||
+        item?.sender ||
+        {};
+
+      const fName = p?.firstName?.text || p?.firstName || "";
+      const lName = p?.lastName?.text || p?.lastName || "";
+      const fullName = (fName + " " + lName).trim() || "LinkedIn User";
+
+      // 🆔 Extraction de l'ID technique (ACoAA...)
+      const techId = (item?.sender?.hostIdentityUrn || item?.actor?.hostIdentityUrn || "")
+        .split(":")
+        .pop();
+
+      // 🧠 Mise à jour de la mémoire locale (Identity Map)
+      if (fullName !== "LinkedIn User" && techId) {
+        window._focalsIdentityMap.set(fullName, {
+          name: fullName,
+          internal_id: techId,
+          conversation_urn: item?.conversationUrn || item?.backendConversationUrn,
+        });
+      }
+
+      return {
+        ...item,
+        match_name: fullName, // Indispensable pour le matching backend
+        match_id: techId, // L'ID technique ACoAA...
+        body_text: item?.body?.text || "",
+      };
+    });
+
+    // Envoi au background pour l'upsert Supabase
+    chrome.runtime.sendMessage({
+      type: "FOCALS_VOYAGER_CONVERSATIONS",
+      payload: { elements: enrichedElements },
+    });
+  });
+
   // --- 3. LOGIQUE DE SCRAPING DE PROFIL ---
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
