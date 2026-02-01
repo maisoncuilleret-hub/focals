@@ -125,6 +125,37 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
   return { ok: true, status: response.status, data: payload };
 }
 
+const normalizeLinkedinProfileUrl = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === "unknown") return null;
+  try {
+    const normalizedValue = raw.startsWith("www.linkedin.com/")
+      ? `https://${raw}`
+      : raw;
+    const url = new URL(normalizedValue);
+    url.search = "";
+    url.hash = "";
+    const match = url.pathname.match(/\/in\/[^/]+/i);
+    if (match) {
+      return `${url.origin}${match[0].replace(/\/$/, "")}/`;
+    }
+    return `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
+  } catch {
+    const cleaned = raw.split(/[?#]/)[0];
+    if (!cleaned) return null;
+    return cleaned.endsWith("/") ? cleaned : `${cleaned}/`;
+  }
+};
+
+const isTechnicalLinkedinProfileUrl = (value) => {
+  const normalized = normalizeLinkedinProfileUrl(value);
+  if (!normalized) return false;
+  const match = normalized.match(/\/in\/([^/]+)\//i);
+  const slug = match?.[1] || "";
+  return /^ACo/i.test(slug);
+};
+
 async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
@@ -171,7 +202,8 @@ async function relayLiveMessageToSupabase(payload) {
     return fallback;
   };
 
-  const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
+  const profileUrl =
+    normalizeLinkedinProfileUrl(profile_url) || "https://www.linkedin.com/in/unknown/";
   const slugToName = (slug) =>
     slug
       ? slug
@@ -200,6 +232,10 @@ async function relayLiveMessageToSupabase(payload) {
   }
   if (!matchName || matchName.trim().toLowerCase() === "unknown") {
     matchName = "LinkedIn User";
+  }
+
+  if (isTechnicalLinkedinProfileUrl(profileUrl)) {
+    console.log(`✅ Match réussi via ID Technique pour ${matchName}`);
   }
 
   const cleanPayload = {
@@ -401,7 +437,8 @@ async function saveProfileToSupabase(profile) {
 
   const payload = {
     name: profile.name || "",
-    linkedin_url: profile.linkedin_url,
+    linkedin_url: normalizeLinkedinProfileUrl(profile.linkedin_url) || profile.linkedin_url,
+    linkedin_internal_id: profile.linkedin_internal_id || profile.linkedinInternalId || null,
     current_title: profile.current_title || "",
     current_company: profile.current_company || "",
     photo_url: profile.photo_url || "",
