@@ -1,8 +1,8 @@
 (() => {
   const TAG = "🧪 FOCALS CONSOLE";
-  const DEBUG = true; // Forcer le debug pour voir les logs de fix
+  const DEBUG = true;
 
-  // --- 1. UTILITAIRES ET CONSTANTES (TOUJOURS EN HAUT) ---
+  // --- 1. CONFIGURATION & UTILITAIRES (DÉFINIS EN PREMIER) ---
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
@@ -14,16 +14,11 @@
     const rawValue = String(value).trim();
     if (!rawValue || rawValue.toLowerCase() === "unknown") return null;
     try {
-      const url = new URL(
-        rawValue.startsWith("http") ? rawValue : `https://${rawValue}`,
-        window.location.origin
-      );
+      const url = new URL(rawValue.startsWith("http") ? rawValue : `https://${rawValue}`, window.location.origin);
       url.search = "";
       url.hash = "";
       const match = url.pathname.match(/\/in\/[^/]+/i);
-      return match
-        ? `${url.origin}${match[0].replace(/\/$/, "")}/`
-        : `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
+      return match ? `${url.origin}${match[0].replace(/\/$/, "")}/` : `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
     } catch {
       return null;
     }
@@ -33,11 +28,11 @@
     if (chrome.runtime?.id) {
       chrome.runtime.sendMessage(payload, callback);
     } else {
-      warn("Contexte de l'extension invalide. Rafraîchis la page (F5).");
+      warn("Extension context invalidated. Rafraîchis la page (F5).");
     }
   };
 
-  // --- 2. LOGIQUE DE SCRAPING ET MAPPING ---
+  // --- 2. LOGIQUE D'EXTRACTION (IDS TECHNIQUES) ---
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
     const publicSlug = rawSlug.split("/")[0].trim();
@@ -58,7 +53,7 @@
     };
   };
 
-  // --- 3. GESTION DU SYNC (UNE SEULE DÉCLARATION) ---
+  // --- 3. GESTION DU SYNC (DÉCLARATION UNIQUE) ---
   let lastLinkedinIdSync = null;
 
   function syncLinkedinIdsToSupabase() {
@@ -68,7 +63,7 @@
     if (!currentUrl || currentUrl === lastLinkedinIdSync) return;
 
     const ids = extractLinkedinIds();
-    const nameEl = document.querySelector("h1");
+    const nameEl = document.querySelector('h1.text-heading-xlarge, h1');
     const name = nameEl ? nameEl.innerText.trim() : "";
 
     const payload = {
@@ -79,7 +74,7 @@
 
     if (payload.linkedin_url && payload.linkedin_internal_id) {
       lastLinkedinIdSync = currentUrl;
-      log("✅ [MAPPING] Envoi des IDs à Supabase...", payload);
+      log("✅ [MAPPING] Liaison identité :", payload.name, payload.linkedin_internal_id);
       safeSendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
     }
   }
@@ -95,7 +90,7 @@
     }, 2000);
   }
 
-  // --- 4. INTERCEPTEUR VOYAGER ---
+  // --- 4. INTERCEPTEUR RÉSEAU (VOYAGER) ---
   const voyagerSpy = () => {
     if (document.getElementById("focals-voyager-spy")) return;
     const script = document.createElement("script");
@@ -107,19 +102,20 @@
     (document.head || document.documentElement).appendChild(script);
   };
 
-  // --- 5. INITIALISATION ---
-  log("🚀 Initialisation du Content Script...");
+  // --- 5. ÉCOUTEUR DE DONNÉES RÉSEAU ---
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const data = event?.detail?.data;
+    if (data) {
+      safeSendMessage({ type: "FOCALS_VOYAGER_CONVERSATIONS", payload: data });
+    }
+  });
 
-  // Lancer le Spy réseau
+  // --- 6. INITIALISATION ---
+  log("🚀 Content Script Focals démarré.");
   voyagerSpy();
-
-  // Lancer le Watcher de profil (Mapping technique <-> public)
   startProfileIdSyncWatcher();
 
-  // --- ⚠️ DOM RADAR DÉSACTIVÉ ---
-  // setupLiveObserver(); // Commenté pour éviter le bruit et les doublons
-  log("ℹ️ Radar DOM désactivé. Synchronisation via Voyager active.");
-
-  void clean;
-  void DEBUG;
+  // On laisse le setupLiveObserver désactivé pour éviter le bruit
+  // setupLiveObserver();
+  log("ℹ️ Radar DOM désactivé. Synchronisation Voyager & Scraping actifs.");
 })();
