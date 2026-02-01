@@ -101,15 +101,15 @@
   // --- 3. INJECTION DU SPY ---
   const voyagerSpy = () => {
     if (document.getElementById("focals-voyager-spy")) {
-      info("Intercepteur déjà présent.");
+      log("Intercepteur déjà présent.");
       return;
     }
     const s = document.createElement("script");
     s.id = "focals-voyager-spy";
     s.src = chrome.runtime.getURL("src/content/linkedinVoyagerInterceptor.js");
-    s.onload = () => success("Intercepteur Voyager injecté avec succès.");
-    s.onerror = () => error("Échec de l'injection de l'intercepteur !");
+    s.type = "text/javascript";
     (document.head || document.documentElement).appendChild(s);
+    success("Intercepteur Voyager injecté avec succès.");
   };
 
   // --- LANCEMENT ---

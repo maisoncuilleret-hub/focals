@@ -43,22 +43,10 @@
         "https://*.linkedin.com/*"
       ],
       "js": [
-        "content-main.js",
+        "src/content-main.js",
         "content-messaging.js"
       ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
-      ],
-      "js": [
-        "src/content/linkedinVoyagerInterceptor.js"
-      ],
-      "run_at": "document_start",
-      "world": "MAIN"
+      "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
