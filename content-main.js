@@ -21,6 +21,26 @@
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  const extractLinkedinIds = () => {
+    const [, rawSlug = ""] = window.location.pathname.split("/in/");
+    const publicSlug = rawSlug.replace("/", "").trim();
+    const codeTags = document.querySelectorAll("code");
+    let technicalId = null;
+
+    for (const tag of codeTags) {
+      const match = tag.textContent.match(/urn:li:fsd_profile:([^",\s]+)/);
+      if (match) {
+        technicalId = match[1];
+        break;
+      }
+    }
+
+    return {
+      linkedin_url: publicSlug ? `https://www.linkedin.com/in/${publicSlug}/` : null,
+      linkedin_internal_id: technicalId,
+    };
+  };
+
   const uniq = (arr) => {
     const seen = new Set();
     const out = [];
@@ -1809,7 +1829,8 @@
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalProfileUrl(href);
+    const ids = extractLinkedinIds();
+    const linkedinUrl = ids.linkedin_url || canonicalProfileUrl(href);
     const education = parseEducation();
     const skills = parseSkills();
     const infos = scrapeInfosSection();
@@ -1901,6 +1922,7 @@
       fullName,
       photoUrl,
       linkedinUrl,
+      linkedinInternalId: ids.linkedin_internal_id || null,
       relationDegree,
       experiences: finalExperiences,
       education,
@@ -1999,6 +2021,7 @@
       current_title: experiences[0]?.title || "",
       linkedinProfileUrl: result.linkedinUrl || "",
       linkedin_url: result.linkedinUrl || "",
+      linkedin_internal_id: result.linkedinInternalId || null,
       relationDegree: result.relationDegree || null,
       source: "focals-scraper-robust",
       __detailsEnriched: isDetailsEnriched(result),

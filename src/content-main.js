@@ -390,6 +390,26 @@ console.log("🎯 [RADAR] Content Script Loaded");
   const INLINE_DATE_GLUE_RE = /(\d)\s*(an|ans|mois|yr|yrs|mos)\s*(De|Du)\s+/i;
   let dedupeSampleCount = 0;
 
+  const extractLinkedinIds = () => {
+    const [, rawSlug = ""] = window.location.pathname.split("/in/");
+    const publicSlug = rawSlug.replace("/", "").trim();
+    const codeTags = document.querySelectorAll("code");
+    let technicalId = null;
+
+    for (const tag of codeTags) {
+      const match = tag.textContent.match(/urn:li:fsd_profile:([^",\s]+)/);
+      if (match) {
+        technicalId = match[1];
+        break;
+      }
+    }
+
+    return {
+      linkedin_url: publicSlug ? `https://www.linkedin.com/in/${publicSlug}/` : null,
+      linkedin_internal_id: technicalId,
+    };
+  };
+
   function dedupeInlineRepeats(text) {
     const normalized = clean(text);
     if (!normalized) return "";
@@ -1145,7 +1165,8 @@ console.log("🎯 [RADAR] Content Script Loaded");
     const fullName = getFullName(profileRoot);
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalProfileUrl(href);
+    const ids = extractLinkedinIds();
+    const linkedinUrl = ids.linkedin_url || canonicalProfileUrl(href);
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
@@ -1158,6 +1179,7 @@ console.log("🎯 [RADAR] Content Script Loaded");
       fullName,
       photoUrl,
       linkedinUrl,
+      linkedinInternalId: ids.linkedin_internal_id || null,
       relationDegree,
       infos,
       experiences: ready.collected.experiences,
@@ -1239,6 +1261,7 @@ console.log("🎯 [RADAR] Content Script Loaded");
       current_company: experiences[0]?.company || "",
       linkedinProfileUrl: result.linkedinUrl || "",
       linkedin_url: result.linkedinUrl || "",
+      linkedin_internal_id: result.linkedinInternalId || null,
       relationDegree: result.relationDegree || null,
       source: "focals-scraper-robust",
     };
