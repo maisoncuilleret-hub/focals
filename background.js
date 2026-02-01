@@ -1986,20 +1986,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
 
       const elements = Array.isArray(payload?.elements) ? payload.elements : [];
+
+      // On prépare les records au format attendu par l'Edge Function
       const records = elements
         .map((item) => {
-          const externalId = item?.entityUrn || null;
-          const participant = item?.participants?.[0]?.messagingMember || null;
-          const contactName = participant?.miniProfile?.firstName || null;
-          const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
+          const externalId = item?.entityUrn || item?.match_id || null;
           if (!externalId) return null;
+
           return {
-            external_id: externalId,
-            contact_name: contactName,
-            last_message: lastMessage,
+            linkedin_message_urn: externalId, // On utilise le nom de colonne correct
+            contact_name: item?.match_name || "LinkedIn User",
+            last_message: item?.body_text || item?.body?.text || null,
             source: "linkedin_voyager",
             synced_at: new Date().toISOString(),
-            sync_reason: "intercepted",
           };
         })
         .filter(Boolean);
@@ -2009,23 +2008,46 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      supabase
-        .from("interactions")
-        .upsert(records, { onConflict: "external_id" })
-        .then(({ error }) => {
-          if (error) {
-            console.error("[SaaS-Debug] Supabase upsert failed:", error?.message || error);
-            sendResponse({ ok: false, error: error?.message || "UPSERT_FAILED" });
-            return;
-          }
-          sendResponse({ ok: true, count: records.length });
-        })
-        .catch((err) => {
-          console.error("[SaaS-Debug] Supabase upsert error:", err?.message || err);
-          sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
-        });
+      // On utilise une fonction async pour appeler l'Edge Function
+      (async () => {
+        try {
+          // Tenter de récupérer le user_id pour lier l'interaction au bon recruteur
+          const { data: { session } } = await supabase.auth.getSession();
+          const userId = session?.user?.id || null;
 
-      return true;
+          console.log("🚀 [Focals] Envoi Voyager vers Edge Function...");
+
+          const response = await fetch(
+            `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
+              },
+              body: JSON.stringify({
+                interactions: records,
+                user_id: userId, // On passe l'ID utilisateur si on l'a
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || "Function error");
+          }
+
+          const result = await response.json();
+          console.log("✅ [Focals] Voyager Sync réussi !");
+          sendResponse({ ok: true, count: records.length });
+        } catch (err) {
+          console.error("❌ [Focals] Erreur via Edge Function:", err.message);
+          sendResponse({ ok: false, error: err.message });
+        }
+      })();
+
+      return true; // Important pour Chrome pour attendre la réponse async
     }
     case "SYNC_LINKEDIN_MESSAGE": {
       const payload = message?.payload;
