@@ -12,52 +12,59 @@
 
   // --- 1. L'OREILLE (ÉCOUTEUR DE DONNÉES VOYAGER) ---
   const handleIncomingData = (rawData, source) => {
-    // On cherche les messages
-    const elements = rawData?.data?.messengerMessagesBySyncToken?.elements || rawData?.elements || [];
+    try {
+      // 1. Initialisation de la mémoire si elle n'existe pas
+      if (!window._focalsIdentityMap) {
+        window._focalsIdentityMap = new Map();
+      }
 
-    if (elements.length === 0) {
-      info(`Signal reçu de [${source}] mais aucun message trouvé dans 'elements'.`);
-      return;
+      const elements =
+        rawData?.data?.messengerMessagesBySyncToken?.elements || rawData?.elements || [];
+
+      if (elements.length === 0) return;
+
+      log(`📡 [VOYAGER DATA] Source: ${source} | ${elements.length} messages`);
+
+      const enriched = elements.map((item) => {
+        const p =
+          item?.sender?.participantType?.member ||
+          item?.actor?.participantType?.member ||
+          item?.sender?.member ||
+          {};
+
+        const fName = p?.firstName?.text || p?.firstName || "";
+        const lName = p?.lastName?.text || p?.lastName || "";
+        const fullName = (fName + " " + lName).trim() || "LinkedIn User";
+        const techId = (item?.sender?.hostIdentityUrn || item?.actor?.hostIdentityUrn || "")
+          .split(":")
+          .pop();
+
+        // --- LA LIGNE MANQUANTE : ON RANGE DANS LA MÉMOIRE ---
+        if (fullName !== "LinkedIn User" && techId) {
+          window._focalsIdentityMap.set(fullName, {
+            name: fullName,
+            internal_id: techId,
+            conversation_urn: item?.conversationUrn || item?.backendConversationUrn,
+          });
+        }
+
+        return {
+          ...item,
+          match_name: fullName,
+          match_id: techId,
+          body_text: item?.body?.text || "",
+        };
+      });
+
+      success(`Mémoire mise à jour et envoi de ${enriched.length} messages au Service Worker.`);
+
+      chrome.runtime.sendMessage({
+        type: "FOCALS_VOYAGER_CONVERSATIONS",
+        payload: { elements: enriched },
+      });
+    } catch (e) {
+      error("Erreur lors du traitement des données :", e);
     }
-
-    console.group(`📡 [VOYAGER DATA] Source: ${source} | ${elements.length} messages`);
-
-    const enriched = elements.map((item, index) => {
-      // 🔍 DEBUG PROFOND DE L'IDENTITÉ
-      const path1 = item?.sender?.participantType?.member;
-      const path2 = item?.actor?.participantType?.member;
-      const path3 = item?.sender?.member;
-
-      const p = path1 || path2 || path3 || item?.sender || {};
-
-      const fName = p?.firstName?.text || p?.firstName || "";
-      const lName = p?.lastName?.text || p?.lastName || "";
-      const fullName = (fName + " " + lName).trim() || "LinkedIn User";
-
-      const techId = (item?.sender?.hostIdentityUrn || item?.actor?.hostIdentityUrn || "").split(":").pop();
-
-      log(
-        `Message [${index}] | Nom: ${fullName} | ID: ${techId} | Chemin: ${
-          path1 ? "path1" : path2 ? "path2" : "path3"
-        }`,
-      );
-
-      return {
-        ...item,
-        match_name: fullName,
-        match_id: techId,
-        body_text: item?.body?.text || "",
-      };
-    });
-
-    console.groupEnd();
-
-    // Envoi au background
-    success(`Envoi de ${enriched.length} messages enrichis au Service Worker.`);
-    chrome.runtime.sendMessage({
-      type: "FOCALS_VOYAGER_CONVERSATIONS",
-      payload: { elements: enriched },
-    });
   };
 
   // On écoute sur tous les canaux possibles pour ne rien rater
@@ -96,7 +103,7 @@
     } else {
       warn("Page profil détectée mais ID technique (ACoAA) introuvable dans le DOM.");
     }
-  }
+  });
 
   // --- 3. INJECTION DU SPY ---
   const voyagerSpy = () => {
