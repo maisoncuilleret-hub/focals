@@ -22,8 +22,6 @@ chrome.webRequest.onBeforeRequest.addListener(
           conversationUrn = conversationUrn || json.conversationUrn;
 
           if (messageText && conversationUrn) {
-            console.log("🎯 [RADAR] Network Hit:", conversationUrn);
-
             if (typeof relayLiveMessageToSupabase === "function") {
               relayLiveMessageToSupabase({
                 text: messageText,
@@ -125,6 +123,37 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
   return { ok: true, status: response.status, data: payload };
 }
 
+const normalizeLinkedinProfileUrl = (value) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === "unknown") return null;
+  try {
+    const normalizedValue = raw.startsWith("www.linkedin.com/")
+      ? `https://${raw}`
+      : raw;
+    const url = new URL(normalizedValue);
+    url.search = "";
+    url.hash = "";
+    const match = url.pathname.match(/\/in\/[^/]+/i);
+    if (match) {
+      return `${url.origin}${match[0].replace(/\/$/, "")}/`;
+    }
+    return `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
+  } catch {
+    const cleaned = raw.split(/[?#]/)[0];
+    if (!cleaned) return null;
+    return cleaned.endsWith("/") ? cleaned : `${cleaned}/`;
+  }
+};
+
+const isTechnicalLinkedinProfileUrl = (value) => {
+  const normalized = normalizeLinkedinProfileUrl(value);
+  if (!normalized) return false;
+  const match = normalized.match(/\/in\/([^/]+)\//i);
+  const slug = match?.[1] || "";
+  return /^ACo/i.test(slug);
+};
+
 async function relayLiveMessageToSupabase(payload) {
   if (!payload?.text) return;
 
@@ -144,9 +173,7 @@ async function relayLiveMessageToSupabase(payload) {
         profile_url = context.profileUrl || context.profile_url || profile_url;
       }
     }
-  } catch (error) {
-    console.warn("🎯 [RADAR] Échec de récupération du contexte", error);
-  }
+  } catch (error) {}
 
   const cleanText = String(text || "")
     .replace(/View profile.*/gi, "")
@@ -171,7 +198,8 @@ async function relayLiveMessageToSupabase(payload) {
     return fallback;
   };
 
-  const profileUrl = profile_url || "https://www.linkedin.com/in/unknown";
+  const profileUrl =
+    normalizeLinkedinProfileUrl(profile_url) || "https://www.linkedin.com/in/unknown/";
   const slugToName = (slug) =>
     slug
       ? slug
@@ -219,9 +247,6 @@ async function relayLiveMessageToSupabase(payload) {
     received_at: new Date().toISOString(),
   };
 
-  console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
-  console.log("🚀 PAYLOAD FINAL:", cleanPayload);
-
   let session = null;
   try {
     const { data: sessionData } = await supabase.auth.getSession();
@@ -251,10 +276,6 @@ async function relayLiveMessageToSupabase(payload) {
 
   if (cleanPayload.linkedin_message_urn) {
     if (liveMessageUrnDedup.has(cleanPayload.linkedin_message_urn)) {
-      console.log(
-        "🎯 [RADAR] Skip duplicate linkedin_message_urn:",
-        cleanPayload.linkedin_message_urn
-      );
       return { ok: true, status: 200, data: "deduped" };
     }
     liveMessageUrnDedup.add(cleanPayload.linkedin_message_urn);
@@ -287,11 +308,14 @@ async function relayLiveMessageToSupabase(payload) {
   const responseBody = await response.text();
 
   if (!response.ok) {
-    console.error(`🎯 [RADAR] ❌ [SUPABASE] Error (${response.status}):`, responseBody);
     return { ok: false, status: response.status, error: responseBody };
   }
 
-  console.log(`🎯 [RADAR] ✅ [SUPABASE] Success (${response.status}):`, responseBody);
+  const sourceType = String(type || "").toLowerCase();
+  const isVoyagerSource = sourceType.includes("voyager") || sourceType.includes("dash");
+  if (isVoyagerSource) {
+    console.log("✅ [SYNC] Message archivé (Voyager)");
+  }
   return { ok: true, status: response.status, data: responseBody };
 }
 
@@ -401,16 +425,24 @@ async function saveProfileToSupabase(profile) {
 
   const payload = {
     name: profile.name || "",
-    linkedin_url: profile.linkedin_url,
+    linkedin_url: normalizeLinkedinProfileUrl(profile.linkedin_url) || profile.linkedin_url,
+    linkedin_internal_id: profile.linkedin_internal_id || profile.linkedinInternalId || null,
     current_title: profile.current_title || "",
     current_company: profile.current_company || "",
     photo_url: profile.photo_url || "",
     client_id: clientId,
   };
 
-  const { error } = await supabase.from("profiles").insert(payload);
+  const onConflict = payload.linkedin_internal_id ? "linkedin_internal_id" : "linkedin_url";
+  const { error } = await supabase
+    .from("profiles")
+    .upsert(payload, { onConflict, ignoreDuplicates: false });
   if (error) {
     throw new Error(error.message || "Erreur inconnue lors de l'insertion Supabase.");
+  }
+
+  if (payload.linkedin_internal_id) {
+    console.log(`✅ [MAPPING] Identité liée pour ${payload.name || "LinkedIn User"}`);
   }
 
   return { success: true };
@@ -2028,15 +2060,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: "Missing live message payload" });
         return false;
       }
-
-      console.log("🎯 [RADAR] Incoming live relay :", payload?.text);
       relayLiveMessageToSupabase(payload)
         .then((result) => {
-          console.log("🎯 [RADAR] Live message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("🎯 [RADAR] Live relay failed", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;
@@ -2047,15 +2075,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: "Missing incoming relay payload" });
         return false;
       }
-
-      console.log("🎯 [RADAR] Incoming network/dom relay :", payload?.text);
       relayLiveMessageToSupabase(payload)
         .then((result) => {
-          console.log("🎯 [RADAR] Incoming message synced to Supabase");
           sendResponse(result);
         })
         .catch((err) => {
-          console.error("🎯 [RADAR] Incoming relay failed", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "Relay failed" });
         });
       return true;
