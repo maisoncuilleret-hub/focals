@@ -89,6 +89,16 @@ console.log(
   window._recentVoyagerMessages = recentVoyagerMessages;
   const voyagerLock = (window._focalsVoyagerLock = window._focalsVoyagerLock || new Set());
   const authorNameByHostUrn = new Map();
+  const safeSendMessage = (payload, callback) => {
+    if (!chrome.runtime?.id) {
+      if (typeof callback === "function") {
+        callback({ ok: false, error: "Extension context invalidated" });
+      }
+      return false;
+    }
+    chrome.runtime.sendMessage(payload, callback);
+    return true;
+  };
 
   const getFallbackAuthorName = () => {
     const node = document.querySelector(".msg-entity-lockup__entity-title");
@@ -208,7 +218,7 @@ console.log(
         authorNameByHostUrn.set(message.author_urn, authorName);
       }
 
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type: "SYNC_LINKEDIN_MESSAGE",
         payload: {
           message_id: message.message_id,
@@ -297,7 +307,7 @@ console.log(
 
     if (!payloads.length) return;
 
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: "FOCALS_UPSERT_INTERACTIONS",
       payload: payloads,
     });
@@ -340,6 +350,10 @@ console.log(
     }
 
     return new Promise((resolve) => {
+      if (!chrome.runtime?.id) {
+        resolve({ ok: false, error: "Extension context invalidated" });
+        return;
+      }
       chrome.runtime.sendMessage(
         {
           type: "FOCALS_UPSERT_INTERACTIONS",
@@ -374,6 +388,10 @@ console.log(
         console.log(
           `[Focals][MSG][API_REQUEST] attempt ${attempt} -> ${method} ${endpoint}`
         );
+        if (!chrome.runtime?.id) {
+          reject(new Error("Extension context invalidated"));
+          return;
+        }
         chrome.runtime.sendMessage(payload, (response) => {
           if (chrome.runtime.lastError) {
             const message = chrome.runtime.lastError.message || "Runtime messaging failed";
@@ -847,6 +865,10 @@ console.log(
 
     const openProfileTabInBackground = (profileUrl) =>
       new Promise((resolve, reject) => {
+        if (!chrome.runtime?.id) {
+          reject(new Error("Extension context invalidated"));
+          return;
+        }
         try {
           chrome.runtime.sendMessage(
             { type: "FOCALS_SCRAPE_PROFILE_URL", url: profileUrl },
@@ -870,6 +892,7 @@ console.log(
     const closeTabById = (tabId) =>
       new Promise((resolve) => {
         if (!tabId) return resolve(false);
+        if (!chrome.runtime?.id) return resolve(false);
         try {
           chrome.runtime.sendMessage({ type: "FOCALS_CLOSE_TAB", tabId }, () => resolve(true));
         } catch (err) {
@@ -955,6 +978,10 @@ console.log(
 
     const forceProfileRescrape = () =>
       new Promise((resolve) => {
+        if (!chrome.runtime?.id) {
+          resolve(false);
+          return;
+        }
         try {
           chrome.runtime.sendMessage({ type: "FOCALS_FORCE_RESCRAPE" }, () => resolve(true));
         } catch (err) {

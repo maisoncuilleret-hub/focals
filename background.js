@@ -318,7 +318,7 @@ async function relayLiveMessageToSupabase(payload) {
   const sourceType = String(type || "").toLowerCase();
   const isVoyagerSource = sourceType.includes("voyager") || sourceType.includes("dash");
   if (isVoyagerSource) {
-    console.log("🚀 [SYNC] Message envoyé via Voyager");
+    console.log("✅ [SYNC] Message archivé (Voyager)");
   }
   return { ok: true, status: response.status, data: responseBody };
 }
@@ -446,7 +446,7 @@ async function saveProfileToSupabase(profile) {
   }
 
   if (payload.linkedin_internal_id) {
-    console.log(`✅ [SCRAP] ID interne lié pour ${payload.name || "LinkedIn User"}`);
+    console.log(`✅ [MAPPING] Identité liée pour ${payload.name || "LinkedIn User"}`);
   }
 
   return { success: true };

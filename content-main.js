@@ -20,6 +20,12 @@
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const normalizeProfilePath = (pathname = "") => {
+    const normalized = pathname.replace(/\/$/, "");
+    const match = normalized.match(/^\/in\/[^/]+/i);
+    return match ? match[0] : null;
+  };
   const normalizeLinkedinProfileUrl = (value) => {
     if (!value) return null;
     const rawValue = String(value).trim();
@@ -42,6 +48,26 @@
       return raw.endsWith("/") ? raw : `${raw}/`;
     }
   };
+  const canonicalProfileUrl = (u) => {
+    try {
+      const url = new URL(u, window.location.origin);
+      url.search = "";
+      url.hash = "";
+      const basePath = normalizeProfilePath(url.pathname);
+      if (!basePath) return null;
+      return `${url.origin}${basePath}`;
+    } catch {
+      return null;
+    }
+  };
+  // Always derive details url from canonical /in/<slug> base path.
+  const buildDetailsExperienceUrlFromProfile = (href = location.href) => {
+    const base = canonicalProfileUrl(href);
+    if (!base) return null;
+    return `${base.replace(/\/$/, "")}/details/experience/`;
+  };
+  const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
+  const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
 
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
@@ -74,6 +100,11 @@
       out.push(v);
     }
     return out;
+  };
+
+  const safeSendMessage = (payload, callback) => {
+    if (!chrome.runtime?.id) return;
+    chrome.runtime.sendMessage(payload, callback);
   };
 
   const captureIsolatedIdentity = (messageNode) => {
@@ -162,7 +193,7 @@
   // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
     if (event.data?.type === "FOCALS_VOYAGER_CONVERSATIONS") {
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type: "FOCALS_VOYAGER_CONVERSATIONS",
         payload: event.data?.data || null,
       });
@@ -214,7 +245,7 @@
           );
 
           // Relais final vers le background script
-          chrome.runtime.sendMessage({
+          safeSendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
               text: normalizedText,
@@ -316,15 +347,15 @@
       if (name && text) {
         processedSignatures.add(`${name}::${text}`);
       }
-      if (name) {
-        identityMap.set(name, {
-          name,
-          conversation_urn: conversationUrn,
-          profile_url: item?.profile_url || null,
-        });
-      }
-    });
-    chrome.runtime.sendMessage({
+    if (name) {
+      identityMap.set(name, {
+        name,
+        conversation_urn: conversationUrn,
+        profile_url: item?.profile_url || null,
+      });
+    }
+  });
+    safeSendMessage({
       type: "FOCALS_VOYAGER_CONVERSATIONS",
       payload: {
         ...payload,
@@ -373,7 +404,7 @@
           const voyagerIdentity = identityMap.get(identity?.name || identity?.match_name || "");
 
           seenSignatures.add(text);
-          chrome.runtime.sendMessage({
+          safeSendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
               text,
@@ -392,32 +423,34 @@
 
   // setupLiveObserver();
 
-  const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
-  const normalizeProfilePath = (pathname = "") => {
-    const normalized = pathname.replace(/\/$/, "");
-    const match = normalized.match(/^\/in\/[^/]+/i);
-    return match ? match[0] : null;
-  };
-  const canonicalProfileUrl = (u) => {
-    try {
-      const url = new URL(u, window.location.origin);
-      url.search = "";
-      url.hash = "";
-      const basePath = normalizeProfilePath(url.pathname);
-      if (!basePath) return null;
-      return `${url.origin}${basePath}`;
-    } catch {
-      return null;
-    }
-  };
-  // Always derive details url from canonical /in/<slug> base path.
-  const buildDetailsExperienceUrlFromProfile = (href = location.href) => {
-    const base = canonicalProfileUrl(href);
-    if (!base) return null;
-    return `${base.replace(/\/$/, "")}/details/experience/`;
-  };
-  const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
-  const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
+  let lastLinkedinIdSync = null;
+  function syncLinkedinIdsToSupabase() {
+    if (!isProfileUrl(location.href)) return;
+    const profileUrl = normalizeLinkedinProfileUrl(canonicalProfileUrl(location.href));
+    if (!profileUrl || profileUrl === lastLinkedinIdSync) return;
+    const ids = extractLinkedinIds();
+    const profileRoot = pickBestProfileRoot();
+    const name = getFullName(profileRoot);
+    const payload = {
+      name: name || "",
+      linkedin_url: profileUrl,
+      linkedin_internal_id: ids.linkedin_internal_id || null,
+    };
+    if (!payload.linkedin_url) return;
+    lastLinkedinIdSync = profileUrl;
+    safeSendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
+  }
+
+  function startProfileIdSyncWatcher() {
+    let lastHref = location.href;
+    syncLinkedinIdsToSupabase();
+    window.setInterval(() => {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        syncLinkedinIdsToSupabase();
+      }
+    }, 1500);
+  }
 
   let lastLinkedinIdSync = null;
   function syncLinkedinIdsToSupabase() {
@@ -657,6 +690,10 @@
     new Promise((resolve, reject) => {
       if (!detailsUrl) {
         resolve([]);
+        return;
+      }
+      if (!chrome.runtime?.id) {
+        reject(new Error("Extension context invalidated"));
         return;
       }
       try {
