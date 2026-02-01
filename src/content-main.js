@@ -1,12 +1,11 @@
 (() => {
   const TAG = "🧪 FOCALS CONSOLE";
-  const DEBUG = true; // Forcer le debug pour voir les logs de fix
+  const DEBUG = true;
 
-  // --- 1. UTILITAIRES ET CONSTANTES (TOUJOURS EN HAUT) ---
+  // --- 1. UTILITAIRES ET CONSTANTES ---
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
-
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
 
   const normalizeLinkedinProfileUrl = (value) => {
@@ -14,16 +13,11 @@
     const rawValue = String(value).trim();
     if (!rawValue || rawValue.toLowerCase() === "unknown") return null;
     try {
-      const url = new URL(
-        rawValue.startsWith("http") ? rawValue : `https://${rawValue}`,
-        window.location.origin
-      );
+      const url = new URL(rawValue.startsWith("http") ? rawValue : `https://${rawValue}`, window.location.origin);
       url.search = "";
       url.hash = "";
       const match = url.pathname.match(/\/in\/[^/]+/i);
-      return match
-        ? `${url.origin}${match[0].replace(/\/$/, "")}/`
-        : `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
+      return match ? `${url.origin}${match[0].replace(/\/$/, "")}/` : `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
     } catch {
       return null;
     }
@@ -33,11 +27,88 @@
     if (chrome.runtime?.id) {
       chrome.runtime.sendMessage(payload, callback);
     } else {
-      warn("Contexte de l'extension invalide. Rafraîchis la page (F5).");
+      warn("Contexte invalide. F5 requis.");
     }
   };
 
-  // --- 2. LOGIQUE DE SCRAPING ET MAPPING ---
+  // --- 2. ÉCOUTEUR DES SIGNAUX DE L'INTERCEPTEUR (L'OREILLE) ---
+  window.addEventListener("message", (event) => {
+    // On n'écoute que les messages venant de notre Spy
+    if (event.data?.type === "FOCALS_VOYAGER_CONVERSATIONS") {
+      log("📡 [VOYAGER] Données Bulk reçues de l'intercepteur");
+      safeSendMessage({
+        type: "FOCALS_VOYAGER_CONVERSATIONS",
+        payload: event.data?.data || null,
+      });
+    }
+
+    if (event.data?.type === "FOCALS_NETWORK_DATA") {
+      log("📡 [VOYAGER] Nouveau message détecté (Temps réel)");
+      // Relais direct au background pour traitement
+      safeSendMessage({
+        type: "FOCALS_NETWORK_DATA",
+        payload: event.data?.data || null,
+      });
+    }
+  });
+
+  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
+    const rawData = event?.detail?.data || null;
+    if (!rawData) return;
+
+    // On cible la structure SyncToken (Bulk) ou standard (Temps réel)
+    const elements =
+      rawData?.data?.messengerMessagesBySyncToken?.elements || rawData?.elements || [];
+
+    if (elements.length === 0) return;
+
+    if (!window._focalsIdentityMap) {
+      window._focalsIdentityMap = new Map();
+    }
+
+    const enrichedElements = elements.map((item) => {
+      // 🔍 Extraction de l'identité via le chemin robuste participantType
+      const p =
+        item?.sender?.participantType?.member ||
+        item?.actor?.participantType?.member ||
+        item?.sender?.member ||
+        item?.sender ||
+        {};
+
+      const fName = p?.firstName?.text || p?.firstName || "";
+      const lName = p?.lastName?.text || p?.lastName || "";
+      const fullName = (fName + " " + lName).trim() || "LinkedIn User";
+
+      // 🆔 Extraction de l'ID technique (ACoAA...)
+      const techId = (item?.sender?.hostIdentityUrn || item?.actor?.hostIdentityUrn || "")
+        .split(":")
+        .pop();
+
+      // 🧠 Mise à jour de la mémoire locale (Identity Map)
+      if (fullName !== "LinkedIn User" && techId) {
+        window._focalsIdentityMap.set(fullName, {
+          name: fullName,
+          internal_id: techId,
+          conversation_urn: item?.conversationUrn || item?.backendConversationUrn,
+        });
+      }
+
+      return {
+        ...item,
+        match_name: fullName, // Indispensable pour le matching backend
+        match_id: techId, // L'ID technique ACoAA...
+        body_text: item?.body?.text || "",
+      };
+    });
+
+    // Envoi au background pour l'upsert Supabase
+    chrome.runtime.sendMessage({
+      type: "FOCALS_VOYAGER_CONVERSATIONS",
+      payload: { elements: enrichedElements },
+    });
+  });
+
+  // --- 3. LOGIQUE DE SCRAPING DE PROFIL ---
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
     const publicSlug = rawSlug.split("/")[0].trim();
@@ -51,19 +122,15 @@
         break;
       }
     }
-
     return {
       linkedin_url: publicSlug ? `https://www.linkedin.com/in/${publicSlug}/` : null,
       linkedin_internal_id: technicalId,
     };
   };
 
-  // --- 3. GESTION DU SYNC (UNE SEULE DÉCLARATION) ---
   let lastLinkedinIdSync = null;
-
   function syncLinkedinIdsToSupabase() {
     if (!isProfileUrl(location.href)) return;
-
     const currentUrl = normalizeLinkedinProfileUrl(location.href);
     if (!currentUrl || currentUrl === lastLinkedinIdSync) return;
 
@@ -71,16 +138,13 @@
     const nameEl = document.querySelector("h1");
     const name = nameEl ? nameEl.innerText.trim() : "";
 
-    const payload = {
-      name: name,
-      linkedin_url: currentUrl,
-      linkedin_internal_id: ids.linkedin_internal_id,
-    };
-
-    if (payload.linkedin_url && payload.linkedin_internal_id) {
+    if (currentUrl && ids.linkedin_internal_id) {
       lastLinkedinIdSync = currentUrl;
-      log("✅ [MAPPING] Envoi des IDs à Supabase...", payload);
-      safeSendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
+      log("✅ [MAPPING] Envoi des IDs...", { name, internalId: ids.linkedin_internal_id });
+      safeSendMessage({
+        type: "SAVE_PROFILE_TO_SUPABASE",
+        profile: { name, linkedin_url: currentUrl, linkedin_internal_id: ids.linkedin_internal_id },
+      });
     }
   }
 
@@ -95,7 +159,7 @@
     }, 2000);
   }
 
-  // --- 4. INTERCEPTEUR VOYAGER ---
+  // --- 4. INJECTION DE L'INTERCEPTEUR ---
   const voyagerSpy = () => {
     if (document.getElementById("focals-voyager-spy")) return;
     const script = document.createElement("script");
@@ -108,18 +172,8 @@
   };
 
   // --- 5. INITIALISATION ---
-  log("🚀 Initialisation du Content Script...");
-
-  // Lancer le Spy réseau
+  log("🚀 Initialisation du Content Script (Oreille active)...");
   voyagerSpy();
-
-  // Lancer le Watcher de profil (Mapping technique <-> public)
   startProfileIdSyncWatcher();
-
-  // --- ⚠️ DOM RADAR DÉSACTIVÉ ---
-  // setupLiveObserver(); // Commenté pour éviter le bruit et les doublons
-  log("ℹ️ Radar DOM désactivé. Synchronisation via Voyager active.");
-
-  void clean;
-  void DEBUG;
+  log("ℹ️ Radar DOM désactivé. Écoute réseau active.");
 })();
