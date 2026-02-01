@@ -20,6 +20,28 @@
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const normalizeLinkedinProfileUrl = (value) => {
+    if (!value) return null;
+    const rawValue = String(value).trim();
+    if (!rawValue || rawValue.toLowerCase() === "unknown") return null;
+    try {
+      const normalizedValue = rawValue.startsWith("www.linkedin.com/")
+        ? `https://${rawValue}`
+        : rawValue;
+      const url = new URL(normalizedValue, window.location.origin);
+      url.search = "";
+      url.hash = "";
+      const match = url.pathname.match(/\/in\/[^/]+/i);
+      if (match) {
+        return `${url.origin}${match[0].replace(/\/$/, "")}/`;
+      }
+      return `${url.origin}${url.pathname.replace(/\/$/, "")}/`;
+    } catch {
+      const raw = rawValue.split(/[?#]/)[0];
+      if (!raw) return null;
+      return raw.endsWith("/") ? raw : `${raw}/`;
+    }
+  };
 
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
@@ -60,7 +82,6 @@
     );
 
     if (!bubble) {
-      warn("🎯 [RADAR] Message détecté hors d'une bulle connue.");
       return null;
     }
 
@@ -75,11 +96,9 @@
     const linkEl = bubble.querySelector('a[href*="/in/"]');
     const internalUrl = linkEl ? linkEl.href.split("?")[0] : "unknown";
 
-    console.log(`🎯 [RADAR] Identité isolée : ${cleanName} (${internalUrl})`);
-
     return {
       match_name: cleanName,
-      profile_url: internalUrl,
+      profile_url: normalizeLinkedinProfileUrl(internalUrl),
     };
   };
 
@@ -103,7 +122,7 @@
 
     return {
       match_name: cleanName,
-      profile_url: internalUrl,
+      profile_url: normalizeLinkedinProfileUrl(internalUrl),
     };
   };
 
@@ -112,7 +131,7 @@
     if (identity) return identity;
 
     if (/linkedin\.com\/in\//i.test(window.location.href)) {
-      return { match_name: "Unknown", profile_url: window.location.href };
+      return { match_name: "Unknown", profile_url: normalizeLinkedinProfileUrl(window.location.href) };
     }
 
     return { match_name: "Unknown", profile_url: "unknown" };
@@ -190,9 +209,9 @@
           voyagerLock.add(normalizedText);
           const voyagerIdentity = identityMap.get(identity?.match_name || "");
           const conversationUrn = voyagerIdentity?.conversation_urn || null;
-          const profileUrl = voyagerIdentity?.profile_url || identity?.profile_url || null;
-
-          console.log("📥 [RADAR VOYAGER] Capture :", normalizedText);
+          const profileUrl = normalizeLinkedinProfileUrl(
+            voyagerIdentity?.profile_url || identity?.profile_url || null
+          );
 
           // Relais final vers le background script
           chrome.runtime.sendMessage({
@@ -214,30 +233,75 @@
   });
 
   const buildProfileUrl = (miniProfile) => {
+    const directUrl =
+      miniProfile?.profileUrl ||
+      miniProfile?.publicProfileUrl ||
+      miniProfile?.publicProfileURL ||
+      miniProfile?.profile_url ||
+      null;
+    const normalizedDirect = normalizeLinkedinProfileUrl(directUrl);
+    if (normalizedDirect) return normalizedDirect;
+
+    const urn =
+      miniProfile?.entityUrn ||
+      miniProfile?.entityUrnId ||
+      miniProfile?.profileUrn ||
+      miniProfile?.objectUrn ||
+      null;
+    const urnMatch = String(urn || "").match(/urn:li:fsd_profile:([^",\s]+)/);
+    if (urnMatch?.[1]) {
+      return normalizeLinkedinProfileUrl(`https://www.linkedin.com/in/${urnMatch[1]}`);
+    }
+
     const publicIdentifier =
       miniProfile?.publicIdentifier ||
       miniProfile?.public_identifier ||
       miniProfile?.publicId ||
       null;
     if (!publicIdentifier) return null;
-    return `https://www.linkedin.com/in/${publicIdentifier}`;
+    return normalizeLinkedinProfileUrl(`https://www.linkedin.com/in/${publicIdentifier}`);
+  };
+
+  const findProfileUrlInObject = (obj, limit = 500) => {
+    const stack = [obj];
+    let scanned = 0;
+    while (stack.length && scanned < limit) {
+      const current = stack.pop();
+      scanned += 1;
+      if (!current) continue;
+      if (typeof current === "string") {
+        const match = current.match(/https?:\/\/www\.linkedin\.com\/in\/[^?#\s"]+/i);
+        if (match) return normalizeLinkedinProfileUrl(match[0]);
+      } else if (typeof current === "object") {
+        Object.values(current).forEach((value) => stack.push(value));
+      }
+    }
+    return null;
   };
 
   window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
     const payload = event?.detail?.data || null;
     if (!payload || typeof payload !== "object") return;
     const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    const enrichedElements = elements.map((item) => ({
-      ...item,
-      message_urn: item?.backendUrn || item?.entityUrn || null,
-      conversation_urn: item?.backendConversationUrn || item?.conversationUrn || null,
-      profile_url: buildProfileUrl(
+    const enrichedElements = elements.map((item) => {
+      const senderMiniProfile =
         item?.sender?.member?.miniProfile ||
-          item?.from?.messagingMember?.miniProfile ||
-          item?.from?.messagingMember ||
-          null
-      ),
-    }));
+        item?.from?.messagingMember?.miniProfile ||
+        item?.from?.messagingMember ||
+        null;
+      const profileUrl =
+        normalizeLinkedinProfileUrl(
+          item?.profile_url || item?.profileUrl || item?.publicProfileUrl || null
+        ) ||
+        buildProfileUrl(senderMiniProfile) ||
+        findProfileUrlInObject(item);
+      return {
+        ...item,
+        message_urn: item?.backendUrn || item?.entityUrn || null,
+        conversation_urn: item?.backendConversationUrn || item?.conversationUrn || null,
+        profile_url: profileUrl,
+      };
+    });
     enrichedElements.forEach((item) => {
       const sender =
         item?.sender?.member ||
@@ -271,6 +335,7 @@
 
   // Lancement
   voyagerSpy();
+  startProfileIdSyncWatcher();
 
   const seenSignatures = new Set();
 
@@ -308,7 +373,6 @@
           const voyagerIdentity = identityMap.get(identity?.name || identity?.match_name || "");
 
           seenSignatures.add(text);
-          console.log("🎯 [RADAR DOM LIVE] :", text);
           chrome.runtime.sendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
@@ -326,7 +390,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
   };
 
-  setupLiveObserver();
+  // setupLiveObserver();
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const normalizeProfilePath = (pathname = "") => {
@@ -354,6 +418,35 @@
   };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
   const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
+
+  let lastLinkedinIdSync = null;
+  function syncLinkedinIdsToSupabase() {
+    if (!isProfileUrl(location.href)) return;
+    const profileUrl = normalizeLinkedinProfileUrl(canonicalProfileUrl(location.href));
+    if (!profileUrl || profileUrl === lastLinkedinIdSync) return;
+    const ids = extractLinkedinIds();
+    const profileRoot = pickBestProfileRoot();
+    const name = getFullName(profileRoot);
+    const payload = {
+      name: name || "",
+      linkedin_url: profileUrl,
+      linkedin_internal_id: ids.linkedin_internal_id || null,
+    };
+    if (!payload.linkedin_url) return;
+    lastLinkedinIdSync = profileUrl;
+    chrome.runtime.sendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
+  }
+
+  function startProfileIdSyncWatcher() {
+    let lastHref = location.href;
+    syncLinkedinIdsToSupabase();
+    window.setInterval(() => {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        syncLinkedinIdsToSupabase();
+      }
+    }, 1500);
+  }
 
   const getStorageValue = (key) =>
     new Promise((resolve) => {
@@ -1830,7 +1923,7 @@
     const photoUrl = getPhotoUrl(profileRoot);
     const relationDegree = getRelationDegree(profileRoot);
     const ids = extractLinkedinIds();
-    const linkedinUrl = ids.linkedin_url || canonicalProfileUrl(href);
+    const linkedinUrl = normalizeLinkedinProfileUrl(ids.linkedin_url || canonicalProfileUrl(href));
     const education = parseEducation();
     const skills = parseSkills();
     const infos = scrapeInfosSection();
