@@ -2017,7 +2017,6 @@ console.log(
       const observer = new MutationObserver(() => {});
       window.__FOCALS_MSG_OBSERVER__ = observer;
       observer.observe(root, { childList: true, subtree: true });
-      console.log("🎯 [RADAR] Live message observer active");
     };
 
 

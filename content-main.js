@@ -82,7 +82,6 @@
     );
 
     if (!bubble) {
-      warn("🎯 [RADAR] Message détecté hors d'une bulle connue.");
       return null;
     }
 
@@ -96,8 +95,6 @@
 
     const linkEl = bubble.querySelector('a[href*="/in/"]');
     const internalUrl = linkEl ? linkEl.href.split("?")[0] : "unknown";
-
-    console.log(`🎯 [RADAR] Identité isolée : ${cleanName} (${internalUrl})`);
 
     return {
       match_name: cleanName,
@@ -215,8 +212,6 @@
           const profileUrl = normalizeLinkedinProfileUrl(
             voyagerIdentity?.profile_url || identity?.profile_url || null
           );
-
-          console.log("📥 [RADAR VOYAGER] Capture :", normalizedText);
 
           // Relais final vers le background script
           chrome.runtime.sendMessage({
@@ -340,6 +335,7 @@
 
   // Lancement
   voyagerSpy();
+  startProfileIdSyncWatcher();
 
   const seenSignatures = new Set();
 
@@ -377,7 +373,6 @@
           const voyagerIdentity = identityMap.get(identity?.name || identity?.match_name || "");
 
           seenSignatures.add(text);
-          console.log("🎯 [RADAR DOM LIVE] :", text);
           chrome.runtime.sendMessage({
             type: "FOCALS_INCOMING_RELAY",
             payload: {
@@ -395,7 +390,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
   };
 
-  setupLiveObserver();
+  // setupLiveObserver();
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const normalizeProfilePath = (pathname = "") => {
@@ -423,6 +418,35 @@
   };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
   const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
+
+  let lastLinkedinIdSync = null;
+  function syncLinkedinIdsToSupabase() {
+    if (!isProfileUrl(location.href)) return;
+    const profileUrl = normalizeLinkedinProfileUrl(canonicalProfileUrl(location.href));
+    if (!profileUrl || profileUrl === lastLinkedinIdSync) return;
+    const ids = extractLinkedinIds();
+    const profileRoot = pickBestProfileRoot();
+    const name = getFullName(profileRoot);
+    const payload = {
+      name: name || "",
+      linkedin_url: profileUrl,
+      linkedin_internal_id: ids.linkedin_internal_id || null,
+    };
+    if (!payload.linkedin_url) return;
+    lastLinkedinIdSync = profileUrl;
+    chrome.runtime.sendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
+  }
+
+  function startProfileIdSyncWatcher() {
+    let lastHref = location.href;
+    syncLinkedinIdsToSupabase();
+    window.setInterval(() => {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        syncLinkedinIdsToSupabase();
+      }
+    }, 1500);
+  }
 
   const getStorageValue = (key) =>
     new Promise((resolve) => {
