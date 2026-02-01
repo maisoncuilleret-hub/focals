@@ -452,35 +452,6 @@
     }, 1500);
   }
 
-  let lastLinkedinIdSync = null;
-  function syncLinkedinIdsToSupabase() {
-    if (!isProfileUrl(location.href)) return;
-    const profileUrl = normalizeLinkedinProfileUrl(canonicalProfileUrl(location.href));
-    if (!profileUrl || profileUrl === lastLinkedinIdSync) return;
-    const ids = extractLinkedinIds();
-    const profileRoot = pickBestProfileRoot();
-    const name = getFullName(profileRoot);
-    const payload = {
-      name: name || "",
-      linkedin_url: profileUrl,
-      linkedin_internal_id: ids.linkedin_internal_id || null,
-    };
-    if (!payload.linkedin_url) return;
-    lastLinkedinIdSync = profileUrl;
-    chrome.runtime.sendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
-  }
-
-  function startProfileIdSyncWatcher() {
-    let lastHref = location.href;
-    syncLinkedinIdsToSupabase();
-    window.setInterval(() => {
-      if (location.href !== lastHref) {
-        lastHref = location.href;
-        syncLinkedinIdsToSupabase();
-      }
-    }, 1500);
-  }
-
   const getStorageValue = (key) =>
     new Promise((resolve) => {
       if (!chrome?.storage?.local) {
