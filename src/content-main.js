@@ -2,11 +2,10 @@
   const TAG = "🧪 FOCALS CONSOLE";
   const DEBUG = true;
 
-  // --- 1. CONFIGURATION & UTILITAIRES (DÉFINIS EN PREMIER) ---
+  // --- 1. UTILITAIRES ET CONSTANTES ---
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
-
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
 
   const normalizeLinkedinProfileUrl = (value) => {
@@ -28,11 +27,32 @@
     if (chrome.runtime?.id) {
       chrome.runtime.sendMessage(payload, callback);
     } else {
-      warn("Extension context invalidated. Rafraîchis la page (F5).");
+      warn("Contexte invalide. F5 requis.");
     }
   };
 
-  // --- 2. LOGIQUE D'EXTRACTION (IDS TECHNIQUES) ---
+  // --- 2. ÉCOUTEUR DES SIGNAUX DE L'INTERCEPTEUR (L'OREILLE) ---
+  window.addEventListener("message", (event) => {
+    // On n'écoute que les messages venant de notre Spy
+    if (event.data?.type === "FOCALS_VOYAGER_CONVERSATIONS") {
+      log("📡 [VOYAGER] Données Bulk reçues de l'intercepteur");
+      safeSendMessage({
+        type: "FOCALS_VOYAGER_CONVERSATIONS",
+        payload: event.data?.data || null,
+      });
+    }
+
+    if (event.data?.type === "FOCALS_NETWORK_DATA") {
+      log("📡 [VOYAGER] Nouveau message détecté (Temps réel)");
+      // Relais direct au background pour traitement
+      safeSendMessage({
+        type: "FOCALS_NETWORK_DATA",
+        payload: event.data?.data || null,
+      });
+    }
+  });
+
+  // --- 3. LOGIQUE DE SCRAPING DE PROFIL ---
   const extractLinkedinIds = () => {
     const [, rawSlug = ""] = window.location.pathname.split("/in/");
     const publicSlug = rawSlug.split("/")[0].trim();
@@ -46,19 +66,15 @@
         break;
       }
     }
-
     return {
       linkedin_url: publicSlug ? `https://www.linkedin.com/in/${publicSlug}/` : null,
       linkedin_internal_id: technicalId,
     };
   };
 
-  // --- 3. GESTION DU SYNC (DÉCLARATION UNIQUE) ---
   let lastLinkedinIdSync = null;
-
   function syncLinkedinIdsToSupabase() {
     if (!isProfileUrl(location.href)) return;
-
     const currentUrl = normalizeLinkedinProfileUrl(location.href);
     if (!currentUrl || currentUrl === lastLinkedinIdSync) return;
 
@@ -66,16 +82,13 @@
     const nameEl = document.querySelector('h1.text-heading-xlarge, h1');
     const name = nameEl ? nameEl.innerText.trim() : "";
 
-    const payload = {
-      name: name,
-      linkedin_url: currentUrl,
-      linkedin_internal_id: ids.linkedin_internal_id,
-    };
-
-    if (payload.linkedin_url && payload.linkedin_internal_id) {
+    if (currentUrl && ids.linkedin_internal_id) {
       lastLinkedinIdSync = currentUrl;
-      log("✅ [MAPPING] Liaison identité :", payload.name, payload.linkedin_internal_id);
-      safeSendMessage({ type: "SAVE_PROFILE_TO_SUPABASE", profile: payload });
+      log("✅ [MAPPING] Envoi des IDs...", { name, internalId: ids.linkedin_internal_id });
+      safeSendMessage({
+        type: "SAVE_PROFILE_TO_SUPABASE",
+        profile: { name, linkedin_url: currentUrl, linkedin_internal_id: ids.linkedin_internal_id },
+      });
     }
   }
 
@@ -90,7 +103,7 @@
     }, 2000);
   }
 
-  // --- 4. INTERCEPTEUR RÉSEAU (VOYAGER) ---
+  // --- 4. INJECTION DE L'INTERCEPTEUR ---
   const voyagerSpy = () => {
     if (document.getElementById("focals-voyager-spy")) return;
     const script = document.createElement("script");
@@ -102,20 +115,9 @@
     (document.head || document.documentElement).appendChild(script);
   };
 
-  // --- 5. ÉCOUTEUR DE DONNÉES RÉSEAU ---
-  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
-    const data = event?.detail?.data;
-    if (data) {
-      safeSendMessage({ type: "FOCALS_VOYAGER_CONVERSATIONS", payload: data });
-    }
-  });
-
-  // --- 6. INITIALISATION ---
-  log("🚀 Content Script Focals démarré.");
+  // --- 5. INITIALISATION ---
+  log("🚀 Initialisation du Content Script (Oreille active)...");
   voyagerSpy();
   startProfileIdSyncWatcher();
-
-  // On laisse le setupLiveObserver désactivé pour éviter le bruit
-  // setupLiveObserver();
-  log("ℹ️ Radar DOM désactivé. Synchronisation Voyager & Scraping actifs.");
+  log("ℹ️ Radar DOM désactivé. Écoute réseau active.");
 })();
