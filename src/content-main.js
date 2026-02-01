@@ -103,7 +103,7 @@
     } else {
       warn("Page profil détectée mais ID technique (ACoAA) introuvable dans le DOM.");
     }
-  }
+  });
 
   // --- 3. INJECTION DU SPY ---
   const voyagerSpy = () => {
