@@ -179,20 +179,22 @@ async function loadProfileDataFromStorage(localStore) {
     cacheFresh = false;
   }
 
-  state.profile = profile;
-  state.profileStatus = profile ? "ready" : "idle";
-  SKDBG("popup loaded profile", {
-    hasProfile: !!profile,
-    profileKey,
-    cacheFresh,
-    name: profile?.name,
-    expCount: profile?.experiences?.length ?? 0,
-    exp0: profile?.experiences?.[0],
-    exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
-    exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
-  });
-  displayProfileData(profile);
-  renderProfileCard(profile);
+  if (state.profileStatus === "idle") {
+    state.profile = profile;
+    state.profileStatus = profile ? "ready" : "idle";
+    SKDBG("popup loaded profile", {
+      hasProfile: !!profile,
+      profileKey,
+      cacheFresh,
+      name: profile?.name,
+      expCount: profile?.experiences?.length ?? 0,
+      exp0: profile?.experiences?.[0],
+      exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
+      exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
+    });
+    displayProfileData(profile);
+    renderProfileCard(profile);
+  }
   return { cacheFresh };
 }
 
@@ -318,6 +320,30 @@ function renderProfileCard(profile) {
       placeholder.className = "muted";
       placeholder.textContent = "La section Infos s'affichera dès que le profil sera prêt.";
       infosContent.appendChild(placeholder);
+    }
+    return;
+  }
+
+  if (state.profileStatus === "unsynced") {
+    const info = document.createElement("div");
+    info.className = "profile-info";
+    const title = document.createElement("div");
+    title.className = "profile-name";
+    title.textContent = "Profil détecté mais non synchronisé";
+    const subtitle = document.createElement("div");
+    subtitle.className = "profile-sub muted";
+    subtitle.textContent =
+      state.profileStatusMessage || "Ce profil LinkedIn n'est pas encore synchronisé.";
+    info.appendChild(title);
+    info.appendChild(subtitle);
+    card.appendChild(info);
+    if (status) status.textContent = "";
+    if (infosMeta) infosMeta.textContent = "Aucune info disponible";
+    if (infosContent) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "Synchronisez le profil pour afficher les infos.";
+      infosContent.appendChild(empty);
     }
     return;
   }
@@ -569,6 +595,39 @@ function renderSystemPrompt() {
   const textarea = document.getElementById("systemPrompt");
   if (!textarea) return;
   textarea.value = state.systemPromptOverride || "";
+}
+
+async function loadCandidateFromMapping() {
+  try {
+    const stored = await localStore.get(["current_linkedin_id", "current_profile_name"]);
+    const currentId = stored?.current_linkedin_id;
+    if (!currentId) return { hasMapping: false };
+    const currentName = stored?.current_profile_name || "";
+    state.profileStatus = "loading";
+    renderProfileCard(state.profile);
+    const response = await apiModule.fetchCandidate(currentId);
+    const candidate = response?.candidate || response?.profile || response?.data || response || null;
+    if (candidate && typeof candidate === "object") {
+      state.profile = candidate;
+      state.profileStatus = "ready";
+      state.profileStatusMessage = "";
+      renderProfileCard(state.profile);
+      return { hasMapping: true, hasCandidate: true };
+    }
+    state.profile = null;
+    state.profileStatus = "unsynced";
+    state.profileStatusMessage = currentName || "Nom indisponible";
+    renderProfileCard(null);
+    return { hasMapping: true, hasCandidate: false };
+  } catch (err) {
+    debugWarn("POPUP_FETCH_CANDIDATE_FAILED", err?.message || err);
+    const stored = await localStore.get(["current_profile_name"]);
+    state.profile = null;
+    state.profileStatus = "unsynced";
+    state.profileStatusMessage = stored?.current_profile_name || "Nom indisponible";
+    renderProfileCard(null);
+    return { hasMapping: true, hasCandidate: false, error: err };
+  }
 }
 
 async function loadState() {
@@ -871,20 +930,8 @@ function setupSystemPrompt() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  const localProfileId = await localStore.get("current_linkedin_id");
-  if (localProfileId?.current_linkedin_id) {
-    const currentId = localProfileId.current_linkedin_id;
-    state.profile = {
-      name: "Profil LinkedIn détecté",
-      headline: `ID technique : ${currentId}`,
-      linkedin_url: "",
-      fullName: "Profil LinkedIn détecté",
-    };
-    state.profileStatus = "ready";
-    state.profileStatusMessage = "";
-    renderProfileCard(state.profile);
-  }
   await loadState();
+  await loadCandidateFromMapping();
   const { cacheFresh } = await loadProfileDataFromStorage(localStore);
   setupTone();
   setupSystemPrompt();

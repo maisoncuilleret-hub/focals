@@ -132,6 +132,13 @@ async function exportProfileToTalentBase(payload) {
   return responseBody;
 }
 
+async function fetchCandidate(linkedinInternalId) {
+  return postJson("focals-fetch-candidate", {
+    linkedin_internal_id: linkedinInternalId,
+    linkedinInternalId,
+  });
+}
+
 export {
   bootstrapUser,
   getAllData,
@@ -142,4 +149,5 @@ export {
   generateFollowup,
   associateProfile,
   exportProfileToTalentBase,
+  fetchCandidate,
 };
