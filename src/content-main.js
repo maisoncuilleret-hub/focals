@@ -105,22 +105,7 @@
     }
   });
 
-  // --- 3. INJECTION DU SPY ---
-  const voyagerSpy = () => {
-    if (document.getElementById("focals-voyager-spy")) {
-      log("Intercepteur déjà présent.");
-      return;
-    }
-    const s = document.createElement("script");
-    s.id = "focals-voyager-spy";
-    s.src = chrome.runtime.getURL("src/content/linkedinVoyagerInterceptor.js");
-    s.type = "text/javascript";
-    (document.head || document.documentElement).appendChild(s);
-    success("Intercepteur Voyager injecté avec succès.");
-  };
-
   // --- LANCEMENT ---
-  voyagerSpy();
   syncProfile();
 
   // Watcher pour les changements de page (LinkedIn est une Single Page App)
