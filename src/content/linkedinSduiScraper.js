@@ -1617,7 +1617,10 @@
   };
 
   window.FOCALS = {
-    run: () => scheduleRun("manual_call"),
+    run: () => {
+      log("Ordre de run reçu de content-main");
+      runOnce("auto_trigger");
+    },
     dump,
     logExperienceDescriptions,
     debugScrapeExperiences,

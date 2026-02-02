@@ -83,15 +83,17 @@
         });
 
         // Déclenchement automatique du scraper d'expériences
-        if (window.FOCALS && typeof window.FOCALS.run === "function") {
-          info("🚀 Lancement automatique du scraper d'expériences...");
-          window.FOCALS.run();
-        } else {
-          warn("Le scraper (linkedinSduiScraper.js) n'est pas encore chargé.");
-        }
+        setTimeout(() => {
+          if (window.FOCALS && typeof window.FOCALS.run === "function") {
+            info("🚀 Lancement automatique du scraper d'expériences...");
+            window.FOCALS.run();
+          } else {
+            warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
+          }
+        }, 500);
       }
     } catch (e) {
-      warn("Erreur lors du scraping profil.");
+      warn("Erreur lors du scraping profil :", e);
     }
   }
 
