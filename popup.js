@@ -224,7 +224,7 @@ async function ensureProfileScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["src/content/linkedinSduiScraper.js", "content-main.js"],
+      files: ["src/content/linkedinSduiScraper.js", "src/content-main.js"],
     });
     debugLog("POPUP_SCRIPT_INJECT", { tabId });
     return true;
