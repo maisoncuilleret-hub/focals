@@ -2305,6 +2305,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "SAVE_PROFILE_TO_SUPABASE": {
       (async () => {
         try {
+          if (message?.profile?.linkedin_internal_id) {
+            await new Promise((resolve) => {
+              chrome.storage.local.set(
+                {
+                  current_linkedin_id: message.profile.linkedin_internal_id,
+                  current_profile_name: message.profile.name || null,
+                },
+                () => resolve(true)
+              );
+            });
+          }
           const result = await saveProfileToSupabase(message.profile);
           sendResponse({ success: true, result });
         } catch (err) {

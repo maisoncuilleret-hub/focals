@@ -66,11 +66,11 @@
     };
   }
 
-  function syncProfile() {
+  function syncProfile(attempts = 0) {
     try {
       if (!window.location.pathname.includes("/in/")) return;
 
-      log("🔍 Recherche d'identité...");
+      log(`🔍 Recherche d'identité (Tentative ${attempts + 1}/5)...`);
       const ids = extractLinkedinIds();
 
       if (ids.linkedin_internal_id) {
@@ -91,6 +91,10 @@
             warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
           }
         }, 500);
+      } else if (attempts < 5) {
+        setTimeout(() => syncProfile(attempts + 1), 1000);
+      } else {
+        warn("Impossible de trouver l'ID technique après 5 tentatives.");
       }
     } catch (e) {
       warn("Erreur lors du scraping profil :", e);
