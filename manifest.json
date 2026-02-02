@@ -62,6 +62,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "src/content/linkedinSduiScraper.js",
         "src/content/linkedinVoyagerInterceptor.js",
         "src/utils/logger.js",
         "src/scrape/ScrapeController.js",

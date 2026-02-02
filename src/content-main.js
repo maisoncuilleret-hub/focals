@@ -5,7 +5,24 @@
   const warn = (...a) => console.warn(`${TAG} ⚠️`, ...a);
   const info = (...a) => console.info(`%c${TAG} ℹ️`, "color: #bb86fc;", ...a);
 
+  const injectPageScraper = () => {
+    if (document.documentElement?.dataset?.focalsPageScraperInjected === "true") {
+      return;
+    }
+    document.documentElement.dataset.focalsPageScraperInjected = "true";
+
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("src/content/linkedinSduiScraper.js");
+    script.async = false;
+    script.dataset.focals = "page-scraper";
+    (document.head || document.documentElement).appendChild(script);
+    script.addEventListener("load", () => {
+      script.remove();
+    });
+  };
+
   log("Démarrage du Content Script...");
+  injectPageScraper();
 
   // Variable globale pour mémoriser l'ID du candidat actuel
   window._focalsCurrentCandidateId = window._focalsCurrentCandidateId || null;
@@ -45,6 +62,12 @@
   window.addEventListener("FOCALS_VOYAGER_DATA", (e) => handleIncomingData(e.detail?.data, "CustomEvent"));
 
   // --- 2. SCRAPER DE PROFIL (MAPPING) ---
+  const findTechIdInText = (text) => {
+    if (!text) return null;
+    const match = text.match(/urn:li:fsd_profile:([^",\s]+)/);
+    return match ? match[1] : null;
+  };
+
   function extractLinkedinIds() {
     const nameEl = document.querySelector("h1.text-heading-xlarge, h1");
     const name = nameEl ? nameEl.innerText.trim() : "";
@@ -53,13 +76,27 @@
       return null;
     }
 
-    const codeTags = document.querySelectorAll("code");
     let techId = null;
+    const codeTags = document.querySelectorAll("code");
     for (const tag of codeTags) {
-      const m = tag.textContent.match(/urn:li:fsd_profile:([^",\s]+)/);
-      if (m) {
-        techId = m[1];
-        break;
+      techId = findTechIdInText(tag.textContent);
+      if (techId) break;
+    }
+
+    if (!techId) {
+      const urnNodes = document.querySelectorAll('[data-entity-urn*="fsd_profile"], [data-urn*="fsd_profile"]');
+      for (const node of urnNodes) {
+        const urn = node.getAttribute("data-entity-urn") || node.getAttribute("data-urn") || "";
+        techId = findTechIdInText(urn);
+        if (techId) break;
+      }
+    }
+
+    if (!techId) {
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        techId = findTechIdInText(script.textContent || "");
+        if (techId) break;
       }
     }
 
