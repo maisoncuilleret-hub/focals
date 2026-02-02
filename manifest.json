@@ -44,9 +44,22 @@
       ],
       "js": [
         "src/content-main.js",
+        "src/content/linkedinSduiScraper.js",
         "content-messaging.js"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://*.linkedin.com/*"
+      ],
+      "js": [
+        "src/content/linkedinVoyagerInterceptor.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "web_accessible_resources": [

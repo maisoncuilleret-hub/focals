@@ -1525,7 +1525,12 @@
     const obs = new MutationObserver(() => {
       if (isProfileUrl(location.href)) scheduleRun("dom_mutation");
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    const observeTarget = document.body || document.documentElement;
+    if (!observeTarget) {
+      warn("SPA watcher target not ready; MutationObserver skipped.");
+      return;
+    }
+    obs.observe(observeTarget, { childList: true, subtree: true });
 
     log("SPA watcher installed");
   }

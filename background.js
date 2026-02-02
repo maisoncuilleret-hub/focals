@@ -530,7 +530,7 @@ async function ensureContentScript(tabId) {
 
   await chrome.scripting.executeScript({
     target: { tabId },
-    files: ["content-main.js"],
+    files: ["src/content-main.js"],
   });
   await wait(500);
 }
