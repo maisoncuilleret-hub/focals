@@ -1616,7 +1616,9 @@
     scrapeFromDom,
   };
 
+  // --- EXPOSITION POUR CONTENT-MAIN ---
   window.FOCALS = {
+    ...(window.FOCALS || {}),
     run: () => {
       log("Ordre de run reçu de content-main");
       runOnce("auto_trigger");

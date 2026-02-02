@@ -2152,13 +2152,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
-      const { detailsUrl, profileKey, reason } = message || {};
-      if (!detailsUrl) {
+      const { detailsUrl, profileKey, reason, url } = message || {};
+      const targetUrl = detailsUrl || url || null;
+      if (!targetUrl) {
         sendResponse({ ok: false, error: "Missing detailsUrl" });
         return false;
       }
 
-      scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reason)
+      scrapeExperienceDetailsInBackground(targetUrl, profileKey, reason)
         .then((experiences) => sendResponse({ ok: true, experiences }))
         .catch((error) =>
           sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
