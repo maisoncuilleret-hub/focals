@@ -79,22 +79,15 @@ async function triggerScrapeOnActiveTab({ reason = "popup_open", force = false }
     return /linkedin\.com\/in\//i.test(url);
   }
 
-  const normalizeProfilePath = (pathname = "") => {
-    const normalized = pathname.replace(/\/$/, "");
-    const match = normalized.match(/^\/in\/[^/]+/i);
-    return match ? match[0] : null;
-  };
-
-  const canonicalProfileUrl = (url) => {
+  const getCleanUrl = (url) => {
     try {
       const parsed = new URL(url);
       parsed.search = "";
       parsed.hash = "";
-      const basePath = normalizeProfilePath(parsed.pathname);
-      if (!basePath) return null;
-      return `${parsed.origin}${basePath}`;
+      parsed.pathname = parsed.pathname.replace(/\/$/, "");
+      return parsed.toString();
     } catch {
-      return null;
+      return (url || "").replace(/[?#].*$/, "").replace(/\/$/, "");
     }
   };
 
@@ -157,30 +150,16 @@ async function loadProfileDataFromStorage(localStore) {
   let profile = null;
   let cacheFresh = false;
   let profileKey = null;
+  let stored = null;
   try {
-    const stored = await chrome.storage.local.get([
+    stored = await chrome.storage.local.get([
       "current_linkedin_id",
       "current_profile_name",
     ]);
 
-    const currentId = stored?.current_linkedin_id;
-
-    if (currentId) {
-      debugLog("POPUP_PROFILE_ID_DETECTED", { currentId });
-      profile = {
-        name: stored.current_profile_name || "Profil LinkedIn",
-        linkedin_internal_id: currentId,
-      };
-      state.profile = profile;
-      state.profileStatus = "ready";
-      displayProfileData(profile);
-      renderProfileCard(profile);
-      return { cacheFresh: false };
-    }
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && isLinkedinProfileContext(tab.url)) {
-      profileKey = canonicalProfileUrl(tab.url);
+      profileKey = getCleanUrl(tab.url);
       if (profileKey) {
         const key = buildLastResultCacheKey(profileKey);
         const data = await localStore.get(key);
@@ -197,6 +176,15 @@ async function loadProfileDataFromStorage(localStore) {
     const data = await localStore.get("FOCALS_LAST_PROFILE");
     profile = data ? data.FOCALS_LAST_PROFILE : null;
     cacheFresh = false;
+  }
+
+  if (!profile && stored?.current_linkedin_id) {
+    const currentId = stored.current_linkedin_id;
+    debugLog("POPUP_PROFILE_ID_DETECTED", { currentId });
+    profile = {
+      name: stored.current_profile_name || "Profil LinkedIn",
+      linkedin_internal_id: currentId,
+    };
   }
 
   if (state.profileStatus === "idle") {

@@ -477,6 +477,17 @@
   }
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const getCleanUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      parsed.search = "";
+      parsed.hash = "";
+      parsed.pathname = parsed.pathname.replace(/\/$/, "");
+      return parsed.toString();
+    } catch {
+      return (url || "").replace(/[?#].*$/, "").replace(/\/$/, "");
+    }
+  };
   const canonicalProfileUrl = (u) => {
     try {
       const url = new URL(u);
@@ -1517,8 +1528,9 @@
     try {
       const profile = toExtensionProfile(result);
       if (profile) {
-        const canonicalUrl = getCanonicalUrl(result.linkedinUrl || href);
-        const cacheKey = canonicalUrl ? `focals_last_result:${canonicalUrl}` : null;
+        // Utilise une clé stable sans trailing slash pour éviter les divergences popup/scraper.
+        const cleanUrl = getCleanUrl(window.location.href);
+        const cacheKey = cleanUrl ? `focals_last_result:${cleanUrl}` : null;
         const payload = { FOCALS_LAST_PROFILE: profile };
         if (cacheKey) {
           payload[cacheKey] = { payload: profile, ts: Date.now() };
