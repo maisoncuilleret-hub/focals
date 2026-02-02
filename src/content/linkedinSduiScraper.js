@@ -1623,6 +1623,8 @@
       log("Ordre de run reçu de content-main");
       runOnce("auto_trigger");
     },
+    scrapeFromDom,
+    sduiScraper: window.__FocalsLinkedinSduiScraper,
     dump,
     logExperienceDescriptions,
     debugScrapeExperiences,

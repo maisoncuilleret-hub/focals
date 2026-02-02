@@ -72,41 +72,47 @@
     };
   }
 
-  function syncProfile(attempts = 0) {
+  async function syncProfile() {
     try {
       if (!window.location.pathname.includes("/in/")) return;
 
-      log(`🔍 Recherche d'identité (Tentative ${attempts + 1}/5)...`);
-      const ids = extractLinkedinIds();
+      const maxAttempts = 5;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        log(`🔍 Recherche d'identité (Tentative ${attempt}/${maxAttempts})...`);
+        const ids = extractLinkedinIds();
 
-      if (ids) {
-        window._focalsCurrentCandidateId = ids.linkedin_internal_id;
-        success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
+        if (ids) {
+          window._focalsCurrentCandidateId = ids.linkedin_internal_id;
+          success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
 
-        chrome.storage.local.set({
-          current_linkedin_id: ids.linkedin_internal_id,
-          current_profile_name: ids.name,
-        });
+          chrome.storage.local.set({
+            current_linkedin_id: ids.linkedin_internal_id,
+            current_profile_name: ids.name,
+          });
 
-        chrome.runtime.sendMessage({
-          type: "SAVE_PROFILE_TO_SUPABASE",
-          profile: ids,
-        });
+          chrome.runtime.sendMessage({
+            type: "SAVE_PROFILE_TO_SUPABASE",
+            profile: ids,
+          });
 
-        // Déclenchement automatique du scraper d'expériences
-        setTimeout(() => {
-          if (window.FOCALS && typeof window.FOCALS.run === "function") {
-            info("🚀 Lancement automatique du scraper d'expériences...");
-            window.FOCALS.run();
-          } else {
-            warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
-          }
-        }, 1000);
-      } else if (attempts < 5) {
-        setTimeout(() => syncProfile(attempts + 1), 1000);
-      } else {
-        warn("Impossible de trouver l'ID technique après 5 tentatives.");
+          // Déclenchement automatique du scraper d'expériences
+          setTimeout(() => {
+            if (window.FOCALS && typeof window.FOCALS.run === "function") {
+              info("🚀 Lancement automatique du scraper d'expériences...");
+              window.FOCALS.run();
+            } else {
+              warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
+            }
+          }, 1000);
+          return;
+        }
+
+        if (attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
       }
+
+      warn("Impossible de trouver l'ID technique après 5 tentatives.");
     } catch (e) {
       warn("Erreur lors du scraping profil :", e);
     }
