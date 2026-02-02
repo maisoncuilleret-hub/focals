@@ -625,7 +625,22 @@ async function loadCandidateFromMapping() {
     const currentName = stored?.current_profile_name || "";
     state.profileStatus = "loading";
     renderProfileCard(state.profile);
-    const response = await apiModule.fetchCandidate(currentId);
+    let response = null;
+    try {
+      response = await apiModule.fetchCandidate(currentId);
+    } catch (err) {
+      console.log("🧪 [FOCALS-DEBUG] supabase fetch failed, loading local cache", err?.message || err);
+      const data = await localStore.get("FOCALS_LAST_PROFILE");
+      const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
+      if (cachedProfile) {
+        state.profile = cachedProfile;
+        state.profileStatus = "ready";
+        state.profileStatusMessage = "";
+        renderProfileCard(state.profile);
+        return { hasMapping: true, hasCandidate: true, fromCache: true };
+      }
+      throw err;
+    }
     const candidate = response?.candidate || response?.profile || response?.data || response || null;
     if (candidate && typeof candidate === "object") {
       state.profile = candidate;
@@ -633,6 +648,16 @@ async function loadCandidateFromMapping() {
       state.profileStatusMessage = "";
       renderProfileCard(state.profile);
       return { hasMapping: true, hasCandidate: true };
+    }
+    const data = await localStore.get("FOCALS_LAST_PROFILE");
+    const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
+    if (cachedProfile) {
+      console.log("🧪 [FOCALS-DEBUG] supabase empty, using local cache");
+      state.profile = cachedProfile;
+      state.profileStatus = "ready";
+      state.profileStatusMessage = "";
+      renderProfileCard(state.profile);
+      return { hasMapping: true, hasCandidate: true, fromCache: true };
     }
     state.profile = null;
     state.profileStatus = "unsynced";
