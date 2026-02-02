@@ -72,6 +72,38 @@
     };
   }
 
+  async function sendMessageWithRetry(message, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+      try {
+        if (attempt > 1) {
+          await new Promise((resolve) => {
+            chrome.runtime.sendMessage({ type: "PING" }, () => {
+              resolve();
+            });
+          });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        return await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(message, (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            } else {
+              resolve(response);
+            }
+          });
+        });
+      } catch (err) {
+        if (attempt === maxRetries) {
+          throw err;
+        }
+        warn(`Tentative ${attempt}/${maxRetries} échouée, retry...`);
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+      }
+    }
+    return null;
+  }
+
   async function syncProfile() {
     try {
       if (!window.location.pathname.includes("/in/")) return;
@@ -85,15 +117,26 @@
           window._focalsCurrentCandidateId = ids.linkedin_internal_id;
           success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
 
-          chrome.storage.local.set({
-            current_linkedin_id: ids.linkedin_internal_id,
-            current_profile_name: ids.name,
-          });
+          try {
+            await chrome.storage.local.set({
+              current_linkedin_id: ids.linkedin_internal_id,
+              current_profile_name: ids.name,
+            });
+          } catch (err) {
+            warn("Erreur storage local:", err);
+          }
 
-          chrome.runtime.sendMessage({
-            type: "SAVE_PROFILE_TO_SUPABASE",
-            profile: ids,
-          });
+          try {
+            await sendMessageWithRetry({
+              type: "SAVE_PROFILE_TO_SUPABASE",
+              profile: ids,
+            });
+          } catch (err) {
+            warn(
+              "Background injoignable (normal si service worker endormi):",
+              err.message
+            );
+          }
 
           // Déclenchement automatique du scraper d'expériences
           setTimeout(() => {
