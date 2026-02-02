@@ -58,7 +58,6 @@
         techId = m[1];
         break;
       }
-    }
 
     return {
       name,
