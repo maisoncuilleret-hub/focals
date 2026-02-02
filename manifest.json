@@ -38,22 +38,19 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
+        "https://www.linkedin.com/*"
       ],
       "js": [
         "src/content/linkedinSduiScraper.js",
         "src/content-main.js",
         "content-messaging.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": false
     },
     {
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
+        "https://www.linkedin.com/*"
       ],
       "js": [
         "src/content/linkedinVoyagerInterceptor.js"
