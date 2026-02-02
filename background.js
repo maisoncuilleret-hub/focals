@@ -2152,13 +2152,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
-      const { detailsUrl, profileKey, reason } = message || {};
-      if (!detailsUrl) {
+      const { detailsUrl, profileKey, reason, url } = message || {};
+      const targetUrl = detailsUrl || url || null;
+      if (!targetUrl) {
         sendResponse({ ok: false, error: "Missing detailsUrl" });
         return false;
       }
 
-      scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reason)
+      scrapeExperienceDetailsInBackground(targetUrl, profileKey, reason)
         .then((experiences) => sendResponse({ ok: true, experiences }))
         .catch((error) =>
           sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
@@ -2304,6 +2305,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "SAVE_PROFILE_TO_SUPABASE": {
       (async () => {
         try {
+          if (message?.profile?.linkedin_internal_id) {
+            await new Promise((resolve) => {
+              chrome.storage.local.set(
+                {
+                  current_linkedin_id: message.profile.linkedin_internal_id,
+                  current_profile_name: message.profile.name || null,
+                },
+                () => resolve(true)
+              );
+            });
+          }
           const result = await saveProfileToSupabase(message.profile);
           sendResponse({ success: true, result });
         } catch (err) {

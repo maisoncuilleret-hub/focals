@@ -129,6 +129,16 @@ function withStorage(area = "sync") {
 const syncStore = withStorage("sync");
 const localStore = withStorage("local");
 
+async function getCurrentLinkedinId() {
+  try {
+    const data = await chrome.storage.local.get(["current_linkedin_id"]);
+    return data?.current_linkedin_id || null;
+  } catch (err) {
+    debugWarn("POPUP_CURRENT_ID_ERROR", err?.message || err);
+    return null;
+  }
+}
+
 function displayProfileData(profile) {
   const nameEl = document.getElementById("profileName");
   const headlineEl = document.getElementById("profileHeadline");
@@ -206,6 +216,7 @@ let state = {
   profileStatusMessage: "",
   activeTab: "profile",
   supabaseSession: null,
+  currentLinkedinId: null,
 };
 
 function setStatus(message) {
@@ -871,6 +882,12 @@ function setupSystemPrompt() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  state.currentLinkedinId = await getCurrentLinkedinId();
+  if (!state.currentLinkedinId) {
+    document.body.innerHTML =
+      "<p>Aucun profil LinkedIn détecté. Allez sur un profil pour synchroniser.</p>";
+    return;
+  }
   await loadState();
   const { cacheFresh } = await loadProfileDataFromStorage(localStore);
   setupTone();
