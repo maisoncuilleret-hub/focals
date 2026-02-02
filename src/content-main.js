@@ -47,7 +47,11 @@
   // --- 2. SCRAPER DE PROFIL (MAPPING) ---
   function extractLinkedinIds() {
     const nameEl = document.querySelector("h1.text-heading-xlarge, h1");
-    const name = nameEl ? nameEl.innerText.trim() : "Inconnu";
+    const name = nameEl ? nameEl.innerText.trim() : "";
+
+    if (!name || name === "Expérience") {
+      return null;
+    }
 
     const codeTags = document.querySelectorAll("code");
     let techId = null;
@@ -58,6 +62,8 @@
         break;
       }
     }
+
+    if (!techId) return null;
 
     return {
       name,
@@ -73,9 +79,14 @@
       log(`🔍 Recherche d'identité (Tentative ${attempts + 1}/5)...`);
       const ids = extractLinkedinIds();
 
-      if (ids.linkedin_internal_id) {
+      if (ids) {
         window._focalsCurrentCandidateId = ids.linkedin_internal_id;
         success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
+
+        chrome.storage.local.set({
+          current_linkedin_id: ids.linkedin_internal_id,
+          current_profile_name: ids.name,
+        });
 
         chrome.runtime.sendMessage({
           type: "SAVE_PROFILE_TO_SUPABASE",
@@ -90,7 +101,7 @@
           } else {
             warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
           }
-        }, 500);
+        }, 1000);
       } else if (attempts < 5) {
         setTimeout(() => syncProfile(attempts + 1), 1000);
       } else {
