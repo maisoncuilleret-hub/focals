@@ -5,7 +5,24 @@
   const warn = (...a) => console.warn(`${TAG} ⚠️`, ...a);
   const info = (...a) => console.info(`%c${TAG} ℹ️`, "color: #bb86fc;", ...a);
 
+  const injectPageScraper = () => {
+    if (document.documentElement?.dataset?.focalsPageScraperInjected === "true") {
+      return;
+    }
+    document.documentElement.dataset.focalsPageScraperInjected = "true";
+
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("src/content/linkedinSduiScraper.js");
+    script.async = false;
+    script.dataset.focals = "page-scraper";
+    (document.head || document.documentElement).appendChild(script);
+    script.addEventListener("load", () => {
+      script.remove();
+    });
+  };
+
   log("Démarrage du Content Script...");
+  injectPageScraper();
 
   // Variable globale pour mémoriser l'ID du candidat actuel
   window._focalsCurrentCandidateId = window._focalsCurrentCandidateId || null;
