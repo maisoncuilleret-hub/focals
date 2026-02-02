@@ -487,6 +487,18 @@
       return u;
     }
   };
+  const getCanonicalUrl = (u) => {
+    try {
+      const url = new URL(u);
+      url.search = "";
+      url.hash = "";
+      const match = url.pathname.replace(/\/$/, "").match(/^\/in\/[^/]+/i);
+      if (!match) return url.toString();
+      return `${url.origin}${match[0]}`;
+    } catch {
+      return u;
+    }
+  };
 
   function elementPath(el) {
     if (!el) return null;
@@ -1408,6 +1420,55 @@
     return { pick, collected, waited: true };
   }
 
+  function toExtensionProfile(res) {
+    if (!res || !res.ok) return null;
+
+    const experiences = (res.experiences || []).map((e) => ({
+      title: e.Titre || null,
+      company: e.Entreprise || null,
+      dates: e.Dates || null,
+      location: e.Lieu || null,
+      workplaceType: e.WorkplaceType || null,
+      description: e.Description || null,
+      descriptionBullets: e.DescriptionBullets || null,
+      skills: e.Skills || [],
+      skillsMoreCount: e.SkillsMoreCount ?? null,
+      skillsText: (e.Skills || []).join(" · "),
+      start: null,
+      end: null,
+    }));
+
+    const education = (res.education || []).map((ed) => ({
+      school: ed.school || null,
+      degree: ed.degree || null,
+      dates: ed.dates || null,
+    }));
+
+    const skills = uniq(res.skills || []);
+
+    const current_title = experiences[0]?.title || null;
+    const current_company = experiences[0]?.company || null;
+
+    return {
+      fullName: res.fullName || null,
+      relationDegree: res.relationDegree || null,
+      photoUrl: res.photoUrl || null,
+      linkedinUrl: res.linkedinUrl || canonicalProfileUrl(location.href),
+      experiences,
+      education,
+      skills,
+      infos: res.infos || null,
+      name: res.fullName || null,
+      headline: null,
+      location: null,
+      photo_url: res.photoUrl || null,
+      linkedin_url: res.linkedinUrl || canonicalProfileUrl(location.href),
+      current_title,
+      current_company,
+      about: res.infos || null,
+    };
+  }
+
   // ---------------- Runner + SPA watcher ----------------
   async function runOnce(reason) {
     const startedAt = new Date().toISOString();
@@ -1453,6 +1514,24 @@
     };
 
     window.__FOCALS_LAST = result;
+    try {
+      const profile = toExtensionProfile(result);
+      if (profile) {
+        const canonicalUrl = getCanonicalUrl(result.linkedinUrl || href);
+        const cacheKey = canonicalUrl ? `focals_last_result:${canonicalUrl}` : null;
+        const payload = { FOCALS_LAST_PROFILE: profile };
+        if (cacheKey) {
+          payload[cacheKey] = { payload: profile, ts: Date.now() };
+        }
+        await chrome.storage.local.set(payload);
+        log("🧪 [FOCALS-DEBUG] profile saved after scrape", {
+          cacheKey,
+          name: profile.name,
+        });
+      }
+    } catch (err) {
+      warn("🧪 [FOCALS-DEBUG] storage save failed:", err?.message || err);
+    }
 
     log(`AUTORUN (${reason})`, {
       fullName: result.fullName,
@@ -1556,55 +1635,6 @@
     const experiences = window.__FOCALS_LAST?.experiences || [];
     log("Experiences JSON:", experiences);
     return experiences;
-  }
-
-  function toExtensionProfile(res) {
-    if (!res || !res.ok) return null;
-
-    const experiences = (res.experiences || []).map((e) => ({
-      title: e.Titre || null,
-      company: e.Entreprise || null,
-      dates: e.Dates || null,
-      location: e.Lieu || null,
-      workplaceType: e.WorkplaceType || null,
-      description: e.Description || null,
-      descriptionBullets: e.DescriptionBullets || null,
-      skills: e.Skills || [],
-      skillsMoreCount: e.SkillsMoreCount ?? null,
-      skillsText: (e.Skills || []).join(" · "),
-      start: null,
-      end: null,
-    }));
-
-    const education = (res.education || []).map((ed) => ({
-      school: ed.school || null,
-      degree: ed.degree || null,
-      dates: ed.dates || null,
-    }));
-
-    const skills = uniq(res.skills || []);
-
-    const current_title = experiences[0]?.title || null;
-    const current_company = experiences[0]?.company || null;
-
-    return {
-      fullName: res.fullName || null,
-      relationDegree: res.relationDegree || null,
-      photoUrl: res.photoUrl || null,
-      linkedinUrl: res.linkedinUrl || canonicalProfileUrl(location.href),
-      experiences,
-      education,
-      skills,
-      infos: res.infos || null,
-      name: res.fullName || null,
-      headline: null,
-      location: null,
-      photo_url: res.photoUrl || null,
-      linkedin_url: res.linkedinUrl || canonicalProfileUrl(location.href),
-      current_title,
-      current_company,
-      about: res.infos || null,
-    };
   }
 
   const scrapeFromDom = async () => {

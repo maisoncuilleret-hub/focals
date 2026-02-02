@@ -62,6 +62,20 @@
   window.addEventListener("FOCALS_VOYAGER_DATA", (e) => handleIncomingData(e.detail?.data, "CustomEvent"));
 
   // --- 2. SCRAPER DE PROFIL (MAPPING) ---
+  const getCanonicalUrl = (url) => {
+    try {
+      const parsed = new URL(url);
+      parsed.search = "";
+      parsed.hash = "";
+      const match = parsed.pathname.replace(/\/$/, "").match(/^\/in\/[^/]+/i);
+      if (!match) return null;
+      return `${parsed.origin}${match[0]}`;
+    } catch (err) {
+      warn("🧪 [FOCALS-DEBUG] getCanonicalUrl failed:", err?.message || err);
+      return null;
+    }
+  };
+
   const findTechIdInText = (text) => {
     if (!text) return null;
     const match = text.match(/urn:li:fsd_profile:([^",\s]+)/);
@@ -108,6 +122,48 @@
       linkedin_url: window.location.href,
     };
   }
+
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type !== "FOCALS_TRIGGER_SCRAPE") return undefined;
+
+    (async () => {
+      try {
+        if (!window.__FocalsLinkedinSduiScraper?.scrapeFromDom) {
+          warn("🧪 [FOCALS-DEBUG] scraper missing in content script.");
+          sendResponse({ ok: false, error: "SCRAPER_MISSING" });
+          return;
+        }
+
+        const profile = await window.__FocalsLinkedinSduiScraper.scrapeFromDom();
+        if (!profile) {
+          warn("🧪 [FOCALS-DEBUG] scrapeFromDom returned empty profile.");
+          sendResponse({ ok: false, error: "EMPTY_PROFILE" });
+          return;
+        }
+
+        const canonicalUrl = getCanonicalUrl(profile.linkedin_url || window.location.href);
+        const cacheKey = canonicalUrl ? `focals_last_result:${canonicalUrl}` : null;
+        const payload = {
+          FOCALS_LAST_PROFILE: profile,
+        };
+        if (cacheKey) {
+          payload[cacheKey] = { payload: profile, ts: Date.now() };
+        }
+
+        await chrome.storage.local.set(payload);
+        log("🧪 [FOCALS-DEBUG] profile saved from popup trigger", {
+          cacheKey,
+          name: profile.name,
+        });
+        sendResponse({ ok: true, profile });
+      } catch (err) {
+        warn("🧪 [FOCALS-DEBUG] trigger scrape failed:", err?.message || err);
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+
+    return true;
+  });
 
   async function sendMessageWithRetry(message, maxRetries = 3) {
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
