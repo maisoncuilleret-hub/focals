@@ -158,6 +158,26 @@ async function loadProfileDataFromStorage(localStore) {
   let cacheFresh = false;
   let profileKey = null;
   try {
+    const stored = await chrome.storage.local.get([
+      "current_linkedin_id",
+      "current_profile_name",
+    ]);
+
+    const currentId = stored?.current_linkedin_id;
+
+    if (currentId) {
+      debugLog("POPUP_PROFILE_ID_DETECTED", { currentId });
+      profile = {
+        name: stored.current_profile_name || "Profil LinkedIn",
+        linkedin_internal_id: currentId,
+      };
+      state.profile = profile;
+      state.profileStatus = "ready";
+      displayProfileData(profile);
+      renderProfileCard(profile);
+      return { cacheFresh: false };
+    }
+
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && isLinkedinProfileContext(tab.url)) {
       profileKey = canonicalProfileUrl(tab.url);
@@ -930,6 +950,24 @@ function setupSystemPrompt() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  const statusEl = document.getElementById("extensionStatus");
+  if (statusEl) {
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: "PING" }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response);
+          }
+        });
+      });
+      statusEl.textContent = "✅ Extension connectée";
+    } catch (err) {
+      statusEl.textContent = `❌ Background injoignable: ${err.message}`;
+      statusEl.style.color = "#f87171";
+    }
+  }
   await loadState();
   await loadCandidateFromMapping();
   const { cacheFresh } = await loadProfileDataFromStorage(localStore);

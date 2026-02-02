@@ -1886,6 +1886,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    case "PING":
+      sendResponse({ pong: true });
+      return false;
     case "API_REQUEST": {
       const { endpoint, method = "GET", params, body, headers } = message;
       if (!endpoint) {
