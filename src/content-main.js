@@ -7,7 +7,7 @@
 
   log("Démarrage du Content Script...");
 
-  // Variable pour mémoriser le candidat
+  // Variable globale pour mémoriser l'ID du candidat actuel
   window._focalsCurrentCandidateId = window._focalsCurrentCandidateId || null;
 
   // --- 1. GESTION DES MESSAGES (VOYAGER) ---
@@ -21,9 +21,8 @@
         const fullName = `${p?.firstName?.text || p?.firstName || ""} ${p?.lastName?.text || p?.lastName || ""}`.trim();
         const techId = (item?.sender?.hostIdentityUrn || "").split(":").pop();
 
-        const isFromMe = window._focalsCurrentCandidateId
-          ? techId !== window._focalsCurrentCandidateId
-          : null;
+        // Distinction : Si l'ID de l'envoyeur n'est pas celui du candidat, c'est VOUS.
+        const isFromMe = window._focalsCurrentCandidateId ? techId !== window._focalsCurrentCandidateId : null;
 
         return {
           ...item,
@@ -58,6 +57,7 @@
         techId = m[1];
         break;
       }
+    }
 
     return {
       name,
@@ -76,11 +76,13 @@
       if (ids.linkedin_internal_id) {
         window._focalsCurrentCandidateId = ids.linkedin_internal_id;
         success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
+
         chrome.runtime.sendMessage({
           type: "SAVE_PROFILE_TO_SUPABASE",
           profile: ids,
         });
 
+        // Déclenchement automatique du scraper d'expériences
         if (window.FOCALS && typeof window.FOCALS.run === "function") {
           info("🚀 Lancement automatique du scraper d'expériences...");
           window.FOCALS.run();
@@ -104,5 +106,5 @@
     }
   }, 2000);
 
-  success("Content Script corrigé et actif !");
+  success("Content Script prêt et actif !");
 })();
