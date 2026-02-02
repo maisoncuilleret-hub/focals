@@ -43,11 +43,11 @@
         "https://*.linkedin.com/*"
       ],
       "js": [
-        "src/content-main.js",
         "src/content/linkedinSduiScraper.js",
+        "src/content-main.js",
         "content-messaging.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_idle"
     },
     {
       "matches": [

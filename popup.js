@@ -131,6 +131,10 @@ const localStore = withStorage("local");
 
 async function getCurrentLinkedinId() {
   try {
+    if (!chrome?.storage?.local) {
+      debugWarn("POPUP_STORAGE_UNAVAILABLE", "chrome.storage.local indisponible.");
+      return null;
+    }
     const data = await chrome.storage.local.get(["current_linkedin_id"]);
     return data?.current_linkedin_id || null;
   } catch (err) {
@@ -882,6 +886,11 @@ function setupSystemPrompt() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  if (!chrome?.storage?.local) {
+    document.body.innerHTML =
+      "<p>Impossible d'accéder au stockage extension. Rechargez l'extension puis réessayez.</p>";
+    return;
+  }
   state.currentLinkedinId = await getCurrentLinkedinId();
   if (!state.currentLinkedinId) {
     document.body.innerHTML =
