@@ -1,12 +1,32 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>Focals</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="popup.css">
 </head>
-<body style="width: 300px; min-height: 200px;">
-  <div id="app">Chargement...</div>
+<body style="width: 350px; min-height: 400px; margin: 0; font-family: sans-serif;">
+    <div id="app">
+        <header style="padding: 10px; background: #0073b1; color: white;">
+            <h2 id="candidate-name" style="margin: 0; font-size: 16px;">Chargement...</h2>
+        </header>
 
-  <script src="popup.js"></script>
+        <div class="tabs" style="display: flex; border-bottom: 1px solid #ddd;">
+            <button class="tab-btn active" data-tab="tab-details">Détails</button>
+            <button class="tab-btn" data-tab="tab-experiences">Expériences</button>
+        </div>
+
+        <div id="tab-details" class="tab-content">
+            <div id="details-content" style="padding: 15px;">Récupération des infos...</div>
+        </div>
+
+        <div id="tab-experiences" class="tab-content" style="display: none;">
+            <div id="experiences-content" style="padding: 15px;">Chargement des expériences...</div>
+        </div>
+
+        <footer style="padding: 10px; border-top: 1px solid #ddd; text-align: center;">
+            <button id="sync-btn" style="padding: 8px 15px; cursor: pointer;">🔄 Synchroniser</button>
+        </footer>
+    </div>
+    <script src="popup.js"></script>
 </body>
 </html>
