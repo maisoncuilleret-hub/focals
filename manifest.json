@@ -44,9 +44,10 @@
       ],
       "js": [
         "src/content-main.js",
+        "src/content/linkedinSduiScraper.js",
         "content-messaging.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     },
     {
       "matches": [

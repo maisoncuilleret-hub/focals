@@ -46,31 +46,47 @@
   window.addEventListener("FOCALS_VOYAGER_DATA", (e) => handleIncomingData(e.detail?.data, "CustomEvent"));
 
   // --- 2. SCRAPER DE PROFIL (MAPPING) ---
+  function extractLinkedinIds() {
+    const nameEl = document.querySelector("h1.text-heading-xlarge, h1");
+    const name = nameEl ? nameEl.innerText.trim() : "Inconnu";
+
+    const codeTags = document.querySelectorAll("code");
+    let techId = null;
+    for (const tag of codeTags) {
+      const m = tag.textContent.match(/urn:li:fsd_profile:([^",\s]+)/);
+      if (m) {
+        techId = m[1];
+        break;
+      }
+
+    return {
+      name,
+      linkedin_internal_id: techId,
+      linkedin_url: window.location.href,
+    };
+  }
+
   function syncProfile() {
     try {
       if (!window.location.pathname.includes("/in/")) return;
 
-      log("Analyse du profil...");
-      const nameEl = document.querySelector("h1.text-heading-xlarge, h1");
-      const name = nameEl ? nameEl.innerText.trim() : "Inconnu";
+      log("🔍 Recherche d'identité...");
+      const ids = extractLinkedinIds();
 
-      const codeTags = document.querySelectorAll("code");
-      let techId = null;
-      for (const tag of codeTags) {
-        const m = tag.textContent.match(/urn:li:fsd_profile:([^",\s]+)/);
-        if (m) {
-          techId = m[1];
-          break;
-        }
-      }
-
-      if (techId) {
-        window._focalsCurrentCandidateId = techId;
-        success(`MAPPING : ${name} <-> ${techId}`);
+      if (ids.linkedin_internal_id) {
+        window._focalsCurrentCandidateId = ids.linkedin_internal_id;
+        success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
         chrome.runtime.sendMessage({
           type: "SAVE_PROFILE_TO_SUPABASE",
-          profile: { name, linkedin_url: window.location.href, linkedin_internal_id: techId },
+          profile: ids,
         });
+
+        if (window.FOCALS && typeof window.FOCALS.run === "function") {
+          info("🚀 Lancement automatique du scraper d'expériences...");
+          window.FOCALS.run();
+        } else {
+          warn("Le scraper (linkedinSduiScraper.js) n'est pas encore chargé.");
+        }
       }
     } catch (e) {
       warn("Erreur lors du scraping profil.");
