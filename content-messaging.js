@@ -44,6 +44,18 @@ console.log(
     return document;
   }
 
+  const getMessageRoot = () => {
+    const root = document.querySelector(".msg-s-message-list");
+    if (root) return root;
+
+    const shadowRoot = getLinkedinMessagingRoot();
+    if (shadowRoot && shadowRoot !== document) {
+      return shadowRoot.querySelector(".msg-s-message-list") || null;
+    }
+
+    return null;
+  };
+
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       const payload = { type: "API_REQUEST", endpoint, method, body, params };
@@ -736,6 +748,78 @@ console.log(
       }
 
       return null;
+    };
+
+    const normalizeMsgText = (text = "") => {
+      if (!text) return "";
+      return text
+        .replace(/\r/g, "")
+        .replace(/\u00a0/g, " ")
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/\s+\n/g, "\n")
+        .replace(/\n\s+/g, "\n")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    };
+
+    const isJunkLine = (line = "") => {
+      if (!line) return true;
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (/^Voir le profil/i.test(trimmed)) return true;
+      if (/^Répondez à la conversation/i.test(trimmed)) return true;
+      if (/a envoyé le message/i.test(trimmed)) return true;
+      if (/a envoyé les messages/i.test(trimmed)) return true;
+      if (/^(LUNDI|MARDI|MERCREDI|JEUDI|VENDREDI|SAMEDI|DIMANCHE)$/i.test(trimmed))
+        return true;
+      if (/^AUJOURD['’]HUI$/i.test(trimmed)) return true;
+      return false;
+    };
+
+    const stripEnclosingQuotes = (text = "") => {
+      const trimmed = text.trim();
+      if (!trimmed) return "";
+      const match = trimmed.match(/^["']([\s\S]*)["']$/);
+      return match ? match[1].trim() : trimmed;
+    };
+
+    const extractMessageText = (item) => {
+      if (!item) return null;
+      const bubble =
+        item.querySelector(".msg-s-event-listitem__message-bubble") ||
+        item.querySelector(".msg-s-event-listitem__body") ||
+        item;
+      const rawText = bubble?.innerText || bubble?.textContent || "";
+      let normalized = normalizeMsgText(rawText);
+      if (!normalized) return null;
+
+      const lines = normalized
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => !isJunkLine(line));
+
+      normalized = normalizeMsgText(lines.join("\n"));
+      normalized = stripEnclosingQuotes(normalized);
+
+      if (!normalized || normalized.length < 2) return null;
+      return normalized;
+    };
+
+    const scanMessageEvents = (root) => {
+      if (!root?.querySelectorAll) return [];
+      const nodes = Array.from(
+        root.querySelectorAll("div.msg-s-event-listitem[data-event-urn]")
+      );
+      return nodes
+        .map((node) => {
+          const urn = node.getAttribute("data-event-urn") || "";
+          const text = extractMessageText(node);
+          if (!urn || !text) return null;
+          return { urn, text, node };
+        })
+        .filter(Boolean);
     };
 
     const extractLinkedInMessages = (rootElement = document) => {
@@ -1568,6 +1652,259 @@ console.log(
       }
     };
 
+    /*
+      ✅ Tests manuels recommandés :
+      1) Ouvrir un thread LinkedIn, envoyer un message -> 1 émission.
+      2) Recevoir un message -> 1 émission.
+      3) Switch de thread -> reset state + pas d’émission du thread précédent.
+      4) Pas de logs/émission pour "Répondez à la conversation…" ou "Voir le profil…".
+      5) Vérifier que le dernier message ne manque plus (debounce + rescan).
+    */
+    class MessageRadar {
+      constructor({
+        emitInitial = false,
+        emitTail = 0,
+        debounceMs = 200,
+        debug = false,
+      } = {}) {
+        this.emitInitial = emitInitial;
+        this.emitTail = emitTail;
+        this.debounceMs = debounceMs;
+        this.debug = debug;
+        this.seenUrn = new Set();
+        this.seenPair = new Set();
+        this.seenUrnOrder = [];
+        this.seenPairOrder = [];
+        this.root = null;
+        this.observer = null;
+        this.timer = null;
+        this.rebindTimer = null;
+        this.rebindAttempts = 0;
+        this.maxRebindAttempts = 5;
+        this.rebindDelayMs = 300;
+        this.hasInitialScan = false;
+        this.currentThreadKey = this.getThreadKeyFromHref();
+        this.stopped = false;
+      }
+
+      log(message, details) {
+        if (!this.debug) return;
+        if (details) {
+          console.log(`[RADAR] ${message}`, details);
+        } else {
+          console.log(`[RADAR] ${message}`);
+        }
+      }
+
+      getThreadKeyFromHref(href = window.location.href) {
+        const match = href.match(/\/messaging\/thread\/([^/?#]+)/i);
+        return match ? match[1] : null;
+      }
+
+      resetState() {
+        this.seenUrn.clear();
+        this.seenPair.clear();
+        this.seenUrnOrder = [];
+        this.seenPairOrder = [];
+        this.hasInitialScan = false;
+      }
+
+      disconnectObserver() {
+        if (this.observer) {
+          this.observer.disconnect();
+          this.observer = null;
+        }
+      }
+
+      stop() {
+        this.stopped = true;
+        clearTimeout(this.timer);
+        clearTimeout(this.rebindTimer);
+        this.disconnectObserver();
+        this.root = null;
+      }
+
+      start() {
+        this.stopped = false;
+        this.currentThreadKey = this.getThreadKeyFromHref();
+        this.bindRoot({ force: true });
+        this.schedule("start");
+      }
+
+      handleLocationChange() {
+        const nextThreadKey = this.getThreadKeyFromHref();
+        if (nextThreadKey === this.currentThreadKey) return;
+        this.log("thread change", {
+          from: this.currentThreadKey,
+          to: nextThreadKey,
+        });
+        this.currentThreadKey = nextThreadKey;
+        this.resetState();
+        this.bindRoot({ force: true });
+      }
+
+      bindRoot({ force = false } = {}) {
+        if (this.stopped) return;
+        const root = getMessageRoot();
+        if (!root) {
+          this.scheduleRebind();
+          return;
+        }
+        if (!force && this.root === root) return;
+
+        this.disconnectObserver();
+        this.root = root;
+        this.observer = new MutationObserver(() => this.schedule("mutation"));
+        this.observer.observe(root, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        });
+        this.log("bound root", {
+          items: root.querySelectorAll(
+            "div.msg-s-event-listitem[data-event-urn]"
+          ).length,
+        });
+        this.schedule("bind");
+      }
+
+      scheduleRebind() {
+        if (this.stopped || this.rebindTimer) return;
+        this.rebindAttempts = 0;
+        const attempt = () => {
+          if (this.stopped) {
+            this.rebindTimer = null;
+            return;
+          }
+          const root = getMessageRoot();
+          if (root) {
+            this.rebindTimer = null;
+            this.bindRoot({ force: true });
+            return;
+          }
+          this.rebindAttempts += 1;
+          if (this.rebindAttempts >= this.maxRebindAttempts) {
+            this.rebindTimer = null;
+            return;
+          }
+          this.rebindTimer = setTimeout(attempt, this.rebindDelayMs);
+        };
+        this.rebindTimer = setTimeout(attempt, this.rebindDelayMs);
+      }
+
+      schedule(reason) {
+        if (this.stopped) return;
+        clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+          this.rescan({ reason });
+        }, this.debounceMs);
+      }
+
+      remember(item, pairKey) {
+        if (!this.seenUrn.has(item.urn)) {
+          this.seenUrn.add(item.urn);
+          this.seenUrnOrder.push(item.urn);
+        }
+        if (!this.seenPair.has(pairKey)) {
+          this.seenPair.add(pairKey);
+          this.seenPairOrder.push(pairKey);
+        }
+        this.trimMemory();
+      }
+
+      trimMemory() {
+        if (this.seenUrnOrder.length > 1000) {
+          this.seenUrnOrder = this.seenUrnOrder.slice(-300);
+          this.seenUrn = new Set(this.seenUrnOrder);
+        }
+        if (this.seenPairOrder.length > 1000) {
+          this.seenPairOrder = this.seenPairOrder.slice(-300);
+          this.seenPair = new Set(this.seenPairOrder);
+        }
+      }
+
+      emitMessages(items) {
+        if (!items?.length) return;
+        const conversationRoot =
+          this.root?.closest(
+            "section.msg-thread, div.msg-thread, section.msg-conversation-container, .msg-overlay-conversation-bubble"
+          ) || document;
+        const profile = findConversationProfileLink(conversationRoot);
+        const conversationName = resolveConversationName(conversationRoot);
+        const identity = {
+          match_name: profile?.candidateName || conversationName,
+          profile_url: profile?.profileUrl || null,
+        };
+        const conversationId = resolveConversationId(conversationRoot);
+
+        items.forEach((item) => {
+          this.log("new message", {
+            urn: item.urn?.slice(-12),
+            text: item.text?.slice(0, 80),
+          });
+          chrome.runtime.sendMessage({
+            type: "FOCALS_INCOMING_RELAY",
+            payload: {
+              text: item.text,
+              type: "linkedin_dom_radar",
+              received_at: new Date().toISOString(),
+              conversation_urn: conversationId || this.currentThreadKey || null,
+              identity,
+            },
+          });
+        });
+      }
+
+      rescan({ reason } = {}) {
+        if (this.stopped) return;
+        if (this.root && !document.contains(this.root)) {
+          this.root = null;
+          this.scheduleRebind();
+          return;
+        }
+
+        const root = this.root || getMessageRoot();
+        if (!root) {
+          this.scheduleRebind();
+          return;
+        }
+
+        const items = scanMessageEvents(root);
+        if (!items.length) return;
+
+        const newItems = [];
+        items.forEach((item) => {
+          const pairKey = `${item.urn}||${item.text}`;
+          const isNew = !this.seenUrn.has(item.urn) || !this.seenPair.has(pairKey);
+          if (isNew) {
+            newItems.push(item);
+          }
+          this.remember(item, pairKey);
+        });
+
+        if (!this.hasInitialScan) {
+          this.hasInitialScan = true;
+          if (this.emitTail > 0) {
+            this.emitMessages(items.slice(-this.emitTail));
+          } else if (this.emitInitial) {
+            this.emitMessages(items);
+          }
+          return;
+        }
+
+        if (newItems.length) {
+          this.emitMessages(newItems);
+        } else if (this.debug) {
+          this.log("rescan noop", { reason, count: items.length });
+        }
+      }
+
+      scanNow() {
+        this.rescan({ reason: "manual" });
+      }
+    }
+
     // --- FOCALS LINKEDIN MESSAGING PATCH (Shadow DOM Safe) ---
     const FOCALS_SR_ATTR = "data-focals-smart-reply";
 
@@ -1641,8 +1978,14 @@ console.log(
     let focalsLiveDetectionStarted = false;
     let liveRouteWatcherId = null;
     let lastLiveHref = window.location.href;
+    let messageRadar = null;
 
     const cleanupLiveObservers = () => {
+      if (messageRadar) {
+        messageRadar.stop();
+        messageRadar = null;
+        window.__FOCALS_MESSAGE_RADAR__ = null;
+      }
       if (window.__FOCALS_MSG_OBSERVER__) {
         window.__FOCALS_MSG_OBSERVER__.disconnect();
         window.__FOCALS_MSG_OBSERVER__ = null;
@@ -1682,12 +2025,14 @@ console.log(
       if (focalsLiveDetectionStarted) return;
       focalsLiveDetectionStarted = true;
 
-      const root = getLinkedinMessagingRoot();
-      if (!root) return;
-
-      const observer = new MutationObserver(() => {});
-      window.__FOCALS_MSG_OBSERVER__ = observer;
-      observer.observe(root, { childList: true, subtree: true });
+      messageRadar = new MessageRadar({
+        emitInitial: false,
+        emitTail: 0,
+        debounceMs: 200,
+        debug: FOCALS_DEBUG,
+      });
+      messageRadar.start();
+      window.__FOCALS_MESSAGE_RADAR__ = messageRadar;
       console.log("🎯 [RADAR] Live message observer active");
     };
 
@@ -1699,6 +2044,9 @@ console.log(
 
       if (!liveRouteWatcherId) {
         liveRouteWatcherId = setInterval(() => {
+          if (messageRadar?.root && !document.contains(messageRadar.root)) {
+            messageRadar.bindRoot({ force: true });
+          }
           if (window.location.href === lastLiveHref) return;
           lastLiveHref = window.location.href;
           cleanupLiveObservers();
@@ -1712,6 +2060,22 @@ console.log(
       document.addEventListener("DOMContentLoaded", initMessagingWatcher);
     } else {
       initMessagingWatcher();
+    }
+
+    if (FOCALS_DEBUG) {
+      window.FOCALS_DEBUG_RADAR = {
+        start: () => {
+          if (!messageRadar) {
+            focalsLiveDetectionStarted = false;
+            setupLiveMessageObserver();
+          } else {
+            messageRadar.start();
+          }
+        },
+        stop: () => messageRadar?.stop(),
+        rescan: () => messageRadar?.rescan({ reason: "debug" }),
+        scanNow: () => messageRadar?.scanNow(),
+      };
     }
   } catch (err) {
     console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
