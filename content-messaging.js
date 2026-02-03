@@ -1,70 +1,20 @@
-const LOG_SCOPE = "MSG";
-const fallbackLogger = {
-  debug: (scope, ...args) => console.debug(`[FOCALS][${scope}]`, ...args),
-  info: (scope, ...args) => console.info(`[FOCALS][${scope}]`, ...args),
-  warn: (scope, ...args) => console.warn(`[FOCALS][${scope}]`, ...args),
-  error: (scope, ...args) => console.error(`[FOCALS][${scope}]`, ...args),
-};
-let logger = fallbackLogger;
-
-if (typeof chrome !== "undefined" && chrome?.runtime?.getURL) {
-  import(chrome.runtime.getURL("src/utils/logger.js"))
-    .then((mod) => {
-      if (mod?.logger) logger = mod.logger;
-      if (logger?.refresh) logger.refresh();
-    })
-    .catch(() => {});
-}
-
-const log = (...args) => logger.info(LOG_SCOPE, ...args);
-const warn = (...args) => logger.warn(LOG_SCOPE, ...args);
-const error = (...args) => logger.error(LOG_SCOPE, ...args);
-const debug = (...args) => logger.debug(LOG_SCOPE, ...args);
-
-(() => {
-  if (window.__FOCALS_XHR_INTERCEPTOR__) return;
-  window.__FOCALS_XHR_INTERCEPTOR__ = true;
-
-  const XHR = XMLHttpRequest.prototype;
-  const open = XHR.open;
-  const send = XHR.send;
-
-  XHR.open = function (method, url) {
-    this._url = url;
-    return open.apply(this, arguments);
-  };
-
-  XHR.send = function () {
-    this.addEventListener("load", function () {
-      if (this._url && this._url.includes("voyager/api/messaging/conversations")) {
-        try {
-          const responseData = JSON.parse(this.responseText);
-          debug("Flux de conversations intercepté");
-          if (typeof window.processInterceptedMessages === "function") {
-            window.processInterceptedMessages(responseData);
-          }
-        } catch (e) {
-          error("Erreur lecture interception", e);
-        }
-      }
-    });
-    return send.apply(this, arguments);
-  };
-})();
-
-log("messaging content script loaded – v3");
-log("messaging content script context", {
-  href: window.location.href,
-  isTop: window.top === window,
-  frameElement: window.frameElement,
-});
+console.log('[FOCALS DEBUG] messaging content script loaded – v3');
+console.log(
+  '[FOCALS DEBUG] messaging content script context:',
+  'href=',
+  window.location.href,
+  'isTop=',
+  window.top === window,
+  'frameElement=',
+  window.frameElement
+);
 
 (() => {
   const FOCALS_DEBUG = (() => {
     try {
       return localStorage.getItem("FOCALS_DEBUG_MSG") === "true";
     } catch (err) {
-      warn("Unable to read debug flag", err);
+      console.warn("[Focals][MSG][DEBUG] Unable to read debug flag", err);
       return false;
     }
   })();
@@ -73,12 +23,12 @@ log("messaging content script context", {
     if (!FOCALS_DEBUG) return;
     try {
       if (typeof details === "string") {
-        debug(stage, details);
+        console.log(`[Focals][MSG][${stage}]`, details);
       } else {
-        debug(stage, JSON.stringify(details, null, 2));
+        console.log(`[Focals][MSG][${stage}]`, JSON.stringify(details, null, 2));
       }
     } catch (e) {
-      debug(stage, details);
+      console.log(`[Focals][MSG][${stage}]`, details);
     }
   }
 
@@ -86,7 +36,7 @@ log("messaging content script context", {
     // Sur certaines sessions, LinkedIn met la messagerie dans un Shadow DOM
     const outlet = document.getElementById("interop-outlet");
     if (outlet && outlet.shadowRoot) {
-      debug("SHADOW: using interop-outlet.shadowRoot as messaging root");
+      console.log("[FOCALS][SHADOW] using interop-outlet.shadowRoot as messaging root");
       return outlet.shadowRoot;
     }
 
@@ -94,318 +44,14 @@ log("messaging content script context", {
     return document;
   }
 
-  const sentMessageIds = new Set();
-  const sentInteractionMessageIds = new Set();
-  const authorNameByUrn = new Map();
-  const identityMap = (window._focalsIdentityMap = window._focalsIdentityMap || new Map());
-  const processedUrns = (window._focalsProcessedUrns = window._focalsProcessedUrns || new Set());
-  const processedTexts = (window._focalsProcessedTexts =
-    window._focalsProcessedTexts || new Set());
-  const processedSignatures = (window._focalsProcessedSignatures =
-    window._focalsProcessedSignatures || new Set());
-  const recentVoyagerMessages = (window._focalsRecentMessages =
-    window._focalsRecentMessages || new Set());
-  window._recentVoyagerMessages = recentVoyagerMessages;
-  const voyagerLock = (window._focalsVoyagerLock = window._focalsVoyagerLock || new Set());
-  const authorNameByHostUrn = new Map();
-  const safeSendMessage = (payload, callback) => {
-    if (!chrome.runtime?.id) {
-      if (typeof callback === "function") {
-        callback({ ok: false, error: "Extension context invalidated" });
-      }
-      return false;
-    }
-    chrome.runtime.sendMessage(payload, callback);
-    return true;
-  };
-
-  const getFallbackAuthorName = () => {
-    const node = document.querySelector(".msg-entity-lockup__entity-title");
-    const text = node?.textContent?.trim();
-    return text || null;
-  };
-
-  const getFallbackAuthorHeadline = () => {
-    const node = document.querySelector(".msg-entity-lockup__subtitle");
-    const text = node?.textContent?.trim();
-    return text || null;
-  };
-
-  const collectProfileNames = (obj) => {
-    if (!obj || typeof obj !== "object") return;
-
-    const entityUrn = obj.entityUrn || obj.entityUrnId || obj.profileUrn;
-    const firstName = obj.firstName || obj?.miniProfile?.firstName;
-    const lastName = obj.lastName || obj?.miniProfile?.lastName;
-    if (entityUrn && (firstName || lastName)) {
-      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
-      if (name) {
-        authorNameByUrn.set(entityUrn, name);
-        identityMap.set(name, { name, member_urn: entityUrn });
-      }
-    }
-
-    for (const key of Object.keys(obj)) {
-      collectProfileNames(obj[key]);
-    }
-  };
-
-  const collectHostIdentityNames = (obj) => {
-    if (!obj || typeof obj !== "object") return;
-
-    const hostUrn = obj.hostIdentityUrn || obj.hostIdentity || obj.entityUrn;
-    const firstName = obj.firstName || obj?.miniProfile?.firstName;
-    const lastName = obj.lastName || obj?.miniProfile?.lastName;
-    if (hostUrn && (firstName || lastName)) {
-      const name = [firstName, lastName].filter(Boolean).join(" ").trim();
-      if (name && name !== "LinkedIn User") authorNameByHostUrn.set(hostUrn, name);
-    }
-
-    for (const key of Object.keys(obj)) {
-      collectHostIdentityNames(obj[key]);
-    }
-  };
-
-  const extractVoyagerMessages = (payload) => {
-    const results = [];
-    const stack = [payload];
-
-    while (stack.length) {
-      const current = stack.pop();
-      if (!current || typeof current !== "object") continue;
-
-      if (current.backendUrn && current.body?.text) {
-        results.push(current);
-      }
-
-      for (const value of Object.values(current)) {
-        if (value && typeof value === "object") {
-          stack.push(value);
-        }
-      }
-    }
-
-    return results;
-  };
-
-  const extractMessagesFromPayload = (payload = {}) => {
-    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    return elements
-      .map((item) => {
-        const messageId = item?.backendUrn || item?.entityUrn;
-        const threadId =
-          item?.conversation?.entityUrn ||
-          item?.thread?.entityUrn ||
-          item?.conversationUrn ||
-          null;
-        const authorUrn =
-          item?.from?.messagingMember?.entityUrn ||
-          item?.from?.entityUrn ||
-          item?.sender?.entityUrn ||
-          null;
-        const content = item?.body?.text || item?.eventContent?.attributedBody?.text || null;
-        const createdAt = item?.createdAt || item?.time || item?.createdAtMs || null;
-        return {
-          message_id: messageId,
-          thread_id: threadId,
-          author_urn: authorUrn,
-          content,
-          created_at: createdAt ? new Date(createdAt).toISOString() : null,
-        };
-      })
-      .filter((item) => item.message_id && item.content);
-  };
-
-  const syncLinkedinMessagesFromPayload = (payload) => {
-    collectProfileNames(payload);
-    const messages = extractMessagesFromPayload(payload);
-
-    messages.forEach((message) => {
-      if (sentMessageIds.has(message.message_id)) return;
-      sentMessageIds.add(message.message_id);
-      if (message.message_id) processedUrns.add(message.message_id);
-      if (message.content) processedTexts.add(message.content);
-      if (message.content) recentVoyagerMessages.add(message.content);
-      if (message.content) voyagerLock.add(message.content);
-
-      const authorName =
-        authorNameByUrn.get(message.author_urn) || getFallbackAuthorName();
-      if (authorName && message.content) {
-        processedSignatures.add(`${authorName}::${message.content}`);
-      }
-      if (authorName && authorName !== "LinkedIn User" && message.author_urn) {
-        authorNameByHostUrn.set(message.author_urn, authorName);
-      }
-
-      safeSendMessage({
-        type: "SYNC_LINKEDIN_MESSAGE",
-        payload: {
-          message_id: message.message_id,
-          thread_id: message.thread_id,
-          author_name: authorName,
-          content: message.content,
-          created_at: message.created_at,
-        },
-      });
-    });
-  };
-
-  const extractInteractionMessagesFromPayload = (payload = {}) => {
-    const items = extractVoyagerMessages(payload);
-    return items
-      .map((item) => {
-        const messageId = item?.backendUrn || null;
-        const threadId = item?.backendConversationUrn || null;
-        const content = item?.body?.text || null;
-        const deliveredAt = item?.deliveredAt || null;
-        const senderMember = item?.sender?.member || item?.sender?.messagingMember || null;
-        const distance = senderMember?.distance || senderMember?.member?.distance || null;
-        const direction = distance === "SELF" ? "outbound" : "inbound";
-        const hostUrn = senderMember?.hostIdentityUrn || senderMember?.hostIdentity || null;
-        const authorName =
-          senderMember?.firstName ||
-          senderMember?.miniProfile?.firstName ||
-          senderMember?.name ||
-          authorNameByHostUrn.get(hostUrn) ||
-          null;
-        const authorHeadline =
-          senderMember?.headline ||
-          senderMember?.miniProfile?.headline ||
-          senderMember?.occupation ||
-          null;
-        if (authorName && threadId) {
-          identityMap.set(authorName, {
-            name: authorName,
-            conversation_urn: threadId,
-          });
-        }
-        if (authorName && authorName !== "LinkedIn User" && hostUrn) {
-          authorNameByHostUrn.set(hostUrn, authorName);
-        }
-        return {
-          linkedin_message_urn: messageId,
-          thread_id: threadId,
-          content,
-          direction,
-          author_name: authorName,
-          author_headline: authorHeadline,
-          delivered_at: deliveredAt ? new Date(deliveredAt).toISOString() : null,
-          source: "voyager",
-        };
-      })
-      .filter((item) => item.linkedin_message_urn && item.content);
-  };
-
-  const syncInteractionMessagesFromPayload = (payload) => {
-    collectHostIdentityNames(payload);
-    const messages = extractInteractionMessagesFromPayload(payload);
-    if (!messages.length) return;
-
-    const fallbackAuthorName = getFallbackAuthorName();
-    const fallbackAuthorHeadline = getFallbackAuthorHeadline();
-    const payloads = messages
-      .map((message) => {
-        if (sentInteractionMessageIds.has(message.linkedin_message_urn)) return null;
-        sentInteractionMessageIds.add(message.linkedin_message_urn);
-        processedUrns.add(message.linkedin_message_urn);
-        if (message.content) processedTexts.add(message.content);
-        if (message.content) recentVoyagerMessages.add(message.content);
-        if (message.content) voyagerLock.add(message.content);
-        const signature = `${message.author_name || fallbackAuthorName || "unknown"}::${message.content}`;
-        if (message.content) processedSignatures.add(signature);
-        return {
-          ...message,
-          author_name:
-            message.author_name && message.author_name !== "LinkedIn User"
-              ? message.author_name
-              : fallbackAuthorName,
-          author_headline: message.author_headline || fallbackAuthorHeadline || null,
-        };
-      })
-      .filter(Boolean);
-
-    if (!payloads.length) return;
-
-    safeSendMessage({
-      type: "FOCALS_UPSERT_INTERACTIONS",
-      payload: payloads,
-    });
-  };
-
-  let lastInterceptedPayload = null;
-
-  async function processInterceptedMessages(payload, { reason = "auto" } = {}) {
-    lastInterceptedPayload = payload;
-    const elements = Array.isArray(payload?.elements) ? payload.elements : [];
-    const messages = elements
-      .map((item) => {
-        const externalId = item?.entityUrn || null;
-        const participant =
-          item?.participants?.[0]?.messagingMember ||
-          item?.participants?.[0]?.["com.linkedin.voyager.messaging.MessagingMember"] ||
-          item?.participants?.[0] ||
-          null;
-        const contactName =
-          participant?.miniProfile?.firstName ||
-          participant?.profile?.firstName ||
-          participant?.firstName ||
-          null;
-        const lastMessage = item?.events?.[0]?.eventContent?.attributedBody?.text || null;
-        if (!externalId) return null;
-        return {
-          external_id: externalId,
-          contact_name: contactName,
-          last_message: lastMessage,
-          source: "linkedin_voyager",
-          synced_at: new Date().toISOString(),
-          sync_reason: reason,
-        };
-      })
-      .filter(Boolean);
-
-    debug("Données prêtes pour Supabase", messages);
-    if (!messages.length) {
-      return { ok: true, count: 0 };
-    }
-
-    return new Promise((resolve) => {
-      if (!chrome.runtime?.id) {
-        resolve({ ok: false, error: "Extension context invalidated" });
-        return;
-      }
-      chrome.runtime.sendMessage(
-        {
-          type: "FOCALS_UPSERT_INTERACTIONS",
-          payload: messages,
-        },
-        (result) => {
-          if (chrome.runtime.lastError) {
-            error("Supabase relay failed", chrome.runtime.lastError.message);
-            resolve({
-              ok: false,
-              error: chrome.runtime.lastError.message,
-            });
-            return;
-          }
-          resolve(result || { ok: false, error: "No response" });
-        }
-      );
-    });
-  }
-
-  window.processInterceptedMessages = (payload) =>
-    processInterceptedMessages(payload, { reason: "intercepted" });
-
   function sendApiRequest({ endpoint, method = "GET", body, params }) {
     return new Promise((resolve, reject) => {
       const payload = { type: "API_REQUEST", endpoint, method, body, params };
 
       const sendWithRetry = (attempt = 1) => {
-        debug(`API_REQUEST attempt ${attempt} -> ${method} ${endpoint}`);
-        if (!chrome.runtime?.id) {
-          reject(new Error("Extension context invalidated"));
-          return;
-        }
+        console.log(
+          `[Focals][MSG][API_REQUEST] attempt ${attempt} -> ${method} ${endpoint}`
+        );
         chrome.runtime.sendMessage(payload, (response) => {
           if (chrome.runtime.lastError) {
             const message = chrome.runtime.lastError.message || "Runtime messaging failed";
@@ -414,7 +60,9 @@ log("messaging content script context", {
               /Extension context invalidated/i.test(message) ||
               /Receiving end does not exist/i.test(message);
 
-            warn(`API_REQUEST lastError on attempt ${attempt}: ${message}`);
+            console.warn(
+              `[Focals][MSG][API_REQUEST] lastError on attempt ${attempt}: ${message}`
+            );
 
             // The background service worker can be torn down between attempts, which triggers
             // "Extension context invalidated." or a missing receiver. Retry a few times to let
@@ -429,7 +77,9 @@ log("messaging content script context", {
           }
 
           if (!response) {
-            warn(`API_REQUEST empty response on attempt ${attempt}, retrying if possible`);
+            console.warn(
+              `[Focals][MSG][API_REQUEST] empty response on attempt ${attempt}, retrying if possible`
+            );
             if (attempt < 3) {
               setTimeout(() => sendWithRetry(attempt + 1), attempt * 100);
               return;
@@ -450,13 +100,6 @@ log("messaging content script context", {
       sendWithRetry();
     });
   }
-
-  window.addEventListener("FOCALS_VOYAGER_DATA", (event) => {
-    const payload = event?.detail?.data || null;
-    if (!payload || typeof payload !== "object") return;
-    syncLinkedinMessagesFromPayload(payload);
-    syncInteractionMessagesFromPayload(payload);
-  });
 
   const env = {
     href: window.location.href,
@@ -622,7 +265,7 @@ log("messaging content script context", {
     };
 
     const error = (message, ...args) => {
-      logger.error(LOG_SCOPE, message, ...args);
+      console.error("[Focals][MSG][ERROR]", message, ...args);
     };
 
     const isStorageAvailable = (area = "local") => {
@@ -875,10 +518,6 @@ log("messaging content script context", {
 
     const openProfileTabInBackground = (profileUrl) =>
       new Promise((resolve, reject) => {
-        if (!chrome.runtime?.id) {
-          reject(new Error("Extension context invalidated"));
-          return;
-        }
         try {
           chrome.runtime.sendMessage(
             { type: "FOCALS_SCRAPE_PROFILE_URL", url: profileUrl },
@@ -902,7 +541,6 @@ log("messaging content script context", {
     const closeTabById = (tabId) =>
       new Promise((resolve) => {
         if (!tabId) return resolve(false);
-        if (!chrome.runtime?.id) return resolve(false);
         try {
           chrome.runtime.sendMessage({ type: "FOCALS_CLOSE_TAB", tabId }, () => resolve(true));
         } catch (err) {
@@ -988,10 +626,6 @@ log("messaging content script context", {
 
     const forceProfileRescrape = () =>
       new Promise((resolve) => {
-        if (!chrome.runtime?.id) {
-          resolve(false);
-          return;
-        }
         try {
           chrome.runtime.sendMessage({ type: "FOCALS_FORCE_RESCRAPE" }, () => resolve(true));
         } catch (err) {
@@ -1483,7 +1117,7 @@ log("messaging content script context", {
           systemPromptOverride: trimmedCustomInstructions || null,
         };
 
-        debug("generate payload context", payloadContext);
+        console.log("[Focals][MSG] generate payload context", payloadContext);
 
         const reply = await generateReplyFromAPI(messages, {
           context: payloadContext,
@@ -1491,7 +1125,7 @@ log("messaging content script context", {
           conversationName,
           conversationRoot,
         });
-        debug("Réponse reçue", {
+        console.log("[Focals][MSG] Réponse reçue", {
           hasReply: !!reply,
         });
         if (!reply) {
@@ -1887,7 +1521,7 @@ log("messaging content script context", {
         '.msg-form__contenteditable[contenteditable="true"]'
       );
       if (!editor) {
-        warn("No message editor found in conversation");
+        console.warn("[FOCALS] No message editor found in conversation");
         return;
       }
 
@@ -1901,13 +1535,15 @@ log("messaging content script context", {
       try {
         const conversationRoot = getConversationRootFromButton(buttonEl);
         if (!conversationRoot) {
-          warn("No conversation root found for personalized follow-up");
+          console.warn(
+            "[FOCALS] No conversation root found for personalized follow-up"
+          );
           return;
         }
 
         const profileHref = getProfileLinkFromConversation(conversationRoot);
         if (!profileHref) {
-          warn("No profile link found in conversation");
+          console.warn("[FOCALS] No profile link found in conversation");
           return;
         }
 
@@ -1920,13 +1556,15 @@ log("messaging content script context", {
         });
 
         if (!reply) {
-          warn("backendGeneratePersonalizedFollowup returned empty reply");
+          console.warn(
+            "[FOCALS] backendGeneratePersonalizedFollowup returned empty reply"
+          );
           return;
         }
 
         injectReplyIntoComposer(conversationRoot, reply);
       } catch (err) {
-        error("Error in handlePersonalizedFollowup", err);
+        console.error("[FOCALS] Error in handlePersonalizedFollowup", err);
       }
     };
 
@@ -1995,7 +1633,7 @@ log("messaging content script context", {
         if (injectSmartReplyIntoForm(composer)) count++;
       }
 
-      if (count) debug("FOCALS SR injected on forms", count);
+      if (count) console.log("[FOCALS SR] injected on forms:", count);
     };
 
     let focalsSrObsStarted = false;
@@ -2037,7 +1675,7 @@ log("messaging content script context", {
 
       injectAllSmartReplyButtons();
 
-      debug("FOCALS SR observer ON");
+      console.log("[FOCALS SR] observer ON");
     };
 
     const setupLiveMessageObserver = () => {
@@ -2050,11 +1688,12 @@ log("messaging content script context", {
       const observer = new MutationObserver(() => {});
       window.__FOCALS_MSG_OBSERVER__ = observer;
       observer.observe(root, { childList: true, subtree: true });
+      console.log("🎯 [RADAR] Live message observer active");
     };
 
 
     const initMessagingWatcher = () => {
-      log("Smart Reply UI Active");
+      console.log("🚀 [FOCALS] Smart Reply UI Active");
       setupMessagingObserver();
       setupLiveMessageObserver();
 
@@ -2069,36 +1708,12 @@ log("messaging content script context", {
       }
     };
 
-    if (chrome?.runtime?.onMessage?.addListener) {
-      chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request?.type === "FOCALS_SYNC_LINKEDIN_MESSAGES") {
-          if (!lastInterceptedPayload) {
-            sendResponse({
-              ok: false,
-              error: "No intercepted data yet. Open LinkedIn messaging first.",
-            });
-            return false;
-          }
-          processInterceptedMessages(lastInterceptedPayload, {
-            reason: request?.reason || "manual",
-          })
-            .then((result) => sendResponse(result))
-            .catch((error) =>
-              sendResponse({ ok: false, error: error?.message || "SYNC_FAILED" })
-            );
-          return true;
-        }
-        return false;
-      });
-    }
-
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", initMessagingWatcher);
     } else {
       initMessagingWatcher();
     }
-
   } catch (err) {
-    error("Fatal error in content-messaging.js", err);
+    console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
   }
 })();

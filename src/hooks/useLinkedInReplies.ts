@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { logger } from "../utils/logger";
 
 const EXTENSION_ID = "kekhkaclmlnmijnpekcpppnnoooodaca";
 
@@ -103,7 +102,7 @@ export function useLinkedInReplies() {
           filter: "type=eq.linkedin_reply",
         },
         (payload) => {
-          logger.info("MSG", "Nouvelle réponse LinkedIn", payload);
+          console.log("Nouvelle réponse LinkedIn:", payload);
           queryClient.invalidateQueries({ queryKey: ["linkedin-replies"] });
           queryClient.invalidateQueries({ queryKey: ["activities"] });
           toast.success("💬 Nouvelle réponse LinkedIn détectée !");

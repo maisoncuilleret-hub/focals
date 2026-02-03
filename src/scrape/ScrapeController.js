@@ -1,4 +1,4 @@
-import { logger } from "../utils/logger.js";
+import { createLogger } from "../utils/logger.js";
 
 export const ScrapeState = {
   IDLE: "IDLE",
@@ -10,7 +10,7 @@ export const ScrapeState = {
 
 export class ScrapeController {
   constructor({ onScrape, onStateChange } = {}) {
-    this.logger = logger;
+    this.logger = createLogger("ScrapeController");
     this.onScrape = onScrape;
     this.onStateChange = onStateChange;
     this.state = ScrapeState.IDLE;
@@ -21,14 +21,14 @@ export class ScrapeController {
   setState(next) {
     if (this.state === next) return;
     this.state = next;
-    this.logger.info("SCRAPER", "State ->", next);
+    this.logger.info("State ->", next);
     if (this.onStateChange) this.onStateChange(next);
   }
 
   async trigger(reason = "manual") {
     if (this.state !== ScrapeState.RUNNING) return;
     if (this.currentPromise) {
-      this.logger.debug("SCRAPER", "Scrape already running, skipping", reason);
+      this.logger.debug("Scrape already running, skipping", reason);
       return;
     }
     if (!this.onScrape) return;
@@ -38,7 +38,7 @@ export class ScrapeController {
       try {
         await this.onScrape(reason, () => this.aborted);
       } catch (e) {
-        this.logger.error("SCRAPER", "Scrape failed", e?.message || e);
+        this.logger.error("Scrape failed", e?.message || e);
         this.setState(ScrapeState.ERROR);
       } finally {
         this.currentPromise = null;

@@ -111,26 +111,6 @@ function from(table) {
       }
       return { data: ok ? data : null, error };
     },
-    upsert: async (payload, options = {}) => {
-      const session = await getStoredSession();
-      const params = new URLSearchParams();
-      if (options?.onConflict) {
-        params.set("on_conflict", options.onConflict);
-      }
-      const query = params.toString();
-      const url = query ? `${SUPABASE_URL}/rest/v1/${table}?${query}` : `${SUPABASE_URL}/rest/v1/${table}`;
-      const resolution = options?.ignoreDuplicates
-        ? "ignore-duplicates"
-        : options?.preferResolution || "merge-duplicates";
-      const preferParts = [`resolution=${resolution}`];
-      preferParts.push(options?.returning ? `return=${options.returning}` : "return=minimal");
-      const { ok, data, error } = await fetchJson(url, {
-        method: "POST",
-        headers: await buildHeaders(session, { Prefer: preferParts.join(",") }),
-        body: JSON.stringify(payload ?? {}),
-      });
-      return { data: ok ? data : null, error };
-    },
   };
 }
 

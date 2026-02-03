@@ -1,11 +1,11 @@
 import { API_BASE_URL, IS_DEV } from './config.js';
 import { loadStoredToken } from './supabaseClient.js';
-import { logger } from '../utils/logger.js';
+import { createLogger } from '../utils/logger.js';
 
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
 const TALENTBASE_API_URL =
   'https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer';
-const LOG_SCOPE = 'NET';
+const logger = createLogger('FocalsApi');
 
 const buildApiUrl = (endpoint = '') => {
   const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
@@ -18,7 +18,7 @@ async function postJson(endpoint, payload) {
 
   const token = await loadStoredToken();
   if (IS_DEV) {
-    logger.debug(LOG_SCOPE, 'REQUEST', { url, hasPayload: Boolean(payload) });
+    logger.debug('REQUEST', { url, hasPayload: Boolean(payload) });
   }
 
   const res = await fetch(url, {
@@ -37,13 +37,13 @@ async function postJson(endpoint, payload) {
     const errorDetail = body?.error || body?.message || (typeof body === 'string' && body ? body : '');
     const message = errorDetail ? `HTTP ${res.status}: ${errorDetail}` : `HTTP ${res.status}`;
     if (IS_DEV) {
-      logger.debug(LOG_SCOPE, 'ERROR', { url, status: res.status, message });
+      logger.debug('ERROR', { url, status: res.status, message });
     }
     throw new Error(message);
   }
 
   if (IS_DEV) {
-    logger.debug(LOG_SCOPE, 'RESPONSE', { url, status: res.status });
+    logger.debug('RESPONSE', { url, status: res.status });
   }
 
   return body;
@@ -132,13 +132,6 @@ async function exportProfileToTalentBase(payload) {
   return responseBody;
 }
 
-async function fetchCandidate(linkedinInternalId) {
-  return postJson("focals-fetch-candidate", {
-    linkedin_internal_id: linkedinInternalId,
-    linkedinInternalId,
-  });
-}
-
 export {
   bootstrapUser,
   getAllData,
@@ -149,5 +142,4 @@ export {
   generateFollowup,
   associateProfile,
   exportProfileToTalentBase,
-  fetchCandidate,
 };

@@ -1,9 +1,6 @@
 import * as apiModule from "./src/api/focalsApi.js";
 import { IS_DEV } from "./src/api/config.js";
 import { getOrCreateUserId } from "./src/focalsUserId.js";
-import { logger } from "./src/utils/logger.js";
-
-const LOG_SCOPE = "POPUP";
 
 const DEBUG = (() => {
   try {
@@ -12,7 +9,7 @@ const DEBUG = (() => {
     return false;
   }
 })();
-const SKDBG = (...a) => DEBUG && logger.debug(LOG_SCOPE, "[SKILLS][DBG]", ...a);
+const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
 
 const FOCALS_DEBUG = (() => {
   if (IS_DEV) return true;
@@ -27,30 +24,30 @@ function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
   try {
     if (typeof details === "string") {
-      logger.info(LOG_SCOPE, `[${stage}]`, details);
+      console.log(`[Focals][${stage}]`, details);
     } else {
-      logger.info(LOG_SCOPE, `[${stage}]`, JSON.stringify(details, null, 2));
+      console.log(`[Focals][${stage}]`, JSON.stringify(details, null, 2));
     }
   } catch (e) {
-    logger.info(LOG_SCOPE, `[${stage}]`, details);
+    console.log(`[Focals][${stage}]`, details);
   }
 }
 
 function debugWarn(stage, details) {
   if (!FOCALS_DEBUG) return;
   if (typeof details === "string") {
-    logger.warn(LOG_SCOPE, `[${stage}]`, details);
+    console.warn(`[Focals][${stage}]`, details);
   } else {
-    logger.warn(LOG_SCOPE, `[${stage}]`, details);
+    console.warn(`[Focals][${stage}]`, details);
   }
 }
 
 function debugError(stage, details) {
   if (!FOCALS_DEBUG) return;
   if (typeof details === "string") {
-    logger.error(LOG_SCOPE, `[${stage}]`, details);
+    console.error(`[Focals][${stage}]`, details);
   } else {
-    logger.error(LOG_SCOPE, `[${stage}]`, details);
+    console.error(`[Focals][${stage}]`, details);
   }
 }
 
@@ -65,7 +62,7 @@ async function triggerScrapeOnActiveTab({ reason = "popup_open", force = false }
       force,
     });
   } catch (e) {
-    logger.warn(LOG_SCOPE, "triggerScrape failed", e);
+    console.warn("[FOCALS][POPUP] triggerScrape failed", e);
   }
 }
 
@@ -82,15 +79,22 @@ async function triggerScrapeOnActiveTab({ reason = "popup_open", force = false }
     return /linkedin\.com\/in\//i.test(url);
   }
 
-  const getCleanUrl = (url) => {
+  const normalizeProfilePath = (pathname = "") => {
+    const normalized = pathname.replace(/\/$/, "");
+    const match = normalized.match(/^\/in\/[^/]+/i);
+    return match ? match[0] : null;
+  };
+
+  const canonicalProfileUrl = (url) => {
     try {
       const parsed = new URL(url);
       parsed.search = "";
       parsed.hash = "";
-      parsed.pathname = parsed.pathname.replace(/\/$/, "");
-      return parsed.toString();
+      const basePath = normalizeProfilePath(parsed.pathname);
+      if (!basePath) return null;
+      return `${parsed.origin}${basePath}`;
     } catch {
-      return (url || "").replace(/[?#].*$/, "").replace(/\/$/, "");
+      return null;
     }
   };
 
@@ -153,16 +157,10 @@ async function loadProfileDataFromStorage(localStore) {
   let profile = null;
   let cacheFresh = false;
   let profileKey = null;
-  let stored = null;
   try {
-    stored = await chrome.storage.local.get([
-      "current_linkedin_id",
-      "current_profile_name",
-    ]);
-
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && isLinkedinProfileContext(tab.url)) {
-      profileKey = getCleanUrl(tab.url);
+      profileKey = canonicalProfileUrl(tab.url);
       if (profileKey) {
         const key = buildLastResultCacheKey(profileKey);
         const data = await localStore.get(key);
@@ -181,31 +179,20 @@ async function loadProfileDataFromStorage(localStore) {
     cacheFresh = false;
   }
 
-  if (!profile && stored?.current_linkedin_id) {
-    const currentId = stored.current_linkedin_id;
-    debugLog("POPUP_PROFILE_ID_DETECTED", { currentId });
-    profile = {
-      name: stored.current_profile_name || "Profil LinkedIn",
-      linkedin_internal_id: currentId,
-    };
-  }
-
-  if (state.profileStatus === "idle") {
-    state.profile = profile;
-    state.profileStatus = profile ? "ready" : "idle";
-    SKDBG("popup loaded profile", {
-      hasProfile: !!profile,
-      profileKey,
-      cacheFresh,
-      name: profile?.name,
-      expCount: profile?.experiences?.length ?? 0,
-      exp0: profile?.experiences?.[0],
-      exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
-      exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
-    });
-    displayProfileData(profile);
-    renderProfileCard(profile);
-  }
+  state.profile = profile;
+  state.profileStatus = profile ? "ready" : "idle";
+  SKDBG("popup loaded profile", {
+    hasProfile: !!profile,
+    profileKey,
+    cacheFresh,
+    name: profile?.name,
+    expCount: profile?.experiences?.length ?? 0,
+    exp0: profile?.experiences?.[0],
+    exp0SkillsLen: profile?.experiences?.[0]?.skills?.length ?? 0,
+    exp0SkillsText: profile?.experiences?.[0]?.skillsText ?? null,
+  });
+  displayProfileData(profile);
+  renderProfileCard(profile);
   return { cacheFresh };
 }
 
@@ -331,30 +318,6 @@ function renderProfileCard(profile) {
       placeholder.className = "muted";
       placeholder.textContent = "La section Infos s'affichera dès que le profil sera prêt.";
       infosContent.appendChild(placeholder);
-    }
-    return;
-  }
-
-  if (state.profileStatus === "unsynced") {
-    const info = document.createElement("div");
-    info.className = "profile-info";
-    const title = document.createElement("div");
-    title.className = "profile-name";
-    title.textContent = "Profil détecté mais non synchronisé";
-    const subtitle = document.createElement("div");
-    subtitle.className = "profile-sub muted";
-    subtitle.textContent =
-      state.profileStatusMessage || "Ce profil LinkedIn n'est pas encore synchronisé.";
-    info.appendChild(title);
-    info.appendChild(subtitle);
-    card.appendChild(info);
-    if (status) status.textContent = "";
-    if (infosMeta) infosMeta.textContent = "Aucune info disponible";
-    if (infosContent) {
-      const empty = document.createElement("div");
-      empty.className = "muted";
-      empty.textContent = "Synchronisez le profil pour afficher les infos.";
-      infosContent.appendChild(empty);
     }
     return;
   }
@@ -608,64 +571,6 @@ function renderSystemPrompt() {
   textarea.value = state.systemPromptOverride || "";
 }
 
-async function loadCandidateFromMapping() {
-  try {
-    const stored = await localStore.get(["current_linkedin_id", "current_profile_name"]);
-    const currentId = stored?.current_linkedin_id;
-    if (!currentId) return { hasMapping: false };
-    const currentName = stored?.current_profile_name || "";
-    state.profileStatus = "loading";
-    renderProfileCard(state.profile);
-    let response = null;
-    try {
-      response = await apiModule.fetchCandidate(currentId);
-    } catch (err) {
-      logger.debug(LOG_SCOPE, "supabase fetch failed, loading local cache", err?.message || err);
-      const data = await localStore.get("FOCALS_LAST_PROFILE");
-      const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
-      if (cachedProfile) {
-        state.profile = cachedProfile;
-        state.profileStatus = "ready";
-        state.profileStatusMessage = "";
-        renderProfileCard(state.profile);
-        return { hasMapping: true, hasCandidate: true, fromCache: true };
-      }
-      throw err;
-    }
-    const candidate = response?.candidate || response?.profile || response?.data || response || null;
-    if (candidate && typeof candidate === "object") {
-      state.profile = candidate;
-      state.profileStatus = "ready";
-      state.profileStatusMessage = "";
-      renderProfileCard(state.profile);
-      return { hasMapping: true, hasCandidate: true };
-    }
-    const data = await localStore.get("FOCALS_LAST_PROFILE");
-    const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
-    if (cachedProfile) {
-      logger.debug(LOG_SCOPE, "supabase empty, using local cache");
-      state.profile = cachedProfile;
-      state.profileStatus = "ready";
-      state.profileStatusMessage = "";
-      renderProfileCard(state.profile);
-      return { hasMapping: true, hasCandidate: true, fromCache: true };
-    }
-    state.profile = null;
-    state.profileStatus = "unsynced";
-    state.profileStatusMessage = currentName || "Nom indisponible";
-    renderProfileCard(null);
-    return { hasMapping: true, hasCandidate: false };
-  } catch (err) {
-    debugWarn("POPUP_FETCH_CANDIDATE_FAILED", err?.message || err);
-    const stored = await localStore.get(["current_profile_name"]);
-    state.profile = null;
-    state.profileStatus = "unsynced";
-    state.profileStatusMessage = stored?.current_profile_name || "Nom indisponible";
-    renderProfileCard(null);
-    return { hasMapping: true, hasCandidate: false, error: err };
-  }
-}
-
 async function loadState() {
   try {
     setLoading(true, "Chargement...");
@@ -860,7 +765,6 @@ function setupProfileActions() {
   const refreshBtn = document.getElementById("refreshProfile");
   const associateBtn = document.getElementById("associateProfile");
   const copyJsonBtn = document.getElementById("copyProfileJson");
-  const syncBtn = document.getElementById("syncLinkedInMessages");
   const statusEl = document.getElementById("profileStatus");
 
   if (refreshBtn) {
@@ -883,33 +787,6 @@ function setupProfileActions() {
 
   if (copyJsonBtn) {
     copyJsonBtn.addEventListener("click", () => handleCopyProfileJson());
-  }
-
-  if (syncBtn) {
-    syncBtn.addEventListener("click", async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) {
-        statusEl.innerText = "Impossible de détecter l'onglet actif.";
-        return;
-      }
-
-      statusEl.innerText = "Synchronisation des messages... ⏳";
-      chrome.tabs.sendMessage(
-        tab.id,
-        { type: "FOCALS_SYNC_LINKEDIN_MESSAGES", reason: "popup_manual" },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            statusEl.innerText = "Erreur lors de la synchronisation.";
-            return;
-          }
-          if (response?.ok) {
-            statusEl.innerText = `Synchronisation terminée (${response.count || 0}).`;
-          } else {
-            statusEl.innerText = "Synchronisation impossible.";
-          }
-        }
-      );
-    });
   }
 }
 
@@ -966,26 +843,7 @@ function setupSystemPrompt() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  const statusEl = document.getElementById("extensionStatus");
-  if (statusEl) {
-    try {
-      await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: "PING" }, (response) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-          } else {
-            resolve(response);
-          }
-        });
-      });
-      statusEl.textContent = "✅ Extension connectée";
-    } catch (err) {
-      statusEl.textContent = `❌ Background injoignable: ${err.message}`;
-      statusEl.style.color = "#f87171";
-    }
-  }
   await loadState();
-  await loadCandidateFromMapping();
   const { cacheFresh } = await loadProfileDataFromStorage(localStore);
   setupTone();
   setupSystemPrompt();

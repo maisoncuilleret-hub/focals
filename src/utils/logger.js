@@ -1,30 +1,20 @@
-const LOG_LEVELS = ["error", "warn", "info", "debug"];
-const LOG_LEVEL_RANK = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  debug: 3,
-};
+const LEVELS = ["debug", "info", "warn", "error"];
+const DEFAULT_LEVEL = "info";
+const DEBUG_FLAG_KEY = "focals_debug";
+const SAMPLE_TTL_MS = 10_000;
 
-export const DEFAULT_LOG_LEVEL = "INFO";
-export const LOG_LEVEL_STORAGE_KEY = "focals_log_level";
-const DEDUPE_WINDOW_MS = 2000;
-const MAX_MESSAGE_LENGTH = 200;
+function sanitizeChunk(value) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.length > 80) return `${text.slice(0, 40)}…${text.slice(-5)}`;
+  return text;
+}
 
-const recentMessages = new Map();
-let currentLevel = DEFAULT_LOG_LEVEL.toLowerCase();
-
-const normalizeLevel = (value) => {
-  if (!value) return null;
-  const normalized = String(value).toLowerCase();
-  return LOG_LEVEL_RANK.hasOwnProperty(normalized) ? normalized : null;
-};
-
-const redact = (value) => {
+function redact(value) {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
     let sanitized = value.replace(/[A-Za-z0-9_-]{24,}/g, (m) => `${m.slice(0, 3)}…${m.slice(-3)}`);
-    sanitized = sanitized.replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g, (m) => `${m.slice(0, 2)}***@***${m.slice(-2)}`);
+    sanitized = sanitized.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, (m) => `${m.slice(0, 2)}***@***${m.slice(-2)}`);
     sanitized = sanitized.replace(/\b\d{6,}\b/g, (m) => `${m.slice(0, 2)}…${m.slice(-2)}`);
     return sanitized;
   }
@@ -41,131 +31,68 @@ const redact = (value) => {
     return out;
   }
   return value;
-};
+}
 
-const formatChunk = (value) => {
-  if (value === null || value === undefined) return value;
-  if (typeof value === "string") {
-    if (value.length > MAX_MESSAGE_LENGTH) {
-      return `${value.slice(0, 120)}…${value.slice(-20)}`;
+class Logger {
+  constructor(scope = "Focals") {
+    this.scope = scope;
+    this.sampleCache = new Map();
+    this.level = DEFAULT_LEVEL;
+    this.refreshLevel();
+  }
+
+  refreshLevel() {
+    try {
+      const raw =
+        (typeof localStorage !== "undefined" && localStorage.getItem(DEBUG_FLAG_KEY)) ||
+        (typeof chrome !== "undefined" && chrome?.storage?.local?.get);
+      if (raw === "true") this.level = "debug";
+    } catch (_) {
+      /* ignore */
     }
-    return value;
   }
-  return value;
-};
 
-const shouldLog = (level) => {
-  const rank = LOG_LEVEL_RANK[level];
-  const currentRank = LOG_LEVEL_RANK[currentLevel];
-  return rank <= currentRank;
-};
-
-const dedupeKey = (level, scope, chunks) => {
-  const base = chunks
-    .map((chunk) => {
-      try {
-        return typeof chunk === "string" ? chunk : JSON.stringify(chunk);
-      } catch {
-        return String(chunk);
-      }
-    })
-    .join("|");
-  return `${level}:${scope}:${base}`;
-};
-
-const shouldDedupe = (key) => {
-  const now = Date.now();
-  const last = recentMessages.get(key) || 0;
-  if (now - last < DEDUPE_WINDOW_MS) return true;
-  recentMessages.set(key, now);
-  return false;
-};
-
-const emit = (level, scope, args) => {
-  if (!shouldLog(level)) return;
-  const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
-  const payload = args.map(redact).map(formatChunk);
-  const key = dedupeKey(level, normalizedScope, payload);
-  if (level !== "error" && shouldDedupe(key)) return;
-  const fn = console[level] || console.log;
-  fn.call(console, `[FOCALS][${normalizedScope}]`, ...payload);
-};
-
-const setLogLevel = (level) => {
-  const normalized = normalizeLevel(level);
-  if (!normalized) return;
-  currentLevel = normalized;
-};
-
-const refreshLogLevel = () => {
-  try {
-    if (typeof chrome !== "undefined" && chrome?.storage?.local?.get) {
-      chrome.storage.local.get([LOG_LEVEL_STORAGE_KEY], (result) => {
-        if (chrome.runtime?.lastError) return;
-        const storedLevel = normalizeLevel(result?.[LOG_LEVEL_STORAGE_KEY]);
-        if (storedLevel) {
-          setLogLevel(storedLevel);
-        }
-      });
-    }
-  } catch {
-    // ignore storage failures
+  shouldLog(level) {
+    const idx = LEVELS.indexOf(level);
+    const current = LEVELS.indexOf(this.level);
+    return idx >= current;
   }
-};
 
-const attachStorageListener = () => {
-  try {
-    if (typeof chrome === "undefined" || !chrome?.storage?.onChanged) return;
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      if (!changes?.[LOG_LEVEL_STORAGE_KEY]) return;
-      const nextLevel = normalizeLevel(changes[LOG_LEVEL_STORAGE_KEY].newValue);
-      if (nextLevel) setLogLevel(nextLevel);
-    });
-  } catch {
-    // ignore storage failures
+  sampled(key) {
+    const now = Date.now();
+    const last = this.sampleCache.get(key) || 0;
+    if (now - last < SAMPLE_TTL_MS) return true;
+    this.sampleCache.set(key, now);
+    return false;
   }
-};
 
-refreshLogLevel();
-attachStorageListener();
+  emit(level, ...args) {
+    if (!this.shouldLog(level)) return;
+    const payload = args.map((a) => redact(a)).map(sanitizeChunk);
+    const key = `${level}:${payload.join("|")}`;
+    if (level !== "error" && this.sampled(key)) return;
 
-export const logger = {
-  debug: (scope, ...args) => emit("debug", scope, args),
-  info: (scope, ...args) => emit("info", scope, args),
-  warn: (scope, ...args) => emit("warn", scope, args),
-  error: (scope, ...args) => emit("error", scope, args),
-  table: (scope, rows) => {
-    if (!shouldLog("debug")) return;
-    const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
-    console.groupCollapsed(`[FOCALS][${normalizedScope}] table`);
-    console.table(rows);
-    console.groupEnd();
-  },
-  groupCollapsed: (scope, label, level = "info") => {
-    const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
-    if (!shouldLog(level)) return false;
-    console.groupCollapsed(`[FOCALS][${normalizedScope}] ${label}`);
-    return true;
-  },
-  groupEnd: () => {
-    console.groupEnd();
-  },
-  setLevel: (level) => setLogLevel(level),
-  getLevel: () => currentLevel,
-  refresh: refreshLogLevel,
-};
+    const fn = console[level] || console.log;
+    fn.call(console, `[${this.scope}]`, ...payload);
+  }
 
-export const createLogger = (scope) => ({
-  debug: (...args) => logger.debug(scope, ...args),
-  info: (...args) => logger.info(scope, ...args),
-  warn: (...args) => logger.warn(scope, ...args),
-  error: (...args) => logger.error(scope, ...args),
-  table: (rows) => logger.table(scope, rows),
-  groupCollapsed: (label, level) => logger.groupCollapsed(scope, label, level),
-  groupEnd: () => logger.groupEnd(),
-});
+  debug(...args) {
+    this.emit("debug", ...args);
+  }
 
+  info(...args) {
+    this.emit("info", ...args);
+  }
+
+  warn(...args) {
+    this.emit("warn", ...args);
+  }
+
+  error(...args) {
+    this.emit("error", ...args);
+  }
+}
+
+export const createLogger = (scope) => new Logger(scope);
 export const redactPayload = redact;
-
-export default logger;
+export default Logger;
