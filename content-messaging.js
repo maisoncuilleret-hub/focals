@@ -280,6 +280,34 @@ console.log(
       console.error("[Focals][MSG][ERROR]", message, ...args);
     };
 
+    let messagingExtractorPromise = null;
+    const loadLinkedinMessagingExtractor = () => {
+      if (messagingExtractorPromise) return messagingExtractorPromise;
+      const extractorUrl = chrome.runtime.getURL(
+        "src/content/extractors/linkedinMessagingExtractor.js"
+      );
+      messagingExtractorPromise = import(extractorUrl)
+        .then((mod) => mod?.extractLinkedinConversation || mod?.default || null)
+        .catch((err) => {
+          warn("EXTRACTOR_IMPORT_FAILED", err?.message || err);
+          return null;
+        });
+      return messagingExtractorPromise;
+    };
+
+    const logExtractor = (stage, details) => {
+      if (!FOCALS_DEBUG) return;
+      if (typeof details === "string") {
+        console.log(`[FOCALS][EXTRACT] ${stage}`, details);
+        return;
+      }
+      try {
+        console.log(`[FOCALS][EXTRACT] ${stage}`, JSON.stringify(details, null, 2));
+      } catch (err) {
+        console.log(`[FOCALS][EXTRACT] ${stage}`, details);
+      }
+    };
+
     const isStorageAvailable = (area = "local") => {
       try {
         return typeof chrome !== "undefined" && !!chrome?.storage?.[area];
@@ -1165,7 +1193,27 @@ console.log(
         );
 
         log(`PIPELINE extract_messages: start`);
-        const messages = extractLinkedInMessages(conversationRoot) || [];
+        const extractor = await loadLinkedinMessagingExtractor();
+        const messageRoot =
+          conversationRoot?.querySelector(".msg-s-message-list") || getMessageRoot();
+        const payload =
+          extractor && messageRoot
+            ? extractor(messageRoot, {
+                fillMissingTime: true,
+                logger: logExtractor,
+              })
+            : null;
+        const candidateNameFromPayload = payload?.candidate?.fullName || null;
+        const messages =
+          payload?.messages?.length > 0
+            ? payload.messages.map((msg) => ({
+                text: msg.text,
+                fromMe: msg.sender === "me",
+                timestampRaw: msg.hhmm || "",
+                senderName:
+                  msg.sender === "candidate" ? candidateNameFromPayload || undefined : undefined,
+              }))
+            : extractLinkedInMessages(conversationRoot) || [];
         log(
           `[Focals][MSG] PIPELINE context: { conversation: "${conversationName}", messagesInRoot: ${messages?.length || 0} }`
         );
@@ -2075,6 +2123,13 @@ console.log(
         stop: () => messageRadar?.stop(),
         rescan: () => messageRadar?.rescan({ reason: "debug" }),
         scanNow: () => messageRadar?.scanNow(),
+      };
+      window.__FOCALS_DEBUG__ = window.__FOCALS_DEBUG__ || {};
+      window.__FOCALS_DEBUG__.dumpConversation = async () => {
+        const extractor = await loadLinkedinMessagingExtractor();
+        const root = getMessageRoot();
+        if (!extractor || !root) return null;
+        return extractor(root, { fillMissingTime: true, logger: logExtractor });
       };
     }
   } catch (err) {
