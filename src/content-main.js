@@ -4,6 +4,7 @@
   const success = (...a) => console.log(`%c${TAG} ✅`, "color: #00ff00; font-weight: bold;", ...a);
   const warn = (...a) => console.warn(`${TAG} ⚠️`, ...a);
   const info = (...a) => console.info(`%c${TAG} ℹ️`, "color: #bb86fc;", ...a);
+  const error = (...a) => console.error(`${TAG} ❌`, ...a);
 
   const injectPageScraper = () => {
     if (document.documentElement?.dataset?.focalsPageScraperInjected === "true") {
@@ -74,6 +75,105 @@
       return (url || "").replace(/[?#].*$/, "").replace(/\/$/, "");
     }
   };
+
+  const mergeExperienceDetails = (profile, detailsPayload) => {
+    if (!profile || !detailsPayload) return profile;
+    const detailsExperiences = Array.isArray(detailsPayload.experiences)
+      ? detailsPayload.experiences
+      : [];
+    if (!detailsExperiences.length) return profile;
+
+    const normalizeKey = (exp) =>
+      [exp?.title, exp?.company, exp?.dates, exp?.location]
+        .map((val) => (val || "").toString().trim().toLowerCase())
+        .join("||");
+
+    const nextExperiences = Array.isArray(profile.experiences) ? [...profile.experiences] : [];
+    const indexByKey = new Map(nextExperiences.map((exp, idx) => [normalizeKey(exp), idx]));
+
+    for (const detail of detailsExperiences) {
+      const enriched = {
+        title: detail.title || null,
+        company: detail.company || null,
+        dates: detail.dates || null,
+        location: detail.location || null,
+        workplaceType: detail.workplaceType || null,
+        description: detail.description || null,
+        descriptionBullets: detail.descriptionBullets || null,
+        skills: Array.isArray(detail.skills) ? detail.skills : [],
+        skillsMoreCount: detail.skillsMoreCount ?? null,
+        skillsText: Array.isArray(detail.skills) ? detail.skills.join(" · ") : null,
+        start: null,
+        end: null,
+      };
+      const key = normalizeKey(enriched);
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex === undefined) {
+        indexByKey.set(key, nextExperiences.length);
+        nextExperiences.push(enriched);
+      } else {
+        const current = nextExperiences[existingIndex] || {};
+        nextExperiences[existingIndex] = {
+          ...current,
+          ...enriched,
+          description: enriched.description || current.description || null,
+          descriptionBullets: enriched.descriptionBullets || current.descriptionBullets || null,
+          skills: enriched.skills.length ? enriched.skills : current.skills || [],
+          skillsText: enriched.skillsText || current.skillsText || null,
+          skillsMoreCount: enriched.skillsMoreCount ?? current.skillsMoreCount ?? null,
+        };
+      }
+    }
+
+    return {
+      ...profile,
+      experiences: nextExperiences,
+      __detailsEnriched: true,
+      debug: {
+        ...(profile.debug || {}),
+        detailsEnriched: true,
+        experienceDetailsCount: detailsExperiences.length,
+      },
+    };
+  };
+
+  const initExperienceDetailsScraper = async () => {
+    const moduleUrl = chrome.runtime.getURL("src/scrape/ExperienceDetailsScraper.js");
+    return import(moduleUrl)
+      .then((detailsModule) => {
+        detailsModule.installExperienceDetailsScraper({
+          onScrapeDone: async (payload) => {
+            const publicIdentifier = payload?.publicIdentifier;
+            if (!publicIdentifier) return;
+
+            const stored = await chrome.storage.local.get(["FOCALS_LAST_PROFILE"]);
+            const profile = stored?.FOCALS_LAST_PROFILE;
+            if (!profile) return;
+
+            const profileId = detailsModule.getPublicIdentifierFromUrl(profile.linkedin_url || "");
+            if (!profileId || profileId !== publicIdentifier) return;
+
+            const merged = mergeExperienceDetails(profile, payload);
+            const cleanUrl = getCleanUrl(profile.linkedin_url || "");
+            const cacheKey = cleanUrl ? `focals_last_result:${cleanUrl}` : null;
+            const writePayload = { FOCALS_LAST_PROFILE: merged };
+            if (cacheKey) {
+              writePayload[cacheKey] = { payload: merged, ts: Date.now() };
+            }
+            await chrome.storage.local.set(writePayload);
+            info("Experience details merged into profile", {
+              publicIdentifier,
+              experiences: merged.experiences?.length ?? 0,
+            });
+          },
+        });
+      })
+      .catch((err) => {
+        error("Experience details scraper init failed:", err?.message || err);
+      });
+  };
+
+  initExperienceDetailsScraper();
 
   const findTechIdInText = (text) => {
     if (!text) return null;
