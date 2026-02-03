@@ -1,6 +1,6 @@
 import { API_BASE_URL, IS_DEV } from './config';
 import { loadStoredToken } from './supabaseClient';
-import { logger } from '../utils/logger';
+import { createLogger } from '../utils/logger';
 
 export type ToneType = 'very_formal' | 'professional' | 'warm' | 'direct';
 export type LanguageType = 'fr' | 'en';
@@ -80,7 +80,7 @@ export interface GenerateReplyResponse {
 const TALENTBASE_API_URL =
   'https://ppawceknsedxaejpeylu.supabase.co/functions/v1/save-engineer';
 const FOCALS_APP_BASE = 'https://mvp-recrutement.lovable.app';
-const LOG_SCOPE = 'NET';
+const logger = createLogger('FocalsApi');
 
 const buildApiUrl = (endpoint = '') => {
   const normalizedBase = API_BASE_URL.replace(/\/?$/, '');
@@ -93,7 +93,7 @@ async function postJson<TResponse>(endpoint: string, payload: unknown): Promise<
 
   const token = await loadStoredToken();
   if (IS_DEV) {
-    logger.debug(LOG_SCOPE, 'REQUEST', { url, hasPayload: Boolean(payload) });
+    logger.debug('REQUEST', { url, hasPayload: Boolean(payload) });
   }
 
   const res = await fetch(url, {
@@ -112,13 +112,13 @@ async function postJson<TResponse>(endpoint: string, payload: unknown): Promise<
     const errorDetail = (body as any)?.error || (body as any)?.message || (typeof body === 'string' && body ? body : '');
     const message = errorDetail ? `HTTP ${res.status}: ${errorDetail}` : `HTTP ${res.status}`;
     if (IS_DEV) {
-      logger.debug(LOG_SCOPE, 'ERROR', { url, status: res.status, message });
+      logger.debug('ERROR', { url, status: res.status, message });
     }
     throw new Error(message);
   }
 
   if (IS_DEV) {
-    logger.debug(LOG_SCOPE, 'RESPONSE', { url, status: res.status });
+    logger.debug('RESPONSE', { url, status: res.status });
   }
 
   return body as TResponse;
@@ -223,3 +223,4 @@ export async function exportProfileToTalentBase(payload: {
 }
 
 export const __private = { postJson, API_BASE_URL };
+

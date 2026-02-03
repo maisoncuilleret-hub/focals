@@ -7,7 +7,6 @@
     "default_popup": "popup.html"
   },
   "permissions": [
-    "cookies",
     "scripting",
     "tabs",
     "storage",
@@ -38,32 +37,20 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.linkedin.com/*"
+        "https://www.linkedin.com/*",
+        "https://linkedin.com/*",
+        "https://*.linkedin.com/*"
       ],
       "js": [
-        "src/content/linkedinSduiScraper.js",
-        "src/content-main.js",
+        "content-main.js",
         "content-messaging.js"
       ],
-      "run_at": "document_idle",
-      "all_frames": false
-    },
-    {
-      "matches": [
-        "https://www.linkedin.com/*"
-      ],
-      "js": [
-        "src/content/linkedinVoyagerInterceptor.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": false,
-      "world": "MAIN"
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "src/content/linkedinSduiScraper.js",
         "src/content/linkedinVoyagerInterceptor.js",
         "src/utils/logger.js",
         "src/scrape/ScrapeController.js",

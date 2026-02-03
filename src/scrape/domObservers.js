@@ -1,6 +1,6 @@
-import { logger } from "../utils/logger.js";
+import { createLogger } from "../utils/logger.js";
 
-const LOG_SCOPE = "SCRAPER";
+const logger = createLogger("DomObserver");
 
 function debounce(fn, wait = 300) {
   let timer = null;
@@ -31,12 +31,12 @@ export function createDomObserver({ targetSelector = "main", debounceMs = 500, o
       if (activeObserver) activeObserver.disconnect();
       obs.observe(target, { childList: true, subtree: true });
       activeObserver = obs;
-      logger.debug(LOG_SCOPE, "Mutation observer started on", targetSelector);
+      logger.debug("Mutation observer started on", targetSelector);
     },
     stop() {
       obs.disconnect();
       if (activeObserver === obs) activeObserver = null;
-      logger.debug(LOG_SCOPE, "Mutation observer stopped");
+      logger.debug("Mutation observer stopped");
     },
     disconnect() {
       obs.disconnect();
