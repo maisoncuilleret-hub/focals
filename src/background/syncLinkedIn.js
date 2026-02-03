@@ -2,6 +2,7 @@ import { SUPABASE_URL } from "../../supabase-client.js";
 import { getAuthContext } from "./authContext.js";
 
 const EDGE_ENDPOINT = `${SUPABASE_URL}/functions/v1/sync-linkedin-conversation`;
+const DEBUG = false;
 const THROTTLE_MS = 10_000;
 const lastSyncByThreadKey = new Map();
 
@@ -16,12 +17,19 @@ const shouldThrottle = (threadKey) => {
   return false;
 };
 
-const parseBody = async (response) => {
-  const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) {
-    return response.json().catch(() => null);
+const safeJsonParse = (raw) => {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
   }
-  return response.text().catch(() => "");
+};
+
+const parseBody = async (response) => {
+  const text = await response.text().catch(() => "");
+  const parsed = safeJsonParse(text);
+  return parsed ?? text;
 };
 
 export async function syncLinkedinConversation({ threadUrl, payload }) {
@@ -55,7 +63,7 @@ export async function syncLinkedinConversation({ threadUrl, payload }) {
   }
 
   let usedAuth = "user_id";
-  const body = { payload };
+  const body = { payload, threadUrl };
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
     usedAuth = "jwt";
@@ -70,7 +78,17 @@ export async function syncLinkedinConversation({ threadUrl, payload }) {
     };
   }
 
-  console.log("[FOCALS][SYNC] auth=", usedAuth, "thread=", threadKey);
+  console.log(
+    "[FOCALS][SUPABASE] auth=",
+    usedAuth,
+    "token=",
+    accessToken ? "yes" : "no",
+    "thread=",
+    threadKey
+  );
+  if (DEBUG) {
+    console.log("[FOCALS][SUPABASE] payload messages=", payload?.messages?.length || 0);
+  }
 
   try {
     const response = await fetch(EDGE_ENDPOINT, {
