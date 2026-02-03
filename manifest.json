@@ -1,49 +1,31 @@
 {
   "manifest_version": 3,
   "name": "Focals - LinkedIn Assistant",
-  "version": "1.1.3",
-  "description": "Scrape et suivi des profils LinkedIn depuis l'extension Focals.",
-  "action": {
-    "default_popup": "popup.html"
-  },
+  "version": "1.1.4",
   "permissions": [
     "scripting",
     "tabs",
     "storage",
+    "unlimitedStorage",
     "downloads",
     "notifications",
     "webRequest"
   ],
   "host_permissions": [
-    "https://www.linkedin.com/*",
-    "https://linkedin.com/*",
     "https://*.linkedin.com/*",
-    "https://ppawceknsedxaejpeylu.supabase.co/*",
-    "https://*.lovable.app/*",
-    "https://*.lovableproject.com/*"
+    "https://ppawceknsedxaejpeylu.supabase.co/*"
   ],
-  "externally_connectable": {
-    "matches": [
-      "https://*.lovable.app/*",
-      "https://*.lovableproject.com/*",
-      "http://localhost:*/*",
-      "https://localhost:*/*"
-    ]
-  },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
-      ],
+      "matches": ["https://*.linkedin.com/*"],
       "js": [
-        "content-main.js",
-        "content-messaging.js"
+        "content-main.js", 
+        "content-messaging.js",
+        "src/content/messaging/syncOnThreadOpen.js" 
       ],
       "run_at": "document_idle"
     }
@@ -51,13 +33,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/content/linkedinVoyagerInterceptor.js",
-        "src/content/messaging/syncOnThreadOpen.js",
-        "src/content/extractors/*.js",
-        "src/utils/logger.js",
-        "src/scrape/ScrapeController.js",
-        "src/scrape/domObservers.js",
-        "src/api/config.js"
+        "src/content/linkedinVoyagerInterceptor.js"
       ],
       "matches": ["*://www.linkedin.com/*"]
     }
