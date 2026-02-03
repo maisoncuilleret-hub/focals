@@ -34,6 +34,44 @@
     return out;
   };
 
+  const extractVoyagerMessages = (obj) => {
+    let found = [];
+    if (!obj || typeof obj !== "object") return found;
+
+    if (obj.text && (obj.messageEvent || obj._type?.includes("Text"))) {
+      found.push({ text: obj.text, id: obj.entityUrn || obj.dashEntityUrn });
+    } else if (obj.body?.text) {
+      found.push({ text: obj.body.text, id: obj.entityUrn || obj.dashEntityUrn });
+    }
+
+    for (let key in obj) {
+      found = found.concat(extractVoyagerMessages(obj[key]));
+    }
+    return found;
+  };
+
+  const relayVoyagerMessages = (messages, identity) => {
+    if (!messages?.length) return;
+    messages.forEach((msg) => {
+      if (msg.text && msg.id && !processedIds.has(msg.id)) {
+        processedIds.add(msg.id);
+
+        console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
+
+        // Relais final vers le background script
+        chrome.runtime.sendMessage({
+          type: "FOCALS_INCOMING_RELAY",
+          payload: {
+            text: msg.text,
+            type: "linkedin_voyager_gql",
+            received_at: new Date().toISOString(),
+            identity,
+          },
+        });
+      }
+    });
+  };
+
   const captureIdentityForDomRadar = () => {
     const bubble =
       document.querySelector(".msg-overlay-conversation-bubble:focus-within") ||
@@ -85,44 +123,10 @@
   // 3. Écouteur de messages (Reçoit les données du Spy et les nettoie)
   window.addEventListener("message", (event) => {
     if (event.data?.type === "FOCALS_NETWORK_DATA") {
-      // Fonction récursive validée en console F12
-      const extract = (obj) => {
-        let found = [];
-        if (!obj || typeof obj !== "object") return found;
-
-        if (obj.text && (obj.messageEvent || obj._type?.includes("Text"))) {
-          found.push({ text: obj.text, id: obj.entityUrn || obj.dashEntityUrn });
-        } else if (obj.body?.text) {
-          found.push({ text: obj.body.text, id: obj.entityUrn || obj.dashEntityUrn });
-        }
-
-        for (let key in obj) {
-          found = found.concat(extract(obj[key]));
-        }
-        return found;
-      };
-
-      const messages = extract(event.data.data);
+      const messages = extractVoyagerMessages(event.data.data);
       const identity = captureIdentityForDomRadar() || getIdentity();
 
-      messages.forEach((msg) => {
-        if (msg.text && msg.id && !processedIds.has(msg.id)) {
-          processedIds.add(msg.id);
-
-          console.log("📥 [RADAR VOYAGER] Capture :", msg.text);
-
-          // Relais final vers le background script
-          chrome.runtime.sendMessage({
-            type: "FOCALS_INCOMING_RELAY",
-            payload: {
-              text: msg.text,
-              type: "linkedin_voyager_gql",
-              received_at: new Date().toISOString(),
-              identity,
-            },
-          });
-        }
-      });
+      relayVoyagerMessages(messages, identity);
     }
   });
 
