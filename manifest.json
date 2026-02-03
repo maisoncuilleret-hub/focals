@@ -52,6 +52,7 @@
     {
       "resources": [
         "src/content/linkedinVoyagerInterceptor.js",
+        "src/content/messaging/syncOnThreadOpen.js",
         "src/utils/logger.js",
         "src/scrape/ScrapeController.js",
         "src/scrape/domObservers.js",

@@ -295,6 +295,19 @@ console.log(
       return messagingExtractorPromise;
     };
 
+    let syncModulePromise = null;
+    const loadSyncModule = () => {
+      if (syncModulePromise) return syncModulePromise;
+      const moduleUrl = chrome.runtime.getURL(
+        "src/content/messaging/syncOnThreadOpen.js"
+      );
+      syncModulePromise = import(moduleUrl).catch((err) => {
+        warn("SYNC_IMPORT_FAILED", err?.message || err);
+        return null;
+      });
+      return syncModulePromise;
+    };
+
     const logExtractor = (stage, details) => {
       if (!FOCALS_DEBUG) return;
       if (typeof details === "string") {
@@ -2089,6 +2102,18 @@ console.log(
       console.log("🚀 [FOCALS] Smart Reply UI Active");
       setupMessagingObserver();
       setupLiveMessageObserver();
+      if (!window.__FOCALS_LINKEDIN_SYNC__) {
+        loadSyncModule().then((mod) => {
+          if (mod?.initLinkedInThreadSync) {
+            mod.initLinkedInThreadSync({
+              loadExtractor: loadLinkedinMessagingExtractor,
+              getRoot: getMessageRoot,
+              logger: logExtractor,
+            });
+            window.__FOCALS_LINKEDIN_SYNC__ = true;
+          }
+        });
+      }
 
       if (!liveRouteWatcherId) {
         liveRouteWatcherId = setInterval(() => {
