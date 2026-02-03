@@ -210,16 +210,14 @@ async function relayLiveMessageToSupabase(payload) {
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
   console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
-  const { focals_user_id: focalsUserId } = await chrome.storage.local.get(
-    "focals_user_id"
-  );
-  if (!focalsUserId) {
-    console.error("❌ Sync avorté : ID utilisateur introuvable");
+  const { focals_user_id } = await chrome.storage.local.get("focals_user_id");
+  if (!focals_user_id) {
+    console.error("❌ Sync avorté : focals_user_id introuvable dans le storage");
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
   const headers = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${focalsUserId}`,
+    Authorization: `Bearer ${focals_user_id}`,
   };
 
   const response = await fetch(`${API_BASE_URL}/focals-incoming-message`, {
