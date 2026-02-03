@@ -1,6 +1,7 @@
 import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 import { loadStoredToken } from "./src/api/supabaseClient.js";
+import { syncLinkedinConversation } from "./src/background/syncLinkedIn.js";
 import { createLogger } from "./src/utils/logger.js";
 
 // Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
@@ -1815,6 +1816,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: error?.message || "API request failed" });
         });
 
+      return true;
+    }
+    case "FOCALS_SYNC_LINKEDIN_THREAD": {
+      const { threadUrl, payload } = message || {};
+      console.log(
+        "[FOCALS][SYNC] trigger threadUrl=",
+        threadUrl,
+        "msgs=",
+        payload?.messages?.length || 0
+      );
+      syncLinkedinConversation({ threadUrl, payload })
+        .then((result) => {
+          if (result?.skipped) {
+            console.log("[FOCALS][SYNC] skipped=", result?.reason || "unknown");
+          } else if (result?.ok) {
+            const inserted = result?.json?.inserted || result?.json?.data?.inserted;
+            const updated = result?.json?.updated || result?.json?.data?.updated;
+            console.log(
+              "[FOCALS][SYNC] status=",
+              result?.status,
+              "ok=",
+              result?.ok,
+              "inserted=",
+              inserted,
+              "updated=",
+              updated
+            );
+          } else {
+            console.warn(
+              "[FOCALS][SYNC] ERROR",
+              result?.status || "no-status",
+              result?.error || result
+            );
+          }
+          sendResponse(result);
+        })
+        .catch((error) => {
+          console.warn("[FOCALS][SYNC] ERROR", error?.message || error);
+          sendResponse({
+            ok: false,
+            status: 0,
+            error: error?.message || "Sync failed",
+            meta: { errorType: "network" },
+          });
+        });
       return true;
     }
     case "NEW_LIVE_MESSAGE": {
