@@ -1,4 +1,19 @@
 const OFFSCREEN_MESSAGE_TYPE = "FETCH_LINKEDIN_STATUS";
+const LOG_SCOPE = "NET";
+const fallbackLogger = {
+  info: (scope, ...args) => console.info(`[FOCALS][${scope}]`, ...args),
+  warn: (scope, ...args) => console.warn(`[FOCALS][${scope}]`, ...args),
+  error: (scope, ...args) => console.error(`[FOCALS][${scope}]`, ...args),
+};
+let logger = fallbackLogger;
+
+if (typeof chrome !== "undefined" && chrome?.runtime?.getURL) {
+  import(chrome.runtime.getURL("src/utils/logger.js"))
+    .then((mod) => {
+      if (mod?.logger) logger = mod.logger;
+    })
+    .catch(() => {});
+}
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request?.type === OFFSCREEN_MESSAGE_TYPE) {
@@ -11,7 +26,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function fetchLinkedInStatus(linkedinUrl) {
-  console.log("[Focals Offscreen] Fetching:", linkedinUrl);
+  logger.info(LOG_SCOPE, "Offscreen fetch", linkedinUrl);
 
   try {
     if (!linkedinUrl) {
@@ -33,7 +48,7 @@ async function fetchLinkedInStatus(linkedinUrl) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, "text/html");
     const status = extractConnectionStatus(doc, html);
-    console.log("[Focals Offscreen] Status:", status);
+    logger.info(LOG_SCOPE, "Offscreen status", status);
 
     return {
       success: true,
@@ -41,7 +56,7 @@ async function fetchLinkedInStatus(linkedinUrl) {
       connection_status: status,
     };
   } catch (error) {
-    console.error("[Focals Offscreen] Error:", error);
+    logger.error(LOG_SCOPE, "Offscreen error", error);
     return { success: false, error: error?.message || "Erreur de récupération" };
   }
 }

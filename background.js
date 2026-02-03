@@ -1,7 +1,7 @@
 import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 import { loadStoredToken } from "./src/api/supabaseClient.js";
-import { createLogger } from "./src/utils/logger.js";
+import { logger } from "./src/utils/logger.js";
 
 // Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
 chrome.webRequest.onBeforeRequest.addListener(
@@ -44,21 +44,55 @@ chrome.webRequest.onBeforeRequest.addListener(
   ["requestBody"]
 );
 
-const logger = createLogger("Background");
+const LOG_SCOPE = "BG";
+const NET_SCOPE = "NET";
 const FOCALS_DEBUG = IS_DEV;
 const DEBUG_KEEP_DETAILS_TAB = false;
-const EXP_TAG = "[FOCALS][EXPERIENCE]";
-const expLog = (...a) => console.log(EXP_TAG, ...a);
-const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
+const expLog = (...a) => logger.debug("SCRAPER", ...a);
+const detailsLog = (...a) => logger.debug("SCRAPER", ...a);
 const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwYXdjZWtuc2VkeGFlanBleWx1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4MTUzMTUsImV4cCI6MjA3NDM5MTMxNX0.G3XH8afOmaYh2PGttY3CVRwi0JIzIvsTKIeeynpKpKI";
 const liveMessageUrnDedup = new Set();
+const PROFILE_API_SCRAPER_ENABLED_KEY = "focals_profile_api_scraper_enabled";
+
+const profileApiScraperGuard = {
+  start: () => {
+    logger.warn(NET_SCOPE, "profile api scraping disabled; start ignored");
+    return false;
+  },
+};
+
+globalThis.__FOCALS_PROFILE_API_SCRAPER__ = profileApiScraperGuard;
+
+const logApiScraperStatus = async () => {
+  try {
+    if (!chrome?.storage?.local?.get) {
+      logger.info(NET_SCOPE, "profile api scraping disabled");
+      logger.info(NET_SCOPE, "messaging api scraping enabled");
+      return;
+    }
+    chrome.storage.local.get([PROFILE_API_SCRAPER_ENABLED_KEY], (result) => {
+      const enabled = result?.[PROFILE_API_SCRAPER_ENABLED_KEY] === true;
+      if (enabled) {
+        logger.warn(NET_SCOPE, "profile api scraping enabled (override)");
+      } else {
+        logger.info(NET_SCOPE, "profile api scraping disabled");
+      }
+      logger.info(NET_SCOPE, "messaging api scraping enabled");
+    });
+  } catch {
+    logger.info(NET_SCOPE, "profile api scraping disabled");
+    logger.info(NET_SCOPE, "messaging api scraping enabled");
+  }
+};
+
+logApiScraperStatus();
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
-  logger.debug(stage, details);
+  logger.debug(LOG_SCOPE, stage, details);
 }
 
 const buildApiUrl = (endpoint = "") => {
@@ -79,7 +113,7 @@ async function resolveAuthHeaders(headers = {}) {
       ...headers,
     };
   } catch (err) {
-    logger.warn("AUTH fallback", err?.message || err);
+    logger.warn(NET_SCOPE, "AUTH fallback", err?.message || err);
     return {
       Authorization: headers.Authorization || "",
       ...headers,
@@ -231,7 +265,7 @@ async function relayLiveMessageToSupabase(payload) {
   }
 
   if (isTechnicalLinkedinProfileUrl(profileUrl)) {
-    console.log(`✅ Match réussi via ID Technique pour ${matchName}`);
+    logger.info(LOG_SCOPE, `Match réussi via ID Technique pour ${matchName}`);
   }
 
   const cleanPayload = {
@@ -256,7 +290,7 @@ async function relayLiveMessageToSupabase(payload) {
     const { data: sessionData } = await supabase.auth.getSession();
     session = sessionData?.session || null;
   } catch (err) {
-    logger.warn("SUPABASE session lookup failed", err?.message || err);
+    logger.warn(NET_SCOPE, "SUPABASE session lookup failed", err?.message || err);
   }
   if (!session) {
     const stored = await new Promise((resolve) => {
@@ -318,7 +352,7 @@ async function relayLiveMessageToSupabase(payload) {
   const sourceType = String(type || "").toLowerCase();
   const isVoyagerSource = sourceType.includes("voyager") || sourceType.includes("dash");
   if (isVoyagerSource) {
-    console.log("✅ [SYNC] Message archivé (Voyager)");
+    logger.info(LOG_SCOPE, "Message archivé (Voyager)");
   }
   return { ok: true, status: response.status, data: responseBody };
 }
@@ -446,7 +480,7 @@ async function saveProfileToSupabase(profile) {
   }
 
   if (payload.linkedin_internal_id) {
-    console.log(`✅ [MAPPING] Identité liée pour ${payload.name || "LinkedIn User"}`);
+    logger.info(LOG_SCOPE, `Identité liée pour ${payload.name || "LinkedIn User"}`);
   }
 
   return { success: true };
@@ -522,10 +556,10 @@ function waitForComplete(tabId, timeoutMs = 30000) {
 async function ensureContentScript(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, { type: "FOCALS_PING" });
-    console.log("[Focals] Content script déjà présent");
+    logger.info(LOG_SCOPE, "Content script déjà présent");
     return;
   } catch (err) {
-    console.log("[Focals] Injection du content script...");
+    logger.info(LOG_SCOPE, "Injection du content script...");
   }
 
   await chrome.scripting.executeScript({
@@ -536,8 +570,7 @@ async function ensureContentScript(tabId) {
 }
 
 async function detailsExperienceScraper() {
-  const EXP_TAG = "[FOCALS][EXPERIENCE]";
-  const expLog = (...a) => console.log(EXP_TAG, ...a);
+  const expLog = (...a) => logger.debug("SCRAPER", ...a);
   const clean = (t) => (t ? String(t).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim() : "");
   const collapseDouble = (text) => {
     const t = clean(text);
@@ -773,7 +806,7 @@ async function detailsExperienceScraper() {
       return { index, skills, skillsCount: skills.length };
     });
     if (rows.length) {
-      console.table(rows);
+      logger.table("SCRAPER", rows);
     }
   };
 
@@ -1209,7 +1242,8 @@ async function detailsExperienceScraper() {
   }
   expLog("DETAILS_DEBUG", debug);
   if (DEBUG && parsedRecords.length) {
-    console.table(
+    logger.table(
+      "SCRAPER",
       parsedRecords.slice(0, 10).map((row) => ({
         title: row.title || "",
         company: row.company || "",
@@ -1748,7 +1782,7 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
                 descByKey.set(key, entry);
               }
               const hasDesc = !!entry?.description;
-              console.log("[FOCALS][DESC] MATCH", {
+              logger.debug("SCRAPER", "DESC_MATCH", {
                 title: item?.title || null,
                 company: item?.company || null,
                 dates: item?.dates || null,
@@ -1763,7 +1797,7 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
             });
             const total = enriched.length;
             const withDesc = enriched.filter((item) => item.Description).length;
-            console.log("[FOCALS][DESC] SUMMARY", { total, withDesc });
+            logger.debug("SCRAPER", "DESC_SUMMARY", { total, withDesc });
             return enriched;
           };
 
@@ -1811,7 +1845,7 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         : Array.isArray(payload)
           ? payload
           : [];
-      console.log("[FOCALS][DETAILS] DESC_COUNT", {
+      logger.debug("SCRAPER", "DETAILS_DESC_COUNT", {
         count: experiences.filter((e) => e?.Description).length,
       });
       const experienceCount = experiences?.length || 0;
@@ -1853,8 +1887,9 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
 }
 
 async function saveProfileToSupabaseExternal(profileData) {
-  console.log(
-    "[Focals] Sauvegarde vers Supabase:",
+  logger.info(
+    NET_SCOPE,
+    "Sauvegarde vers Supabase",
     profileData.linkedin_url || profileData.linkedinProfileUrl
   );
 
@@ -1899,7 +1934,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       fetchApi({ endpoint, method, params, body, headers })
         .then((result) => {
           if (!result?.ok) {
-            console.warn("[Focals][API_REQUEST] Request failed", {
+            logger.warn(LOG_SCOPE, "API_REQUEST failed", {
               endpoint,
               status: result?.status,
               error: result?.error,
@@ -1908,7 +1943,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(result);
         })
         .catch((error) => {
-          console.error("[Focals][API_REQUEST] Network error", error);
+          logger.error(LOG_SCOPE, "API_REQUEST network error", error);
           sendResponse({ ok: false, error: error?.message || "API request failed" });
         });
 
@@ -1941,12 +1976,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           if (sessionError || !session || !session.user?.id) {
-            console.warn("[Focals] Session absente pour upsert interactions.");
+            logger.warn(LOG_SCOPE, "Session absente pour upsert interactions.");
           }
 
           const hasLinkedinUrn = payload.some((item) => item?.linkedin_message_urn);
           const sourceLabel = hasLinkedinUrn ? "💾 Source: Voyager" : "👁️ Source: DOM";
-          console.log(sourceLabel);
+          logger.info(LOG_SCOPE, sourceLabel);
 
           const response = await fetch(
             `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
@@ -1966,15 +2001,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           if (!response.ok) {
             const errorText = await response.text();
-            console.error("❌ [Focals] Supabase Error:", errorText || response.status);
+            logger.error(NET_SCOPE, "Supabase Error", errorText || response.status);
             sendResponse({ ok: false, error: errorText || "UPSERT_FAILED" });
             return;
           }
 
-          console.log("✅ [Focals] Message synchronisé avec succès !");
+          logger.info(LOG_SCOPE, "Message synchronisé avec succès");
           sendResponse({ ok: true, count: payload.length });
         } catch (err) {
-          console.error("❌ [Focals] Supabase Error:", err?.message || err);
+          logger.error(NET_SCOPE, "Supabase Error", err?.message || err);
           sendResponse({ ok: false, error: err?.message || "UPSERT_FAILED" });
         }
       })();
@@ -2018,7 +2053,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const { data: { session } } = await supabase.auth.getSession();
           const userId = session?.user?.id || null;
 
-          console.log("🚀 [Focals] Envoi Voyager vers Edge Function...");
+          logger.info(LOG_SCOPE, "Envoi Voyager vers Edge Function...");
 
           const response = await fetch(
             `${SUPABASE_URL}/functions/v1/focals-upsert-interactions`,
@@ -2042,10 +2077,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           const result = await response.json();
-          console.log("✅ [Focals] Voyager Sync réussi !");
+          logger.info(LOG_SCOPE, "Voyager Sync réussi");
           sendResponse({ ok: true, count: records.length });
         } catch (err) {
-          console.error("❌ [Focals] Erreur via Edge Function:", err.message);
+          logger.error(NET_SCOPE, "Erreur via Edge Function", err.message);
           sendResponse({ ok: false, error: err.message });
         }
       })();
@@ -2329,7 +2364,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "GENERATE_REPLY": {
-      console.log("[Focals] Requête génération réponse:", message);
+      logger.info(LOG_SCOPE, "Requête génération réponse", message);
 
       (async () => {
         try {
@@ -2351,7 +2386,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const userId = userIdFromMessage || userIdFromStorage;
 
           if (!userId) {
-            console.error("[Focals][BG] Missing userId for GENERATE_REPLY");
+            logger.error(LOG_SCOPE, "Missing userId for GENERATE_REPLY");
             sendResponse({ success: false, error: "Missing userId" });
             return;
           }
@@ -2367,7 +2402,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const conversationMessages = getLastMessagesForBackend(rawMessages);
 
           if (!conversationMessages.length) {
-            console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY");
+            logger.warn(LOG_SCOPE, "Empty conversation in GENERATE_REPLY");
             sendResponse({ success: false, error: "Empty conversation" });
             return;
           }
@@ -2407,7 +2442,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             templateId,
           };
 
-          console.log("[Focals][BG] Calling focals-generate-reply with payload", {
+          logger.info(LOG_SCOPE, "Calling focals-generate-reply with payload", {
             ...payload,
             conversationLength: conversationMessages.length,
             hasSystemPromptOverride: !!payloadContext.systemPromptOverride,
@@ -2420,7 +2455,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
 
           if (!apiResponse.ok) {
-            console.error("[Focals][BG] focals-generate-reply failed", apiResponse);
+            logger.error(LOG_SCOPE, "focals-generate-reply failed", apiResponse);
             sendResponse({ success: false, error: apiResponse.error || "focals-generate-reply failed" });
             return;
           }
@@ -2431,7 +2466,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             (typeof data?.reply === "string" ? data.reply : null) ||
             data?.replyText;
 
-          console.log("[Focals] Réponse générée:", replyText?.substring(0, 100) + "...");
+          logger.info(LOG_SCOPE, "Réponse générée", replyText?.substring(0, 100) + "...");
 
           sendResponse({
             success: true,
@@ -2439,7 +2474,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             model: data.model,
           });
         } catch (error) {
-          console.error("[Focals] Erreur génération:", error);
+          logger.error(LOG_SCOPE, "Erreur génération", error);
           sendResponse({
             success: false,
             error: error?.message || "Erreur réseau",
@@ -2458,16 +2493,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  console.log("[Focals] Message externe reçu:", message?.type, "depuis:", sender?.origin);
+  logger.info(LOG_SCOPE, "Message externe reçu", message?.type, "depuis:", sender?.origin);
 
   if (message?.type === "PING_TEST" || message?.type === "PING") {
-    console.log("[Focals] PING reçu, réponse PONG");
+    logger.info(LOG_SCOPE, "PING reçu, réponse PONG");
     sendResponse({ status: "pong", version: chrome.runtime.getManifest().version });
     return true;
   }
 
   if (message?.type === "SCRAPE_PROFILE") {
-    console.log("[Focals] SCRAPE_PROFILE reçu:", message.linkedinUrl);
+    logger.info(LOG_SCOPE, "SCRAPE_PROFILE reçu", message.linkedinUrl);
 
     (async () => {
       try {
@@ -2479,42 +2514,42 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
         }
 
         const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
-        console.log("[Focals] Onglet créé:", tab.id);
+        logger.info(LOG_SCOPE, "Onglet créé", tab.id);
 
         await waitForComplete(tab.id);
-        console.log("[Focals] Page chargée");
+        logger.info(LOG_SCOPE, "Page chargée");
 
         await wait(2500);
 
         await ensureContentScript(tab.id);
         await wait(500);
 
-        console.log("[Focals] Demande GET_CANDIDATE_DATA...");
+        logger.info(LOG_SCOPE, "Demande GET_CANDIDATE_DATA...");
         const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
 
         await chrome.tabs.remove(tab.id);
-        console.log("[Focals] Onglet fermé");
+        logger.info(LOG_SCOPE, "Onglet fermé");
 
         if (response?.error) {
-          console.error("[Focals] Erreur scraping:", response.error);
+          logger.error(LOG_SCOPE, "Erreur scraping", response.error);
           sendResponse({ success: false, error: response.error });
           return;
         }
 
         if (!response?.data) {
-          console.error("[Focals] Aucune donnée récupérée");
+          logger.error(LOG_SCOPE, "Aucune donnée récupérée");
           sendResponse({ success: false, error: "Aucune donnée récupérée" });
           return;
         }
 
-        console.log("[Focals] Données scrapées:", response.data.name || response.data.fullName);
+        logger.info(LOG_SCOPE, "Données scrapées", response.data.name || response.data.fullName);
 
         await saveProfileToSupabaseExternal(response.data);
-        console.log("[Focals] ✅ Profil sauvegardé");
+        logger.info(LOG_SCOPE, "Profil sauvegardé");
 
         sendResponse({ success: true, profile: response.data });
       } catch (error) {
-        console.error("[Focals] ❌ Erreur SCRAPE_PROFILE:", error);
+        logger.error(LOG_SCOPE, "Erreur SCRAPE_PROFILE", error);
         sendResponse({ success: false, error: error.message });
       }
     })();
@@ -2523,7 +2558,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   }
 
   if (message?.type === "SCRAPE_PROFILES_BATCH") {
-    console.log("[Focals] SCRAPE_PROFILES_BATCH reçu:", message.linkedinUrls?.length, "URLs");
+    logger.info(LOG_SCOPE, "SCRAPE_PROFILES_BATCH reçu", message.linkedinUrls?.length, "URLs");
 
     const { linkedinUrls } = message;
 
@@ -2540,7 +2575,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
       for (let i = 0; i < linkedinUrls.length; i++) {
         const url = linkedinUrls[i];
-        console.log(`[Focals] Batch scraping ${i + 1}/${linkedinUrls.length}: ${url}`);
+        logger.info(LOG_SCOPE, `Batch scraping ${i + 1}/${linkedinUrls.length}: ${url}`);
 
         try {
           const tab = await chrome.tabs.create({ url, active: true });
@@ -2558,24 +2593,24 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
           if (response?.data) {
             await saveProfileToSupabaseExternal(response.data);
             successCount++;
-            console.log(`[Focals] ✅ Profil ${i + 1} sauvegardé`);
+            logger.info(LOG_SCOPE, `Profil ${i + 1} sauvegardé`);
           } else {
             errorCount++;
-            console.warn(`[Focals] ⚠️ Profil ${i + 1}: pas de données`);
+            logger.warn(LOG_SCOPE, `Profil ${i + 1}: pas de données`);
           }
 
           if (i < linkedinUrls.length - 1) {
             const delay = 2000 + Math.random() * 2000;
-            console.log(`[Focals] Attente ${Math.round(delay)}ms avant prochain profil...`);
+            logger.info(LOG_SCOPE, `Attente ${Math.round(delay)}ms avant prochain profil...`);
             await wait(delay);
           }
         } catch (error) {
-          console.error(`[Focals] ❌ Erreur profil ${i + 1}:`, error);
+          logger.error(LOG_SCOPE, `Erreur profil ${i + 1}`, error);
           errorCount++;
         }
       }
 
-      console.log(`[Focals] Batch terminé: ${successCount} succès, ${errorCount} erreurs`);
+      logger.info(LOG_SCOPE, `Batch terminé: ${successCount} succès, ${errorCount} erreurs`);
     })();
 
     return true;
@@ -2584,4 +2619,4 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
   return false;
 });
 
-console.log("[Focals] External message handlers registered");
+logger.info(LOG_SCOPE, "External message handlers registered");

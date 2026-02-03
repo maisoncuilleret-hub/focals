@@ -1,6 +1,9 @@
 import * as apiModule from "./src/api/focalsApi.js";
 import { IS_DEV } from "./src/api/config.js";
 import { getOrCreateUserId } from "./src/focalsUserId.js";
+import { logger } from "./src/utils/logger.js";
+
+const LOG_SCOPE = "POPUP";
 
 const DEBUG = (() => {
   try {
@@ -9,7 +12,7 @@ const DEBUG = (() => {
     return false;
   }
 })();
-const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
+const SKDBG = (...a) => DEBUG && logger.debug(LOG_SCOPE, "[SKILLS][DBG]", ...a);
 
 const FOCALS_DEBUG = (() => {
   if (IS_DEV) return true;
@@ -24,30 +27,30 @@ function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
   try {
     if (typeof details === "string") {
-      console.log(`[Focals][${stage}]`, details);
+      logger.info(LOG_SCOPE, `[${stage}]`, details);
     } else {
-      console.log(`[Focals][${stage}]`, JSON.stringify(details, null, 2));
+      logger.info(LOG_SCOPE, `[${stage}]`, JSON.stringify(details, null, 2));
     }
   } catch (e) {
-    console.log(`[Focals][${stage}]`, details);
+    logger.info(LOG_SCOPE, `[${stage}]`, details);
   }
 }
 
 function debugWarn(stage, details) {
   if (!FOCALS_DEBUG) return;
   if (typeof details === "string") {
-    console.warn(`[Focals][${stage}]`, details);
+    logger.warn(LOG_SCOPE, `[${stage}]`, details);
   } else {
-    console.warn(`[Focals][${stage}]`, details);
+    logger.warn(LOG_SCOPE, `[${stage}]`, details);
   }
 }
 
 function debugError(stage, details) {
   if (!FOCALS_DEBUG) return;
   if (typeof details === "string") {
-    console.error(`[Focals][${stage}]`, details);
+    logger.error(LOG_SCOPE, `[${stage}]`, details);
   } else {
-    console.error(`[Focals][${stage}]`, details);
+    logger.error(LOG_SCOPE, `[${stage}]`, details);
   }
 }
 
@@ -62,7 +65,7 @@ async function triggerScrapeOnActiveTab({ reason = "popup_open", force = false }
       force,
     });
   } catch (e) {
-    console.warn("[FOCALS][POPUP] triggerScrape failed", e);
+    logger.warn(LOG_SCOPE, "triggerScrape failed", e);
   }
 }
 
@@ -617,7 +620,7 @@ async function loadCandidateFromMapping() {
     try {
       response = await apiModule.fetchCandidate(currentId);
     } catch (err) {
-      console.log("🧪 [FOCALS-DEBUG] supabase fetch failed, loading local cache", err?.message || err);
+      logger.debug(LOG_SCOPE, "supabase fetch failed, loading local cache", err?.message || err);
       const data = await localStore.get("FOCALS_LAST_PROFILE");
       const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
       if (cachedProfile) {
@@ -640,7 +643,7 @@ async function loadCandidateFromMapping() {
     const data = await localStore.get("FOCALS_LAST_PROFILE");
     const cachedProfile = data?.FOCALS_LAST_PROFILE || null;
     if (cachedProfile) {
-      console.log("🧪 [FOCALS-DEBUG] supabase empty, using local cache");
+      logger.debug(LOG_SCOPE, "supabase empty, using local cache");
       state.profile = cachedProfile;
       state.profileStatus = "ready";
       state.profileStatusMessage = "";

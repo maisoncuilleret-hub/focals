@@ -1,10 +1,76 @@
 (() => {
-  const TAG = "🧪 FOCALS CONSOLE";
-  const DEBUG = false;
+  const LOG_SCOPE = "SCRAPER";
+  const LOG_LEVELS = ["error", "warn", "info", "debug"];
+  const LOG_LEVEL_RANK = {
+    error: 0,
+    warn: 1,
+    info: 2,
+    debug: 3,
+  };
+  const DEDUPE_WINDOW_MS = 2000;
+  const recentLogs = new Map();
 
-  const log = (...a) => console.log(TAG, ...a);
-  const dlog = (...a) => DEBUG && console.log(TAG, ...a);
-  const warn = (...a) => console.warn(TAG, ...a);
+  const getCurrentLogLevel = () => {
+    const level = document.documentElement?.dataset?.focalsLogLevel || "info";
+    const normalized = String(level).toLowerCase();
+    return LOG_LEVELS.includes(normalized) ? normalized : "info";
+  };
+
+  const shouldLog = (level) => LOG_LEVEL_RANK[level] <= LOG_LEVEL_RANK[getCurrentLogLevel()];
+
+  const dedupeKey = (level, args) => {
+    const payload = args
+      .map((arg) => {
+        try {
+          return typeof arg === "string" ? arg : JSON.stringify(arg);
+        } catch {
+          return String(arg);
+        }
+      })
+      .join("|");
+    return `${level}:${payload}`;
+  };
+
+  const shouldDedupe = (key) => {
+    const now = Date.now();
+    const last = recentLogs.get(key) || 0;
+    if (now - last < DEDUPE_WINDOW_MS) return true;
+    recentLogs.set(key, now);
+    return false;
+  };
+
+  const emit = (level, ...args) => {
+    if (!shouldLog(level)) return;
+    const key = dedupeKey(level, args);
+    if (level !== "error" && shouldDedupe(key)) return;
+    const fn = console[level] || console.log;
+    fn(`[FOCALS][${LOG_SCOPE}]`, ...args);
+  };
+
+  const log = (...args) => emit("info", ...args);
+  const dlog = (...args) => emit("debug", ...args);
+  const warn = (...args) => emit("warn", ...args);
+  const error = (...args) => emit("error", ...args);
+  const table = (rows) => {
+    if (!shouldLog("debug")) return;
+    console.groupCollapsed(`[FOCALS][${LOG_SCOPE}] table`);
+    console.table(rows);
+    console.groupEnd();
+  };
+  const groupCollapsed = (label, level = "info") => {
+    if (!shouldLog(level)) return false;
+    console.groupCollapsed(`[FOCALS][${LOG_SCOPE}] ${label}`);
+    return true;
+  };
+  const groupEnd = () => console.groupEnd();
+
+  const isDomProfileScraperEnabled = () => {
+    const flag = document.documentElement?.dataset?.focalsDomProfileScraperEnabled;
+    if (flag === undefined) return true;
+    return String(flag).toLowerCase() !== "false";
+  };
+
+  /** @typedef {import("../types/profile").ProfileData} ProfileData */
 
   const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   const collapseDouble = (s) => {
@@ -305,7 +371,7 @@
         descByKey.set(key, entry);
       }
       const hasDesc = !!entry?.description;
-      console.log("[FOCALS][DESC] MATCH", {
+      dlog("DESC_MATCH", {
         title: item?.title || null,
         company: item?.company || null,
         dates: item?.dates || null,
@@ -320,7 +386,7 @@
     });
     const total = enriched.length;
     const withDesc = enriched.filter((item) => item.Description).length;
-    console.log("[FOCALS][DESC] SUMMARY", { total, withDesc });
+    dlog("DESC_SUMMARY", { total, withDesc });
     return enriched;
   };
 
@@ -773,6 +839,44 @@
     return candidates[0] || null;
   }
 
+  function getHeadline(profileRoot) {
+    const topcard =
+      document.querySelector('section[componentkey*="Topcard"]') ||
+      document.querySelector('[data-view-name="profile-top-card"]') ||
+      profileRoot;
+
+    const nodes = Array.from(
+      topcard.querySelectorAll(
+        ".text-body-medium, .text-body-large, span.text-body-medium, span.text-body-large"
+      )
+    );
+
+    const texts = nodes
+      .map((n) => clean(n.textContent))
+      .filter(Boolean)
+      .filter((t) => t.length >= 3 && t.length <= 200)
+      .filter((t) => !looksLikeLocation(t))
+      .filter((t) => !/followers|abonnés|relations|connections/i.test(t));
+
+    return texts[0] || null;
+  }
+
+  function getLocation(profileRoot) {
+    const topcard =
+      document.querySelector('section[componentkey*="Topcard"]') ||
+      document.querySelector('[data-view-name="profile-top-card"]') ||
+      profileRoot;
+
+    const nodes = Array.from(
+      topcard.querySelectorAll(
+        ".text-body-small, .text-body-small.inline, span.text-body-small, div.text-body-small"
+      )
+    );
+
+    const candidates = nodes.map((n) => clean(n.textContent)).filter(Boolean);
+    return candidates.find(looksLikeLocation) || null;
+  }
+
   function normalizeDegree(s) {
     const t = clean(s).toLowerCase();
     if (t.includes("1er") || t.includes("1st")) return "1er";
@@ -1073,8 +1177,8 @@
       .map((n) => {
         const raw = clean(n.textContent);
         const deduped = dedupeInlineRepeats(raw);
-        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
-          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+        if (shouldLog("debug") && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          dlog("DEDUP_SAMPLE", { before: raw, after: deduped });
           dedupeSampleCount += 1;
         }
         return deduped;
@@ -1086,8 +1190,8 @@
         .map((n) => {
           const raw = clean(n.textContent);
           const deduped = dedupeInlineRepeats(raw);
-          if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
-            console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+          if (shouldLog("debug") && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+            dlog("DEDUP_SAMPLE", { before: raw, after: deduped });
             dedupeSampleCount += 1;
           }
           return deduped;
@@ -1361,8 +1465,8 @@
       .map((p) => {
         const raw = clean(p.textContent);
         const deduped = dedupeInlineRepeats(raw);
-        if (DEBUG && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
-          console.log("[FOCALS][DEDUP] sample", { before: raw, after: deduped });
+        if (shouldLog("debug") && dedupeSampleCount < 3 && raw && deduped && raw !== deduped) {
+          dlog("DEDUP_SAMPLE", { before: raw, after: deduped });
           dedupeSampleCount += 1;
         }
         return deduped;
@@ -1462,6 +1566,8 @@
 
     return {
       fullName: res.fullName || null,
+      headline: res.headline || null,
+      location: res.location || null,
       relationDegree: res.relationDegree || null,
       photoUrl: res.photoUrl || null,
       linkedinUrl: res.linkedinUrl || canonicalProfileUrl(location.href),
@@ -1470,61 +1576,152 @@
       skills,
       infos: res.infos || null,
       name: res.fullName || null,
-      headline: null,
-      location: null,
       photo_url: res.photoUrl || null,
       linkedin_url: res.linkedinUrl || canonicalProfileUrl(location.href),
       current_title,
       current_company,
       about: res.infos || null,
+      status: res.status || null,
+      debug: res.debug || null,
     };
   }
 
   // ---------------- Runner + SPA watcher ----------------
-  async function runOnce(reason) {
+  async function scrapeLinkedInProfileRaw(reason = "manual") {
     const startedAt = new Date().toISOString();
+    const startedPerf = performance.now();
     const href = location.href;
+
+    if (!isDomProfileScraperEnabled()) {
+      warn("DOM profile scraper disabled", { href, reason });
+      return {
+        ok: false,
+        mode: "DISABLED",
+        reason,
+        href,
+        startedAt,
+        status: { state: "partial", reasons: ["disabled"] },
+      };
+    }
 
     if (!isProfileUrl(href)) {
       warn("Not on /in/ profile page. Skipping.", href);
-      const out = { ok: false, mode: "BAD_CONTEXT", href, startedAt, reason };
-      window.__FOCALS_LAST = out;
-      return out;
+      return {
+        ok: false,
+        mode: "BAD_CONTEXT",
+        href,
+        startedAt,
+        reason,
+        status: { state: "partial", reasons: ["not_profile_url"] },
+      };
     }
 
-    const profileRoot = pickBestProfileRoot();
-    const fullName = getFullName(profileRoot);
-    const photoUrl = getPhotoUrl(profileRoot);
-    const relationDegree = getRelationDegree(profileRoot);
-    const linkedinUrl = canonicalProfileUrl(href);
-    const education = parseEducation();
-    const skills = parseSkills();
-    const infos = scrapeInfosSection();
+    log("Profile DOM scrape start", { href, reason });
+    const groupOpen = groupCollapsed(`profile scrape (${reason})`, "info");
 
-    const ready = await waitForExperienceReady(6500);
+    try {
+      const profileRoot = pickBestProfileRoot();
+      const fullName = getFullName(profileRoot);
+      const headline = getHeadline(profileRoot);
+      const location = getLocation(profileRoot);
+      const photoUrl = getPhotoUrl(profileRoot);
+      const relationDegree = getRelationDegree(profileRoot);
+      const linkedinUrl = canonicalProfileUrl(href);
+      const education = parseEducation();
+      const skills = parseSkills();
+      const infos = scrapeInfosSection();
 
-    const result = {
-      ok: true,
-      mode: "OK",
-      reason,
-      startedAt,
-      fullName,
-      photoUrl,
-      linkedinUrl,
-      relationDegree,
-      experiences: ready.collected.experiences,
-      education,
-      skills,
-      infos,
-      debug: {
-        experienceRootMode: ready.pick.mode,
-        experienceCollectionMode: ready.collected.mode,
-        experienceCounts: ready.collected.counts,
-        experienceRootPath: elementPath(ready.pick.root),
-      },
-    };
+      const ready = await waitForExperienceReady(6500);
+      const experiences = ready.collected.experiences;
 
+      const reasons = [];
+      if (!fullName) reasons.push("missing_fullName");
+      if (!headline) reasons.push("missing_headline");
+      if (!location) reasons.push("missing_location");
+      if (!experiences.length) reasons.push("missing_experiences");
+
+      const status = {
+        state: reasons.length ? "partial" : "complete",
+        reasons,
+      };
+
+      const durationMs = Math.round(performance.now() - startedPerf);
+      const result = {
+        ok: true,
+        mode: "OK",
+        reason,
+        startedAt,
+        durationMs,
+        fullName,
+        headline,
+        location,
+        photoUrl,
+        linkedinUrl,
+        relationDegree,
+        experiences,
+        education,
+        skills,
+        infos,
+        status,
+        debug: {
+          experienceRootMode: ready.pick.mode,
+          experienceCollectionMode: ready.collected.mode,
+          experienceCounts: ready.collected.counts,
+          experienceRootPath: elementPath(ready.pick.root),
+        },
+      };
+
+      dlog("Profile sections", {
+        educationCount: education.length,
+        skillsCount: skills.length,
+        experiences: experiences.length,
+        headline,
+        location,
+      });
+
+      log("Profile DOM scrape complete", {
+        durationMs,
+        status: result.status,
+        experiences: result.experiences.length,
+      });
+
+      if (!result.experiences.length) {
+        warn("No experiences parsed. Debug:", result.debug);
+      } else if (shouldLog("debug")) {
+        table(
+          result.experiences.map((e) => ({
+            Titre: e.Titre,
+            Entreprise: e.Entreprise,
+            Dates: e.Dates,
+            Lieu: e.Lieu,
+            Description: e.Description ? `${e.Description.slice(0, 120)}…` : null,
+          }))
+        );
+      }
+
+      dlog("DEBUG (full)", result);
+      return result;
+    } catch (err) {
+      error("Profile DOM scrape failed", err?.message || err);
+      return {
+        ok: false,
+        mode: "ERROR",
+        reason,
+        href,
+        startedAt,
+        status: { state: "partial", reasons: ["exception"] },
+      };
+    } finally {
+      if (groupOpen) groupEnd();
+    }
+  }
+
+  async function runOnce(reason) {
+    const result = await scrapeLinkedInProfileRaw(reason);
     window.__FOCALS_LAST = result;
+
+    if (!result?.ok) return result;
+
     try {
       const profile = toExtensionProfile(result);
       if (profile) {
@@ -1535,50 +1732,37 @@
         if (cacheKey) {
           payload[cacheKey] = { payload: profile, ts: Date.now() };
         }
-        await chrome.storage.local.set(payload);
-        log("🧪 [FOCALS-DEBUG] profile saved after scrape", {
-          cacheKey,
-          name: profile.name,
-        });
+        if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+          await chrome.storage.local.set(payload);
+          log("Profile saved after scrape", { cacheKey, name: profile.name });
+        } else {
+          warn("Storage not available for profile save");
+        }
       }
     } catch (err) {
-      warn("🧪 [FOCALS-DEBUG] storage save failed:", err?.message || err);
+      warn("Storage save failed", err?.message || err);
     }
 
-    log(`AUTORUN (${reason})`, {
-      fullName: result.fullName,
-      relationDegree: result.relationDegree,
-      photoUrl: result.photoUrl,
-      linkedinUrl: result.linkedinUrl,
-      experiences: result.experiences.length,
-    });
-
-    if (!result.experiences.length) {
-      warn("No experiences parsed. Debug:", result.debug);
-    } else {
-      if (DEBUG) {
-        console.table(
-          result.experiences.slice(0, 8).map((e) => ({
-            Titre: e.Titre,
-            Entreprise: e.Entreprise,
-            Dates: e.Dates,
-            Lieu: e.Lieu,
-          }))
-        );
-      }
-      console.table(
-        result.experiences.map((e) => ({
-          Titre: e.Titre,
-          Entreprise: e.Entreprise,
-          Dates: e.Dates,
-          Lieu: e.Lieu,
-          Description: e.Description ? `${e.Description.slice(0, 120)}…` : null,
-        }))
-      );
-    }
-
-    dlog("DEBUG (full)", result);
     return result;
+  }
+
+  async function scrapeLinkedInProfileFromDOM(reason = "manual") {
+    const raw = await scrapeLinkedInProfileRaw(reason);
+    const profile = toExtensionProfile(raw);
+    if (profile) return profile;
+
+    return {
+      fullName: raw?.fullName || null,
+      headline: raw?.headline || null,
+      location: raw?.location || null,
+      photoUrl: raw?.photoUrl || null,
+      linkedinUrl: raw?.linkedinUrl || canonicalProfileUrl(location.href),
+      experiences: [],
+      education: [],
+      skills: [],
+      status: raw?.status || { state: "partial", reasons: ["empty"] },
+      debug: raw?.debug || null,
+    };
   }
 
   function scheduleRun(reason) {
@@ -1639,7 +1823,7 @@
       Entreprise: exp.Entreprise || null,
       Description: exp.Description ? exp.Description.slice(0, maxLen) : null,
     }));
-    console.table(rows);
+    table(rows);
     return rows;
   }
 
@@ -1649,13 +1833,11 @@
     return experiences;
   }
 
-  const scrapeFromDom = async () => {
-    const res = await runOnce("extension_call");
-    return toExtensionProfile(res);
-  };
+  const scrapeFromDom = async () => scrapeLinkedInProfileFromDOM("extension_call");
 
   window.__FocalsLinkedinSduiScraper = {
     scrapeFromDom,
+    scrapeLinkedInProfileFromDOM,
   };
 
   // --- EXPOSITION POUR CONTENT-MAIN ---
@@ -1666,6 +1848,7 @@
       runOnce("auto_trigger");
     },
     scrapeFromDom,
+    scrapeLinkedInProfileFromDOM,
     sduiScraper: window.__FocalsLinkedinSduiScraper,
     dump,
     logExperienceDescriptions,

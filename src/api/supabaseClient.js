@@ -1,6 +1,6 @@
-import { createLogger, redactPayload } from "../utils/logger.js";
+import { logger, redactPayload } from "../utils/logger.js";
 
-const logger = createLogger("SupabaseApi");
+const LOG_SCOPE = "NET";
 const DEFAULT_BATCH_MS = 5_000;
 const MAX_BATCH_SIZE = 10;
 const RATE_LIMIT_PER_MINUTE = 60;
@@ -28,7 +28,7 @@ export class SupabaseClient {
 
   async getHeaders() {
     const token = (await this.anonKeyLoader?.()) || "";
-    if (!token) logger.warn("No Supabase token provided");
+    if (!token) logger.warn(LOG_SCOPE, "No Supabase token provided");
     return {
       apikey: token || "",
       Authorization: token ? `Bearer ${token}` : "",
@@ -49,7 +49,7 @@ export class SupabaseClient {
     this.errorTimestamps.push(now);
     this.errorTimestamps = this.errorTimestamps.filter((t) => now - t < ERROR_WINDOW_MS);
     if (this.errorTimestamps.length >= MAX_ERRORS) {
-      logger.warn("Circuit breaker open - too many errors");
+      logger.warn(LOG_SCOPE, "Circuit breaker open - too many errors");
       return true;
     }
     return false;
@@ -75,7 +75,7 @@ export class SupabaseClient {
     if (this.inFlight || !this.queue.length) return;
     if (this.recordError()) return;
     if (!this.throttle()) {
-      logger.warn("Rate limit reached, delaying batch");
+      logger.warn(LOG_SCOPE, "Rate limit reached, delaying batch");
       this.schedule();
       return;
     }
@@ -88,7 +88,7 @@ export class SupabaseClient {
     try {
       await this.sendBatch(batch.map((b) => b.payload));
     } catch (e) {
-      logger.error("Batch failed", e?.message || e);
+      logger.error(LOG_SCOPE, "Batch failed", e?.message || e);
       this.recordError();
       batch.forEach((item, idx) => this.retry(item, idx));
     } finally {
@@ -117,7 +117,7 @@ export class SupabaseClient {
       if ([429, 503].includes(status)) throw new Error(`Retryable ${status}`);
       throw new Error(text || `HTTP ${status}`);
     }
-    logger.info("Batch sent", { size: payload.length });
+    logger.info(LOG_SCOPE, "Batch sent", { size: payload.length });
   }
 
   validate(payload) {
@@ -142,7 +142,7 @@ export async function loadStoredToken() {
       return localStorage.getItem("focals_supabase_token") || "";
     }
   } catch (e) {
-    logger.warn("Token read failed", redactPayload(e?.message || e));
+    logger.warn(LOG_SCOPE, "Token read failed", redactPayload(e?.message || e));
   }
   return "";
 }

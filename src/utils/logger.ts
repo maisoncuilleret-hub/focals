@@ -1,5 +1,5 @@
-const LOG_LEVELS = ["error", "warn", "info", "debug"];
-const LOG_LEVEL_RANK = {
+const LOG_LEVELS = ["error", "warn", "info", "debug"] as const;
+const LOG_LEVEL_RANK: Record<(typeof LOG_LEVELS)[number], number> = {
   error: 0,
   warn: 1,
   info: 2,
@@ -11,16 +11,18 @@ export const LOG_LEVEL_STORAGE_KEY = "focals_log_level";
 const DEDUPE_WINDOW_MS = 2000;
 const MAX_MESSAGE_LENGTH = 200;
 
-const recentMessages = new Map();
-let currentLevel = DEFAULT_LOG_LEVEL.toLowerCase();
+type LogLevel = keyof typeof LOG_LEVEL_RANK;
 
-const normalizeLevel = (value) => {
+const recentMessages = new Map<string, number>();
+let currentLevel: LogLevel = DEFAULT_LOG_LEVEL.toLowerCase() as LogLevel;
+
+const normalizeLevel = (value: unknown): LogLevel | null => {
   if (!value) return null;
-  const normalized = String(value).toLowerCase();
-  return LOG_LEVEL_RANK.hasOwnProperty(normalized) ? normalized : null;
+  const normalized = String(value).toLowerCase() as LogLevel;
+  return Object.prototype.hasOwnProperty.call(LOG_LEVEL_RANK, normalized) ? normalized : null;
 };
 
-const redact = (value) => {
+const redact = (value: unknown): unknown => {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
     let sanitized = value.replace(/[A-Za-z0-9_-]{24,}/g, (m) => `${m.slice(0, 3)}…${m.slice(-3)}`);
@@ -30,7 +32,7 @@ const redact = (value) => {
   }
   if (Array.isArray(value)) return value.map(redact);
   if (typeof value === "object") {
-    const out = {};
+    const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
       if (/token|cookie|secret|email|auth/i.test(k)) {
         out[k] = "[redacted]";
@@ -43,7 +45,7 @@ const redact = (value) => {
   return value;
 };
 
-const formatChunk = (value) => {
+const formatChunk = (value: unknown): unknown => {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") {
     if (value.length > MAX_MESSAGE_LENGTH) {
@@ -54,13 +56,13 @@ const formatChunk = (value) => {
   return value;
 };
 
-const shouldLog = (level) => {
+const shouldLog = (level: LogLevel): boolean => {
   const rank = LOG_LEVEL_RANK[level];
   const currentRank = LOG_LEVEL_RANK[currentLevel];
   return rank <= currentRank;
 };
 
-const dedupeKey = (level, scope, chunks) => {
+const dedupeKey = (level: LogLevel, scope: string, chunks: unknown[]): string => {
   const base = chunks
     .map((chunk) => {
       try {
@@ -73,7 +75,7 @@ const dedupeKey = (level, scope, chunks) => {
   return `${level}:${scope}:${base}`;
 };
 
-const shouldDedupe = (key) => {
+const shouldDedupe = (key: string): boolean => {
   const now = Date.now();
   const last = recentMessages.get(key) || 0;
   if (now - last < DEDUPE_WINDOW_MS) return true;
@@ -81,7 +83,7 @@ const shouldDedupe = (key) => {
   return false;
 };
 
-const emit = (level, scope, args) => {
+const emit = (level: LogLevel, scope: string | undefined, args: unknown[]) => {
   if (!shouldLog(level)) return;
   const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
   const payload = args.map(redact).map(formatChunk);
@@ -91,7 +93,7 @@ const emit = (level, scope, args) => {
   fn.call(console, `[FOCALS][${normalizedScope}]`, ...payload);
 };
 
-const setLogLevel = (level) => {
+const setLogLevel = (level: unknown) => {
   const normalized = normalizeLevel(level);
   if (!normalized) return;
   currentLevel = normalized;
@@ -131,18 +133,18 @@ refreshLogLevel();
 attachStorageListener();
 
 export const logger = {
-  debug: (scope, ...args) => emit("debug", scope, args),
-  info: (scope, ...args) => emit("info", scope, args),
-  warn: (scope, ...args) => emit("warn", scope, args),
-  error: (scope, ...args) => emit("error", scope, args),
-  table: (scope, rows) => {
+  debug: (scope: string, ...args: unknown[]) => emit("debug", scope, args),
+  info: (scope: string, ...args: unknown[]) => emit("info", scope, args),
+  warn: (scope: string, ...args: unknown[]) => emit("warn", scope, args),
+  error: (scope: string, ...args: unknown[]) => emit("error", scope, args),
+  table: (scope: string, rows: unknown[]) => {
     if (!shouldLog("debug")) return;
     const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
     console.groupCollapsed(`[FOCALS][${normalizedScope}] table`);
     console.table(rows);
     console.groupEnd();
   },
-  groupCollapsed: (scope, label, level = "info") => {
+  groupCollapsed: (scope: string, label: string, level: LogLevel = "info") => {
     const normalizedScope = scope ? String(scope).toUpperCase() : "APP";
     if (!shouldLog(level)) return false;
     console.groupCollapsed(`[FOCALS][${normalizedScope}] ${label}`);
@@ -151,18 +153,18 @@ export const logger = {
   groupEnd: () => {
     console.groupEnd();
   },
-  setLevel: (level) => setLogLevel(level),
-  getLevel: () => currentLevel,
+  setLevel: (level: unknown) => setLogLevel(level),
+  getLevel: (): LogLevel => currentLevel,
   refresh: refreshLogLevel,
 };
 
-export const createLogger = (scope) => ({
-  debug: (...args) => logger.debug(scope, ...args),
-  info: (...args) => logger.info(scope, ...args),
-  warn: (...args) => logger.warn(scope, ...args),
-  error: (...args) => logger.error(scope, ...args),
-  table: (rows) => logger.table(scope, rows),
-  groupCollapsed: (label, level) => logger.groupCollapsed(scope, label, level),
+export const createLogger = (scope: string) => ({
+  debug: (...args: unknown[]) => logger.debug(scope, ...args),
+  info: (...args: unknown[]) => logger.info(scope, ...args),
+  warn: (...args: unknown[]) => logger.warn(scope, ...args),
+  error: (...args: unknown[]) => logger.error(scope, ...args),
+  table: (rows: unknown[]) => logger.table(scope, rows),
+  groupCollapsed: (label: string, level?: LogLevel) => logger.groupCollapsed(scope, label, level),
   groupEnd: () => logger.groupEnd(),
 });
 
