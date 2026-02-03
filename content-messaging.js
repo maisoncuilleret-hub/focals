@@ -287,9 +287,26 @@ console.log(
         "src/content/extractors/linkedinMessagingExtractor.js"
       );
       messagingExtractorPromise = import(extractorUrl)
-        .then((mod) => mod?.extractLinkedinConversation || mod?.default || null)
+        .then((mod) => {
+          const extractor =
+            mod?.default ||
+            mod?.extractLinkedInMessagingThread ||
+            mod?.extractor ||
+            mod?.extractLinkedinConversation ||
+            null;
+          if (extractor) {
+            console.log("[FOCALS][SYNC] extractor loaded", extractorUrl);
+          } else {
+            warn("EXTRACTOR_MISSING_EXPORT", extractorUrl);
+          }
+          return extractor;
+        })
         .catch((err) => {
-          warn("EXTRACTOR_IMPORT_FAILED", err?.message || err);
+          warn("EXTRACTOR_IMPORT_FAILED", {
+            message: err?.message || err,
+            stack: err?.stack,
+            url: extractorUrl,
+          });
           return null;
         });
       return messagingExtractorPromise;

@@ -3,10 +3,16 @@ const DEFAULT_THROTTLE_MS = 10_000;
 const DEFAULT_DEBOUNCE_MS = 1_200;
 const DEFAULT_RETRY_DELAY_MS = 2_000;
 
+const DEBUG = false;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const log = (...args) => console.log("[FOCALS][SYNC]", ...args);
 const warn = (...args) => console.warn("[FOCALS][SYNC]", ...args);
+const debug = (...args) => {
+  if (DEBUG) {
+    console.log("[FOCALS][SYNC]", ...args);
+  }
+};
 
 const isThreadUrl = (url) => THREAD_MATCHER.test(url || "");
 
@@ -93,7 +99,17 @@ export function initLinkedInThreadSync({
       return;
     }
 
-    log("trigger threadUrl=", threadUrl, "msgs=", messages.length);
+    const candidateName =
+      payload?.candidate?.fullName ||
+      payload?.candidate?.name ||
+      payload?.candidate?.firstName ||
+      "unknown";
+    log("trigger threadUrl=", threadUrl, "msgs=", messages.length, "candidate=", candidateName);
+    debug("payload summary", {
+      candidate: candidateName,
+      me: payload?.me?.fullName || payload?.me?.name || "unknown",
+      messages: messages.length,
+    });
     const response = await sendSync({ threadUrl, payload });
     if (response?.ok) {
       log(
