@@ -31,16 +31,42 @@ export function initLinkedInThreadSync({
 
   let lastUrl = null;
   let debounceTimer = null;
-  const lastSyncByThread = new Map();
+  const throttleStorageKey = "syncThrottle";
 
-  const shouldThrottle = (threadUrl) => {
-    const lastSync = lastSyncByThread.get(threadUrl) || 0;
+  const getLastSync = async (threadKey) => {
+    try {
+      const data = await chrome.storage.local.get(throttleStorageKey);
+      return data?.[throttleStorageKey]?.[threadKey] || 0;
+    } catch (error) {
+      warn("throttle storage read failed", error?.message || error);
+      return 0;
+    }
+  };
+
+  const setLastSync = async (threadKey) => {
+    try {
+      const data = await chrome.storage.local.get(throttleStorageKey);
+      const throttle = data?.[throttleStorageKey] || {};
+      throttle[threadKey] = Date.now();
+      await chrome.storage.local.set({ [throttleStorageKey]: throttle });
+    } catch (error) {
+      warn("throttle storage write failed", error?.message || error);
+    }
+  };
+
+  const shouldThrottle = async (threadUrl) => {
+    const lastSync = await getLastSync(threadUrl);
     if (Date.now() - lastSync < throttleMs) return true;
-    lastSyncByThread.set(threadUrl, Date.now());
+    await setLastSync(threadUrl);
     return false;
   };
 
   const sendSync = async ({ threadUrl, payload, attempt = 0 }) => {
+    if (!payload?.messages || !Array.isArray(payload.messages)) {
+      warn("[FOCALS] Invalid payload - missing messages array");
+      return { ok: false, error: "Invalid payload: missing messages array" };
+    }
+
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(
         { type: "FOCALS_SYNC_LINKEDIN_THREAD", threadUrl, payload },
@@ -72,7 +98,7 @@ export function initLinkedInThreadSync({
 
   const runSync = async (threadUrl) => {
     if (!threadUrl || !isThreadUrl(threadUrl)) return;
-    if (shouldThrottle(threadUrl)) {
+    if (await shouldThrottle(threadUrl)) {
       log("throttled threadUrl=", threadUrl);
       return;
     }

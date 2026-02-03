@@ -1822,6 +1822,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.storage.local.get(
         ["focals_user_id", "focals_sb_access_token"],
         async (data) => {
+          if (!data?.focals_user_id) {
+            sendResponse({
+              ok: false,
+              status: 401,
+              error: "Missing focals_user_id",
+              json: { error: "Missing focals_user_id" },
+            });
+            return;
+          }
+
           let payload;
           if (message?.payload?.messages) {
             payload = message.payload;
