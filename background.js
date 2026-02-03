@@ -1,6 +1,5 @@
 import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
-import { loadStoredToken } from "./src/api/supabaseClient.js";
 import { createLogger } from "./src/utils/logger.js";
 
 // Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
@@ -211,10 +210,16 @@ async function relayLiveMessageToSupabase(payload) {
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
   console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
-  const token = await loadStoredToken();
+  const { focals_user_id: focalsUserId } = await chrome.storage.local.get(
+    "focals_user_id"
+  );
+  if (!focalsUserId) {
+    console.error("❌ Sync avorté : ID utilisateur introuvable");
+    return { ok: false, status: 401, error: "Missing focals_user_id" };
+  }
   const headers = {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    Authorization: `Bearer ${focalsUserId}`,
   };
 
   const response = await fetch(`${API_BASE_URL}/focals-incoming-message`, {
@@ -1872,6 +1877,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               json = JSON.parse(text);
             } catch {
               json = { raw: text, parseError: true };
+            }
+            const threadKey = threadUrl || payload.meta?.href || payload.meta?.threadUrl;
+            if (res.ok && threadKey) {
+              await chrome.storage.local.set({
+                [`last_sync_${threadKey}`]: Date.now(),
+              });
             }
             console.log("[FOCALS][SYNC]", {
               hasUserId: !!data.focals_user_id,

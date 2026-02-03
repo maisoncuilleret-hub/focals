@@ -88,14 +88,18 @@ const detectDayLabel = (text) => {
 const getCandidateHeader = (root) => {
   const doc = root?.ownerDocument || document;
   const header = doc.querySelector(".msg-thread__link-to-profile");
-  if (!header) return { fullName: null, linkedinPublicUrl: null };
+  const lockupLink = doc.querySelector(".msg-entity-lockup__entity-link");
 
-  const anchor = header.matches("a")
-    ? header
-    : header.querySelector("a[href*='/in/']");
+  if (!header && !lockupLink) return { fullName: null, linkedinPublicUrl: null };
+
+  const anchor =
+    lockupLink ||
+    (header?.matches("a") ? header : header?.querySelector("a[href*='/in/']"));
   const rawHref = anchor?.getAttribute("href") || null;
   const linkedinPublicUrl = cleanUrl(rawHref);
-  const fullName = norm(anchor?.textContent || header.textContent || "") || null;
+  const fullName =
+    norm(anchor?.textContent || header?.textContent || lockupLink?.textContent || "") ||
+    null;
 
   return { fullName, linkedinPublicUrl };
 };
