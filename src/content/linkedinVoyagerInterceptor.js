@@ -1,7 +1,8 @@
 (function () {
   if (window.__FOCALS_MAIN_VOYAGER_INTERCEPTOR__) return;
   window.__FOCALS_MAIN_VOYAGER_INTERCEPTOR__ = true;
-  console.log("🔥 [SaaS-Debug] INTERCEPTEUR INJECTÉ DANS LE MAIN WORLD");
+  const log = (...args) => console.info("[FOCALS][MSG]", ...args);
+  log("Intercepteur injecté dans le main world");
 
   const originalFetch = window.fetch;
   Object.defineProperty(window, "fetch", {

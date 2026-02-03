@@ -1,4 +1,4 @@
-import { createLogger } from "../utils/logger.js";
+import { logger } from "../utils/logger.js";
 import ScrapeController from "./ScrapeController.js";
 import { createDomObserver, listenToNavigation } from "./domObservers.js";
 import { extractDetailsDescription } from "./experienceDetailsDescription.js";
@@ -373,7 +373,7 @@ export async function scrapeExperienceDetailsDocument(root = document) {
 }
 
 export function installExperienceDetailsScraper({ onScrapeDone } = {}) {
-  const logger = createLogger("ExperienceDetailsScraper");
+  const LOG_SCOPE = "SCRAPER";
   const controller = new ScrapeController({
     onScrape: async (reason, shouldAbort) => {
       if (shouldAbort()) return;
@@ -381,7 +381,7 @@ export function installExperienceDetailsScraper({ onScrapeDone } = {}) {
 
       const publicIdentifier = getPublicIdentifierFromUrl(location.href);
       if (!publicIdentifier) {
-        logger.warn("Missing public identifier; skipping details scrape");
+        logger.warn(LOG_SCOPE, "Missing public identifier; skipping details scrape");
         return;
       }
 
@@ -401,7 +401,7 @@ export function installExperienceDetailsScraper({ onScrapeDone } = {}) {
         });
       }
       window.__FOCALS_DETAILS_LAST = payload;
-      logger.info("Stored experience details", {
+      logger.info(LOG_SCOPE, "Stored experience details", {
         publicIdentifier,
         count: experiences.length,
         reason,

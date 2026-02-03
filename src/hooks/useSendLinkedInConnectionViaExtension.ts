@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { Candidate } from "@/types/candidate";
+import { logger } from "../utils/logger";
 
 const EXTENSION_ID = "kekhkaclmlnmijnpekcpppnnoooodaca";
 
@@ -93,7 +94,7 @@ export const useSendLinkedInConnectionViaExtension = () => {
           description: `Demande de connexion envoyée à ${candidate.name}`,
         });
       } catch (error) {
-        console.error("Erreur mise à jour Supabase:", error);
+        logger.error("NET", "Erreur mise à jour Supabase", error);
       }
     },
     onError: (error: Error) => {

@@ -1,10 +1,45 @@
 (() => {
-  const TAG = "🧪 [FOCALS-DEBUG]";
-  const log = (...a) => console.log(`%c${TAG}`, "color: #00ebff; font-weight: bold;", ...a);
-  const success = (...a) => console.log(`%c${TAG} ✅`, "color: #00ff00; font-weight: bold;", ...a);
-  const warn = (...a) => console.warn(`${TAG} ⚠️`, ...a);
-  const info = (...a) => console.info(`%c${TAG} ℹ️`, "color: #bb86fc;", ...a);
-  const error = (...a) => console.error(`${TAG} ❌`, ...a);
+  const LOG_SCOPE = "INJECT";
+  const MSG_SCOPE = "MSG";
+  const SCRAPER_SCOPE = "SCRAPER";
+  const NAV_SCOPE = "NAV";
+  const LOG_LEVEL_STORAGE_KEY = "focals_log_level";
+  const DOM_PROFILE_SCRAPER_FLAG_KEY = "focals_dom_profile_scraper_enabled";
+
+  const fallbackLogger = {
+    debug: (scope, ...args) => console.debug(`[FOCALS][${scope}]`, ...args),
+    info: (scope, ...args) => console.info(`[FOCALS][${scope}]`, ...args),
+    warn: (scope, ...args) => console.warn(`[FOCALS][${scope}]`, ...args),
+    error: (scope, ...args) => console.error(`[FOCALS][${scope}]`, ...args),
+  };
+
+  let logger = fallbackLogger;
+
+  if (typeof chrome !== "undefined" && chrome?.runtime?.getURL) {
+    import(chrome.runtime.getURL("src/utils/logger.js"))
+      .then((mod) => {
+        if (mod?.logger) logger = mod.logger;
+        if (logger?.refresh) logger.refresh();
+      })
+      .catch(() => {});
+  }
+
+  const setDatasetFlag = (key, value) => {
+    if (!document.documentElement) return;
+    document.documentElement.dataset[key] = value;
+  };
+
+  const applyLogLevel = (value) => {
+    const nextLevel = value ? String(value).toLowerCase() : "info";
+    setDatasetFlag("focalsLogLevel", nextLevel);
+  };
+
+  const applyDomProfileScraperFlag = (value) => {
+    const enabled = value !== false;
+    setDatasetFlag("focalsDomProfileScraperEnabled", enabled ? "true" : "false");
+    logger.info(SCRAPER_SCOPE, "DOM profile scraper flag", { enabled });
+  };
+
 
   const injectPageScraper = () => {
     if (document.documentElement?.dataset?.focalsPageScraperInjected === "true") {
@@ -22,7 +57,31 @@
     });
   };
 
-  log("Démarrage du Content Script...");
+  const initFeatureFlags = () => {
+    if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) {
+      applyLogLevel(null);
+      applyDomProfileScraperFlag(true);
+      return;
+    }
+
+    chrome.storage.local.get([LOG_LEVEL_STORAGE_KEY, DOM_PROFILE_SCRAPER_FLAG_KEY], (result) => {
+      applyLogLevel(result?.[LOG_LEVEL_STORAGE_KEY]);
+      applyDomProfileScraperFlag(result?.[DOM_PROFILE_SCRAPER_FLAG_KEY]);
+    });
+
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      if (changes?.[LOG_LEVEL_STORAGE_KEY]) {
+        applyLogLevel(changes[LOG_LEVEL_STORAGE_KEY].newValue);
+      }
+      if (changes?.[DOM_PROFILE_SCRAPER_FLAG_KEY]) {
+        applyDomProfileScraperFlag(changes[DOM_PROFILE_SCRAPER_FLAG_KEY].newValue);
+      }
+    });
+  };
+
+  logger.info(LOG_SCOPE, "Démarrage du Content Script...");
+  initFeatureFlags();
   injectPageScraper();
 
   // Variable globale pour mémoriser l'ID du candidat actuel
@@ -56,7 +115,7 @@
         payload: { elements: enriched },
       });
     } catch (e) {
-      console.error(`${TAG} Erreur data :`, e);
+      logger.error(MSG_SCOPE, "Erreur data", e);
     }
   };
 
@@ -71,7 +130,7 @@
       parsed.pathname = parsed.pathname.replace(/\/$/, "");
       return parsed.toString();
     } catch (err) {
-      warn("🧪 [FOCALS-DEBUG] getCleanUrl failed:", err?.message || err);
+      logger.warn(NAV_SCOPE, "getCleanUrl failed", err?.message || err);
       return (url || "").replace(/[?#].*$/, "").replace(/\/$/, "");
     }
   };
@@ -161,7 +220,7 @@
               writePayload[cacheKey] = { payload: merged, ts: Date.now() };
             }
             await chrome.storage.local.set(writePayload);
-            info("Experience details merged into profile", {
+            logger.info(SCRAPER_SCOPE, "Experience details merged into profile", {
               publicIdentifier,
               experiences: merged.experiences?.length ?? 0,
             });
@@ -169,7 +228,7 @@
         });
       })
       .catch((err) => {
-        error("Experience details scraper init failed:", err?.message || err);
+        logger.error(SCRAPER_SCOPE, "Experience details scraper init failed", err?.message || err);
       });
   };
 
@@ -231,11 +290,11 @@
         window.FOCALS.run(message?.reason || "popup_trigger");
         sendResponse({ ok: true, triggered: true, cacheKey: `focals_last_result:${getCleanUrl(location.href)}` });
       } else {
-        warn("🧪 [FOCALS-DEBUG] scraper missing on window.FOCALS.");
+        logger.warn(SCRAPER_SCOPE, "scraper missing on window.FOCALS");
         sendResponse({ ok: false, error: "SCRAPER_MISSING" });
       }
     } catch (err) {
-      warn("🧪 [FOCALS-DEBUG] trigger scrape failed:", err?.message || err);
+      logger.warn(SCRAPER_SCOPE, "trigger scrape failed", err?.message || err);
       sendResponse({ ok: false, error: err?.message || String(err) });
     }
 
@@ -267,7 +326,7 @@
         if (attempt === maxRetries) {
           throw err;
         }
-        warn(`Tentative ${attempt}/${maxRetries} échouée, retry...`);
+        logger.warn(SCRAPER_SCOPE, `Tentative ${attempt}/${maxRetries} échouée, retry...`);
         await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
       }
     }
@@ -280,12 +339,12 @@
 
       const maxAttempts = 5;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        log(`🔍 Recherche d'identité (Tentative ${attempt}/${maxAttempts})...`);
+        logger.info(NAV_SCOPE, `Recherche d'identité (Tentative ${attempt}/${maxAttempts})...`);
         const ids = extractLinkedinIds();
 
         if (ids) {
           window._focalsCurrentCandidateId = ids.linkedin_internal_id;
-          success(`MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
+          logger.info(LOG_SCOPE, `MAPPING RÉUSSI : ${ids.linkedin_internal_id}`);
 
           try {
             await chrome.storage.local.set({
@@ -293,7 +352,7 @@
               current_profile_name: ids.name,
             });
           } catch (err) {
-            warn("Erreur storage local:", err);
+            logger.warn(LOG_SCOPE, "Erreur storage local", err);
           }
 
           try {
@@ -302,19 +361,16 @@
               profile: ids,
             });
           } catch (err) {
-            warn(
-              "Background injoignable (normal si service worker endormi):",
-              err.message
-            );
+            logger.warn(LOG_SCOPE, "Background injoignable (normal si service worker endormi)", err.message);
           }
 
           // Déclenchement automatique du scraper d'expériences
           setTimeout(() => {
             if (window.FOCALS && typeof window.FOCALS.run === "function") {
-              info("🚀 Lancement automatique du scraper d'expériences...");
+              logger.info(SCRAPER_SCOPE, "Lancement automatique du scraper d'expériences...");
               window.FOCALS.run();
             } else {
-              warn("Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
+              logger.warn(SCRAPER_SCOPE, "Le scraper (linkedinSduiScraper.js) n'est toujours pas détecté sur window.");
             }
           }, 1000);
           return;
@@ -325,9 +381,9 @@
         }
       }
 
-      warn("Impossible de trouver l'ID technique après 5 tentatives.");
+      logger.warn(NAV_SCOPE, "Impossible de trouver l'ID technique après 5 tentatives.");
     } catch (e) {
-      warn("Erreur lors du scraping profil :", e);
+      logger.warn(SCRAPER_SCOPE, "Erreur lors du scraping profil", e);
     }
   }
 
@@ -342,5 +398,5 @@
     }
   }, 2000);
 
-  success("Content Script prêt et actif !");
+  logger.info(LOG_SCOPE, "Content Script prêt et actif");
 })();

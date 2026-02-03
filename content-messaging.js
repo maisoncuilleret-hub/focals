@@ -1,3 +1,26 @@
+const LOG_SCOPE = "MSG";
+const fallbackLogger = {
+  debug: (scope, ...args) => console.debug(`[FOCALS][${scope}]`, ...args),
+  info: (scope, ...args) => console.info(`[FOCALS][${scope}]`, ...args),
+  warn: (scope, ...args) => console.warn(`[FOCALS][${scope}]`, ...args),
+  error: (scope, ...args) => console.error(`[FOCALS][${scope}]`, ...args),
+};
+let logger = fallbackLogger;
+
+if (typeof chrome !== "undefined" && chrome?.runtime?.getURL) {
+  import(chrome.runtime.getURL("src/utils/logger.js"))
+    .then((mod) => {
+      if (mod?.logger) logger = mod.logger;
+      if (logger?.refresh) logger.refresh();
+    })
+    .catch(() => {});
+}
+
+const log = (...args) => logger.info(LOG_SCOPE, ...args);
+const warn = (...args) => logger.warn(LOG_SCOPE, ...args);
+const error = (...args) => logger.error(LOG_SCOPE, ...args);
+const debug = (...args) => logger.debug(LOG_SCOPE, ...args);
+
 (() => {
   if (window.__FOCALS_XHR_INTERCEPTOR__) return;
   window.__FOCALS_XHR_INTERCEPTOR__ = true;
@@ -16,12 +39,12 @@
       if (this._url && this._url.includes("voyager/api/messaging/conversations")) {
         try {
           const responseData = JSON.parse(this.responseText);
-          console.log("🎯 [SaaS-Debug] Flux de conversations intercepté !");
+          debug("Flux de conversations intercepté");
           if (typeof window.processInterceptedMessages === "function") {
             window.processInterceptedMessages(responseData);
           }
         } catch (e) {
-          console.error("❌ [SaaS-Debug] Erreur lecture interception:", e);
+          error("Erreur lecture interception", e);
         }
       }
     });
@@ -29,23 +52,19 @@
   };
 })();
 
-console.log('[FOCALS DEBUG] messaging content script loaded – v3');
-console.log(
-  '[FOCALS DEBUG] messaging content script context:',
-  'href=',
-  window.location.href,
-  'isTop=',
-  window.top === window,
-  'frameElement=',
-  window.frameElement
-);
+log("messaging content script loaded – v3");
+log("messaging content script context", {
+  href: window.location.href,
+  isTop: window.top === window,
+  frameElement: window.frameElement,
+});
 
 (() => {
   const FOCALS_DEBUG = (() => {
     try {
       return localStorage.getItem("FOCALS_DEBUG_MSG") === "true";
     } catch (err) {
-      console.warn("[Focals][MSG][DEBUG] Unable to read debug flag", err);
+      warn("Unable to read debug flag", err);
       return false;
     }
   })();
@@ -54,12 +73,12 @@ console.log(
     if (!FOCALS_DEBUG) return;
     try {
       if (typeof details === "string") {
-        console.log(`[Focals][MSG][${stage}]`, details);
+        debug(stage, details);
       } else {
-        console.log(`[Focals][MSG][${stage}]`, JSON.stringify(details, null, 2));
+        debug(stage, JSON.stringify(details, null, 2));
       }
     } catch (e) {
-      console.log(`[Focals][MSG][${stage}]`, details);
+      debug(stage, details);
     }
   }
 
@@ -67,7 +86,7 @@ console.log(
     // Sur certaines sessions, LinkedIn met la messagerie dans un Shadow DOM
     const outlet = document.getElementById("interop-outlet");
     if (outlet && outlet.shadowRoot) {
-      console.log("[FOCALS][SHADOW] using interop-outlet.shadowRoot as messaging root");
+      debug("SHADOW: using interop-outlet.shadowRoot as messaging root");
       return outlet.shadowRoot;
     }
 
@@ -344,7 +363,7 @@ console.log(
       })
       .filter(Boolean);
 
-    console.log("💾 [SaaS-Debug] Données prêtes pour Supabase", messages);
+    debug("Données prêtes pour Supabase", messages);
     if (!messages.length) {
       return { ok: true, count: 0 };
     }
@@ -361,10 +380,7 @@ console.log(
         },
         (result) => {
           if (chrome.runtime.lastError) {
-            console.error(
-              "[SaaS-Debug] Supabase relay failed:",
-              chrome.runtime.lastError.message
-            );
+            error("Supabase relay failed", chrome.runtime.lastError.message);
             resolve({
               ok: false,
               error: chrome.runtime.lastError.message,
@@ -385,9 +401,7 @@ console.log(
       const payload = { type: "API_REQUEST", endpoint, method, body, params };
 
       const sendWithRetry = (attempt = 1) => {
-        console.log(
-          `[Focals][MSG][API_REQUEST] attempt ${attempt} -> ${method} ${endpoint}`
-        );
+        debug(`API_REQUEST attempt ${attempt} -> ${method} ${endpoint}`);
         if (!chrome.runtime?.id) {
           reject(new Error("Extension context invalidated"));
           return;
@@ -400,9 +414,7 @@ console.log(
               /Extension context invalidated/i.test(message) ||
               /Receiving end does not exist/i.test(message);
 
-            console.warn(
-              `[Focals][MSG][API_REQUEST] lastError on attempt ${attempt}: ${message}`
-            );
+            warn(`API_REQUEST lastError on attempt ${attempt}: ${message}`);
 
             // The background service worker can be torn down between attempts, which triggers
             // "Extension context invalidated." or a missing receiver. Retry a few times to let
@@ -417,9 +429,7 @@ console.log(
           }
 
           if (!response) {
-            console.warn(
-              `[Focals][MSG][API_REQUEST] empty response on attempt ${attempt}, retrying if possible`
-            );
+            warn(`API_REQUEST empty response on attempt ${attempt}, retrying if possible`);
             if (attempt < 3) {
               setTimeout(() => sendWithRetry(attempt + 1), attempt * 100);
               return;
@@ -612,7 +622,7 @@ console.log(
     };
 
     const error = (message, ...args) => {
-      console.error("[Focals][MSG][ERROR]", message, ...args);
+      logger.error(LOG_SCOPE, message, ...args);
     };
 
     const isStorageAvailable = (area = "local") => {
@@ -1473,7 +1483,7 @@ console.log(
           systemPromptOverride: trimmedCustomInstructions || null,
         };
 
-        console.log("[Focals][MSG] generate payload context", payloadContext);
+        debug("generate payload context", payloadContext);
 
         const reply = await generateReplyFromAPI(messages, {
           context: payloadContext,
@@ -1481,7 +1491,7 @@ console.log(
           conversationName,
           conversationRoot,
         });
-        console.log("[Focals][MSG] Réponse reçue", {
+        debug("Réponse reçue", {
           hasReply: !!reply,
         });
         if (!reply) {
@@ -1877,7 +1887,7 @@ console.log(
         '.msg-form__contenteditable[contenteditable="true"]'
       );
       if (!editor) {
-        console.warn("[FOCALS] No message editor found in conversation");
+        warn("No message editor found in conversation");
         return;
       }
 
@@ -1891,15 +1901,13 @@ console.log(
       try {
         const conversationRoot = getConversationRootFromButton(buttonEl);
         if (!conversationRoot) {
-          console.warn(
-            "[FOCALS] No conversation root found for personalized follow-up"
-          );
+          warn("No conversation root found for personalized follow-up");
           return;
         }
 
         const profileHref = getProfileLinkFromConversation(conversationRoot);
         if (!profileHref) {
-          console.warn("[FOCALS] No profile link found in conversation");
+          warn("No profile link found in conversation");
           return;
         }
 
@@ -1912,15 +1920,13 @@ console.log(
         });
 
         if (!reply) {
-          console.warn(
-            "[FOCALS] backendGeneratePersonalizedFollowup returned empty reply"
-          );
+          warn("backendGeneratePersonalizedFollowup returned empty reply");
           return;
         }
 
         injectReplyIntoComposer(conversationRoot, reply);
       } catch (err) {
-        console.error("[FOCALS] Error in handlePersonalizedFollowup", err);
+        error("Error in handlePersonalizedFollowup", err);
       }
     };
 
@@ -1989,7 +1995,7 @@ console.log(
         if (injectSmartReplyIntoForm(composer)) count++;
       }
 
-      if (count) console.log("[FOCALS SR] injected on forms:", count);
+      if (count) debug("FOCALS SR injected on forms", count);
     };
 
     let focalsSrObsStarted = false;
@@ -2031,7 +2037,7 @@ console.log(
 
       injectAllSmartReplyButtons();
 
-      console.log("[FOCALS SR] observer ON");
+      debug("FOCALS SR observer ON");
     };
 
     const setupLiveMessageObserver = () => {
@@ -2048,7 +2054,7 @@ console.log(
 
 
     const initMessagingWatcher = () => {
-      console.log("🚀 [FOCALS] Smart Reply UI Active");
+      log("Smart Reply UI Active");
       setupMessagingObserver();
       setupLiveMessageObserver();
 
@@ -2093,6 +2099,6 @@ console.log(
     }
 
   } catch (err) {
-    console.error("[FOCALS][MSG] Fatal error in content-messaging.js", err);
+    error("Fatal error in content-messaging.js", err);
   }
 })();
