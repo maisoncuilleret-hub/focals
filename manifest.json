@@ -19,13 +19,23 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "action": {
-    "default_popup": "popup.html"
-  },
   "content_scripts": [
     {
       "matches": ["https://*.linkedin.com/*"],
-      "js": ["content-main.js"]
+      "js": [
+        "content-main.js", 
+        "content-messaging.js",
+        "src/content/messaging/syncOnThreadOpen.js" 
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/content/linkedinVoyagerInterceptor.js"
+      ],
+      "matches": ["*://www.linkedin.com/*"]
     }
   ]
 }
