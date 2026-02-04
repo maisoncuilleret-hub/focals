@@ -60,15 +60,9 @@ const AUTH_RECOVERY_LOG_COOLDOWN_MS = 30_000;
 const AUTH_RECOVERY_TAB_COOLDOWN_MS = 2 * 60 * 1000;
 const FOCALS_APP_BASE_URL = "https://mvp-recrutement.lovable.app";
 let lastAuthRecoveryLogAt = 0;
-let lastAuthRecoveryTabAt = 0;
 let hasLoggedMissingLiveAuth = false;
 
-const ALLOWED_EXTERNAL_ORIGIN_RULES = [
-  /^https:\/\/mvp-recrutement\.lovable\.app$/i,
-  /^https:\/\/[^/]+\.lovable\.app$/i,
-  /^http:\/\/localhost(?::\d+)?$/i,
-  /^https:\/\/localhost(?::\d+)?$/i,
-];
+const AUTH_OPEN_STORAGE_KEY = "last_auth_open_ts";
 
 const isJwt = (token) =>
   typeof token === "string" &&
@@ -87,8 +81,26 @@ const resolveSenderOrigin = (sender) => {
   return null;
 };
 
-const isAllowedExternalOrigin = (origin) =>
-  !!origin && ALLOWED_EXTERNAL_ORIGIN_RULES.some((rule) => rule.test(origin));
+const resolveSenderHostname = (sender) => {
+  try {
+    const origin = sender?.origin || sender?.url;
+    if (!origin) return null;
+    return new URL(origin).hostname;
+  } catch {
+    return null;
+  }
+};
+
+const isAllowedExternalOrigin = (sender) => {
+  const hostname = resolveSenderHostname(sender);
+  if (!hostname) return false;
+  return (
+    hostname.endsWith("lovable.app") ||
+    hostname.endsWith("lovableproject.com") ||
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost")
+  );
+};
 
 const normalizePersonName = (name = "") => {
   const raw = String(name || "");
@@ -126,20 +138,21 @@ const deriveThreadKey = (href = "") => {
   return `h_${(hash >>> 0).toString(16)}`;
 };
 
-const setAuthInStorage = async ({ userId, accessToken } = {}) => {
+const setAuthInStorage = async ({ userId, accessToken, forceLastLogin = false } = {}) => {
   const stored = await chrome.storage.local.get([
     "focals_user_id",
     "focals_sb_access_token",
     "focals_last_login",
   ]);
   const updates = {};
+  const shouldUpdateLastLogin = forceLastLogin || !!userId || !!accessToken;
   if (userId && stored?.focals_user_id !== userId) {
     updates.focals_user_id = userId;
   }
   if (accessToken && stored?.focals_sb_access_token !== accessToken) {
     updates.focals_sb_access_token = accessToken;
   }
-  if (!Object.keys(updates).length) return false;
+  if (!Object.keys(updates).length && !shouldUpdateLastLogin) return false;
   updates.focals_last_login = new Date().toISOString();
   await chrome.storage.local.set(updates);
   return true;
@@ -211,21 +224,54 @@ const buildAuthDebugPayload = async () => {
   };
 };
 
+const maskSensitive = (value) => {
+  if (!value) return value;
+  const raw = String(value);
+  if (raw.length <= 8) return raw;
+  return `${raw.slice(0, 4)}…${raw.slice(-4)}`;
+};
+
 const buildStorageDebugPayload = async () => {
   const data = await chrome.storage.local.get(null);
   const authPayload = await buildAuthDebugPayload();
-  const safeStorage = { ...data };
-  if (safeStorage?.focals_user_id) {
-    safeStorage.focals_user_id = String(safeStorage.focals_user_id).slice(0, 8);
-  }
-  if (safeStorage?.focals_sb_access_token) {
-    safeStorage.focals_sb_access_token = String(safeStorage.focals_sb_access_token).slice(0, 8);
-  }
+  const safeStorage = Object.entries(data || {}).reduce((acc, [key, value]) => {
+    if (!key.startsWith("focals_")) return acc;
+    if (key === "focals_sb_access_token") {
+      acc[key] = maskSensitive(value);
+      return acc;
+    }
+    if (key === "focals_user_id") {
+      acc[key] = maskSensitive(value);
+      return acc;
+    }
+    acc[key] = value;
+    return acc;
+  }, {});
   return {
     ...authPayload,
-    storageKeys: Object.keys(data || {}),
+    storageKeys: Object.keys(safeStorage || {}),
     storage: safeStorage,
   };
+};
+
+const openWebappLoginOnce = async ({ reason } = {}) => {
+  const data = await chrome.storage.local.get(["focals_user_id", AUTH_OPEN_STORAGE_KEY]);
+  if (data?.focals_user_id) {
+    return;
+  }
+  const now = Date.now();
+  const lastOpenedAt = Number(data?.[AUTH_OPEN_STORAGE_KEY]) || 0;
+  if (now - lastOpenedAt < AUTH_RECOVERY_TAB_COOLDOWN_MS) {
+    return;
+  }
+
+  const loginUrl = `${FOCALS_APP_BASE_URL.replace(/\/$/, "")}/login?from=extension`;
+  try {
+    await chrome.storage.local.set({ [AUTH_OPEN_STORAGE_KEY]: now });
+    await chrome.tabs.create({ url: loginUrl, active: true });
+  } catch (error) {
+    console.warn("[FOCALS][AUTH] Failed to open login tab", error?.message || error);
+  }
 };
 
 const triggerAuthRecovery = async (reason) => {
@@ -235,17 +281,7 @@ const triggerAuthRecovery = async (reason) => {
     console.warn("[FOCALS][AUTH] Missing auth, triggering recovery", { reason });
   }
 
-  if (now - lastAuthRecoveryTabAt < AUTH_RECOVERY_TAB_COOLDOWN_MS) {
-    return;
-  }
-  lastAuthRecoveryTabAt = now;
-
-  const loginUrl = `${FOCALS_APP_BASE_URL.replace(/\/$/, "")}/login?from=extension`;
-  try {
-    await chrome.tabs.create({ url: loginUrl, active: true });
-  } catch (error) {
-    console.warn("[FOCALS][AUTH] Failed to open login tab", error?.message || error);
-  }
+  await openWebappLoginOnce({ reason });
 };
 
 function debugLog(stage, details) {
@@ -418,7 +454,10 @@ async function relayLiveMessageToSupabase(payload) {
     } else {
       console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage");
     }
-    triggerAuthRecovery("live-message-missing-user");
+    chrome.runtime.sendMessage({
+      type: "FOCALS_AUTH_REQUIRED",
+      reason: "radar_live",
+    });
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
   const headers = {
@@ -2007,6 +2046,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    // Debug handlers should be called from the service worker console (chrome://extensions),
+    // not from LinkedIn pages.
     case "FOCALS_DEBUG_PING": {
       sendResponse({ ok: true, version: chrome.runtime.getManifest().version });
       return true;
@@ -2020,6 +2061,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({
             ok: false,
             error: error?.message || "Failed to read auth state",
+          });
+      });
+      return true;
+    }
+    case "FOCALS_DEBUG_DUMP_STORAGE": {
+      buildStorageDebugPayload()
+        .then((payload) => {
+          sendResponse(payload);
+        })
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error?.message || "Failed to read storage",
           });
         });
       return true;
@@ -2264,6 +2318,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         sendResponse({ ok: true, tabId: tab.id });
       });
+      return true;
+    }
+    case "FOCALS_AUTH_REQUIRED": {
+      openWebappLoginOnce({ reason: message?.reason || "unknown" })
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) =>
+          sendResponse({ ok: false, error: error?.message || "auth request failed" })
+        );
       return true;
     }
     case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
@@ -2567,39 +2629,20 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     senderUrl,
   });
 
-  if (!isAllowedExternalOrigin(senderOrigin)) {
-    console.warn("❌ [FOCALS][AUTH] Login message rejected", {
-      reason: "unauthorized_origin",
+  if (!isAllowedExternalOrigin(sender)) {
+    console.warn("[FOCALS][AUTH] origin_not_allowed", {
       senderOrigin,
       senderUrl,
       type: message?.type,
     });
-    sendResponse({ success: false, error: "unauthorized_origin" });
+    sendResponse({ success: false, error: "origin_not_allowed" });
     return false;
   }
 
-  if (
-    IS_DEV &&
-    (message?.type === "FOCALS_DEBUG_AUTH_STATE" ||
-      message?.type === "FOCALS_DEBUG_DUMP_STORAGE")
-  ) {
-    const handler =
-      message?.type === "FOCALS_DEBUG_DUMP_STORAGE"
-        ? buildStorageDebugPayload
-        : buildAuthDebugPayload;
-    handler()
-      .then((payload) => sendResponse(payload))
-      .catch((error) => {
-        sendResponse({
-          ok: false,
-          error: error?.message || "Failed to read auth state",
-        });
-      });
-    return true;
-  }
-
   if (message?.type === "FOCALS_LOGIN_SUCCESS") {
-    if (!message?.userId) {
+    const userId = message?.userId || message?.user_id || null;
+    const accessToken = message?.accessToken || message?.access_token || null;
+    if (!userId) {
       console.warn("❌ [FOCALS][AUTH] Login message rejected", {
         reason: "missing_user_id",
         senderOrigin,
@@ -2609,14 +2652,12 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
       return false;
     }
 
-    const accessToken = message?.accessToken || message?.access_token || null;
-    setAuthInStorage({ userId: message.userId, accessToken })
+    setAuthInStorage({ userId, accessToken, forceLastLogin: true })
       .then(() => {
-        const prefix = String(message.userId).slice(0, 8);
-        console.log(`✅ [FOCALS][AUTH] Auth automatisée ${prefix}`);
-        if (accessToken) {
-          console.log("✅ [FOCALS][AUTH] Token Supabase sauvegardé");
-        }
+        const prefix = String(userId).slice(0, 8);
+        console.log(
+          `✅ [FOCALS][AUTH] Stored userIdPrefix=${prefix} hasToken=${!!accessToken} origin=${senderOrigin || senderUrl || "unknown"}`
+        );
         sendResponse({ success: true });
       })
       .catch((error) => {
