@@ -213,9 +213,17 @@ async function relayLiveMessageToSupabase(payload) {
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
   console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
-  const { focals_user_id } = await chrome.storage.local.get("focals_user_id");
+  const { focals_user_id: storedId, focals_supabase_session: session } =
+    await chrome.storage.local.get(["focals_user_id", "focals_supabase_session"]);
+  let focals_user_id = storedId;
+
+  if (!focals_user_id && session?.user?.id) {
+    await chrome.storage.local.set({ focals_user_id: session.user.id });
+    return relayLiveMessageToSupabase(payload);
+  }
+
   if (!focals_user_id) {
-    console.error("❌ Sync avorté : focals_user_id introuvable dans le storage");
+    console.error("❌ Erreur fatale : focals_user_id est vide dans le storage.");
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
   const headers = {

@@ -16,7 +16,7 @@ const debug = (...args) => {
 
 const isThreadUrl = (url) => THREAD_MATCHER.test(url || "");
 
-export function initLinkedInThreadSync({
+function initLinkedInThreadSync({
   loadExtractor,
   getRoot,
   logger,
