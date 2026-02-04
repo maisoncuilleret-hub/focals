@@ -2,6 +2,8 @@ import supabase, { SUPABASE_URL } from "./supabase-client.js";
 import { API_BASE_URL, IS_DEV } from "./src/api/config.js";
 import { createLogger } from "./src/utils/logger.js";
 
+console.log("[FOCALS] Service worker started");
+
 // Intercepteur spécifique pour l'API Dash Messenger (LinkedIn 2026)
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
@@ -59,11 +61,34 @@ const AUTH_RECOVERY_TAB_COOLDOWN_MS = 2 * 60 * 1000;
 const FOCALS_APP_BASE_URL = "https://mvp-recrutement.lovable.app";
 let lastAuthRecoveryLogAt = 0;
 let lastAuthRecoveryTabAt = 0;
+let hasLoggedMissingLiveAuth = false;
+
+const ALLOWED_EXTERNAL_ORIGIN_RULES = [
+  /^https:\/\/mvp-recrutement\.lovable\.app$/i,
+  /^https:\/\/[^/]+\.lovable\.app$/i,
+  /^http:\/\/localhost(?::\d+)?$/i,
+  /^https:\/\/localhost(?::\d+)?$/i,
+];
 
 const isJwt = (token) =>
   typeof token === "string" &&
   token.length > 10 &&
   /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/.test(token);
+
+const resolveSenderOrigin = (sender) => {
+  if (sender?.origin) return sender.origin;
+  if (sender?.url) {
+    try {
+      return new URL(sender.url).origin;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const isAllowedExternalOrigin = (origin) =>
+  !!origin && ALLOWED_EXTERNAL_ORIGIN_RULES.some((rule) => rule.test(origin));
 
 const normalizePersonName = (name = "") => {
   const raw = String(name || "");
@@ -101,18 +126,75 @@ const deriveThreadKey = (href = "") => {
   return `h_${(hash >>> 0).toString(16)}`;
 };
 
+const setAuthInStorage = async ({ userId, accessToken } = {}) => {
+  const stored = await chrome.storage.local.get([
+    "focals_user_id",
+    "focals_sb_access_token",
+    "focals_last_login",
+  ]);
+  const updates = {};
+  if (userId && stored?.focals_user_id !== userId) {
+    updates.focals_user_id = userId;
+  }
+  if (accessToken && stored?.focals_sb_access_token !== accessToken) {
+    updates.focals_sb_access_token = accessToken;
+  }
+  if (!Object.keys(updates).length) return false;
+  updates.focals_last_login = new Date().toISOString();
+  await chrome.storage.local.set(updates);
+  return true;
+};
+
 const getAuthFromStorage = async () => {
   const stored = await chrome.storage.local.get([
     "focals_user_id",
     "focals_sb_access_token",
     "focals_last_login",
   ]);
-  const userId = stored?.focals_user_id || null;
-  const accessToken = stored?.focals_sb_access_token || null;
+  let userId = stored?.focals_user_id || null;
+  let accessToken = stored?.focals_sb_access_token || null;
+  let tokenIsJwt = isJwt(accessToken);
+  let recovered = false;
+
+  if (!userId || !accessToken) {
+    try {
+      const [userResult, sessionResult] = await Promise.all([
+        supabase.auth.getUser(),
+        supabase.auth.getSession(),
+      ]);
+      const session = sessionResult?.data?.session || null;
+      const sessionUserId = session?.user?.id || null;
+      const sessionToken = session?.access_token || null;
+      const supabaseUserId = userResult?.data?.user?.id || sessionUserId;
+
+      if (!userId && supabaseUserId) {
+        userId = supabaseUserId;
+        recovered = true;
+      }
+      if (!accessToken && sessionToken) {
+        accessToken = sessionToken;
+        tokenIsJwt = isJwt(accessToken);
+        recovered = true;
+      }
+    } catch (error) {
+      console.warn("[FOCALS][AUTH] Failed to resolve Supabase session", error?.message || error);
+    }
+  }
+
+  if (recovered) {
+    await setAuthInStorage({ userId, accessToken });
+  }
+
+  console.log("[FOCALS][AUTH] Storage state", {
+    hasUserId: !!userId,
+    hasToken: !!accessToken,
+    tokenIsJwt,
+  });
+
   return {
     userId,
     accessToken,
-    tokenIsJwt: isJwt(accessToken),
+    tokenIsJwt,
     lastLogin: stored?.focals_last_login || null,
   };
 };
@@ -324,7 +406,18 @@ async function relayLiveMessageToSupabase(payload) {
 
   const { userId, accessToken, tokenIsJwt } = await getAuthFromStorage();
   if (!userId) {
-    console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage");
+    if (!hasLoggedMissingLiveAuth) {
+      hasLoggedMissingLiveAuth = true;
+      const storageKeys = await chrome.storage.local
+        .get(null)
+        .then((data) => Object.keys(data || {}))
+        .catch(() => []);
+      console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage", {
+        storageKeys,
+      });
+    } else {
+      console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage");
+    }
     triggerAuthRecovery("live-message-missing-user");
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
@@ -1931,6 +2024,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       return true;
     }
+    case "FOCALS_DEBUG_DUMP_STORAGE_KEYS": {
+      chrome.storage.local
+        .get(null)
+        .then((data) => {
+          sendResponse({ ok: true, storageKeys: Object.keys(data || {}) });
+        })
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error?.message || "Failed to read storage keys",
+          });
+        });
+      return true;
+    }
     case "API_REQUEST": {
       const { endpoint, method = "GET", params, body, headers } = message;
       if (!endpoint) {
@@ -2452,12 +2559,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  console.log("[Focals] Message externe reçu:", {
+  const senderOrigin = resolveSenderOrigin(sender);
+  const senderUrl = sender?.url || null;
+  console.log("[FOCALS][AUTH] Message externe reçu", {
     type: message?.type,
-    senderUrl: sender?.url,
-    senderOrigin: sender?.origin,
-    senderId: sender?.id,
+    senderOrigin,
+    senderUrl,
   });
+
+  if (!isAllowedExternalOrigin(senderOrigin)) {
+    console.warn("❌ [FOCALS][AUTH] Login message rejected", {
+      reason: "unauthorized_origin",
+      senderOrigin,
+      senderUrl,
+      type: message?.type,
+    });
+    sendResponse({ success: false, error: "unauthorized_origin" });
+    return false;
+  }
 
   if (
     IS_DEV &&
@@ -2479,22 +2598,36 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     return true;
   }
 
-  if (message?.type === "FOCALS_LOGIN_SUCCESS" && message?.userId) {
+  if (message?.type === "FOCALS_LOGIN_SUCCESS") {
+    if (!message?.userId) {
+      console.warn("❌ [FOCALS][AUTH] Login message rejected", {
+        reason: "missing_user_id",
+        senderOrigin,
+        senderUrl,
+      });
+      sendResponse({ success: false, error: "missing_user_id" });
+      return false;
+    }
+
     const accessToken = message?.accessToken || message?.access_token || null;
-    chrome.storage.local.set(
-      {
-        focals_user_id: message.userId,
-        focals_last_login: new Date().toISOString(),
-        ...(accessToken ? { focals_sb_access_token: accessToken } : {}),
-      },
-      () => {
-        console.log("✅ [FOCALS][AUTH] Auth automatisée: ID utilisateur sauvegardé");
+    setAuthInStorage({ userId: message.userId, accessToken })
+      .then(() => {
+        const prefix = String(message.userId).slice(0, 8);
+        console.log(`✅ [FOCALS][AUTH] Auth automatisée ${prefix}`);
         if (accessToken) {
           console.log("✅ [FOCALS][AUTH] Token Supabase sauvegardé");
         }
         sendResponse({ success: true });
-      }
-    );
+      })
+      .catch((error) => {
+        console.warn("❌ [FOCALS][AUTH] Login message rejected", {
+          reason: error?.message || "storage_write_failed",
+        });
+        sendResponse({
+          success: false,
+          error: error?.message || "storage_write_failed",
+        });
+      });
     return true;
   }
 
