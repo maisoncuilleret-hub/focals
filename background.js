@@ -2362,57 +2362,7 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
   if (message?.type === "SCRAPE_PROFILE") {
     console.log("[Focals] SCRAPE_PROFILE reçu:", message.linkedinUrl);
-
-    (async () => {
-      try {
-        const { linkedinUrl } = message;
-
-        if (!linkedinUrl) {
-          sendResponse({ success: false, error: "URL LinkedIn manquante" });
-          return;
-        }
-
-        const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
-        console.log("[Focals] Onglet créé:", tab.id);
-
-        await waitForComplete(tab.id);
-        console.log("[Focals] Page chargée");
-
-        await wait(2500);
-
-        await ensureContentScript(tab.id);
-        await wait(500);
-
-        console.log("[Focals] Demande GET_CANDIDATE_DATA...");
-        const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
-
-        await chrome.tabs.remove(tab.id);
-        console.log("[Focals] Onglet fermé");
-
-        if (response?.error) {
-          console.error("[Focals] Erreur scraping:", response.error);
-          sendResponse({ success: false, error: response.error });
-          return;
-        }
-
-        if (!response?.data) {
-          console.error("[Focals] Aucune donnée récupérée");
-          sendResponse({ success: false, error: "Aucune donnée récupérée" });
-          return;
-        }
-
-        console.log("[Focals] Données scrapées:", response.data.name || response.data.fullName);
-
-        await saveProfileToSupabaseExternal(response.data);
-        console.log("[Focals] ✅ Profil sauvegardé");
-
-        sendResponse({ success: true, profile: response.data });
-      } catch (error) {
-        console.error("[Focals] ❌ Erreur SCRAPE_PROFILE:", error);
-        sendResponse({ success: false, error: error.message });
-      }
-    })();
-
+    handleScrapeRequest(message.linkedinUrl, sendResponse);
     return true;
   }
 
@@ -2477,6 +2427,54 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 
   return false;
 });
+
+async function handleScrapeRequest(linkedinUrl, sendResponse) {
+  try {
+    if (!linkedinUrl) {
+      sendResponse({ success: false, error: "URL LinkedIn manquante" });
+      return;
+    }
+
+    const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
+    console.log("[Focals] Onglet créé:", tab.id);
+
+    await waitForComplete(tab.id);
+    console.log("[Focals] Page chargée");
+
+    await wait(2500);
+
+    await ensureContentScript(tab.id);
+    await wait(500);
+
+    console.log("[Focals] Demande GET_CANDIDATE_DATA...");
+    const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
+
+    await chrome.tabs.remove(tab.id);
+    console.log("[Focals] Onglet fermé");
+
+    if (response?.error) {
+      console.error("[Focals] Erreur scraping:", response.error);
+      sendResponse({ success: false, error: response.error });
+      return;
+    }
+
+    if (!response?.data) {
+      console.error("[Focals] Aucune donnée récupérée");
+      sendResponse({ success: false, error: "Aucune donnée récupérée" });
+      return;
+    }
+
+    console.log("[Focals] Données scrapées:", response.data.name || response.data.fullName);
+
+    await saveProfileToSupabaseExternal(response.data);
+    console.log("[Focals] ✅ Profil sauvegardé");
+
+    sendResponse({ success: true, profile: response.data });
+  } catch (error) {
+    console.error("[Focals] ❌ Erreur SCRAPE_PROFILE:", error);
+    sendResponse({ success: false, error: error.message });
+  }
+}
 
 console.log("[Focals] External message handlers registered");
 
