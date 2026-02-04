@@ -54,6 +54,11 @@ const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
 const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const FOCALS_THREAD_SYNC_THROTTLE_MS = 30_000;
+const AUTH_RECOVERY_LOG_COOLDOWN_MS = 30_000;
+const AUTH_RECOVERY_TAB_COOLDOWN_MS = 2 * 60 * 1000;
+const FOCALS_APP_BASE_URL = "https://mvp-recrutement.lovable.app";
+let lastAuthRecoveryLogAt = 0;
+let lastAuthRecoveryTabAt = 0;
 
 const isJwt = (token) =>
   typeof token === "string" &&
@@ -110,6 +115,55 @@ const getAuthFromStorage = async () => {
     tokenIsJwt: isJwt(accessToken),
     lastLogin: stored?.focals_last_login || null,
   };
+};
+
+const buildAuthDebugPayload = async () => {
+  const { userId, accessToken, tokenIsJwt, lastLogin } = await getAuthFromStorage();
+  return {
+    ok: true,
+    hasUserId: !!userId,
+    hasToken: !!accessToken,
+    userIdPrefix: userId ? String(userId).slice(0, 8) : null,
+    tokenIsJwt,
+    lastLogin: lastLogin || null,
+  };
+};
+
+const buildStorageDebugPayload = async () => {
+  const data = await chrome.storage.local.get(null);
+  const authPayload = await buildAuthDebugPayload();
+  const safeStorage = { ...data };
+  if (safeStorage?.focals_user_id) {
+    safeStorage.focals_user_id = String(safeStorage.focals_user_id).slice(0, 8);
+  }
+  if (safeStorage?.focals_sb_access_token) {
+    safeStorage.focals_sb_access_token = String(safeStorage.focals_sb_access_token).slice(0, 8);
+  }
+  return {
+    ...authPayload,
+    storageKeys: Object.keys(data || {}),
+    storage: safeStorage,
+  };
+};
+
+const triggerAuthRecovery = async (reason) => {
+  const now = Date.now();
+  if (now - lastAuthRecoveryLogAt >= AUTH_RECOVERY_LOG_COOLDOWN_MS) {
+    lastAuthRecoveryLogAt = now;
+    console.warn("[FOCALS][AUTH] Missing auth, triggering recovery", { reason });
+  }
+
+  if (now - lastAuthRecoveryTabAt < AUTH_RECOVERY_TAB_COOLDOWN_MS) {
+    return;
+  }
+  lastAuthRecoveryTabAt = now;
+
+  const loginUrl = `${FOCALS_APP_BASE_URL.replace(/\/$/, "")}/login?from=extension`;
+  try {
+    await chrome.tabs.create({ url: loginUrl, active: true });
+  } catch (error) {
+    console.warn("[FOCALS][AUTH] Failed to open login tab", error?.message || error);
+  }
 };
 
 function debugLog(stage, details) {
@@ -271,6 +325,7 @@ async function relayLiveMessageToSupabase(payload) {
   const { userId, accessToken, tokenIsJwt } = await getAuthFromStorage();
   if (!userId) {
     console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage");
+    triggerAuthRecovery("live-message-missing-user");
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
   const headers = {
@@ -1864,16 +1919,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     case "FOCALS_DEBUG_AUTH_STATE": {
-      getAuthFromStorage()
-        .then(({ userId, accessToken, tokenIsJwt, lastLogin }) => {
-          sendResponse({
-            ok: true,
-            hasUserId: !!userId,
-            hasToken: !!accessToken,
-            userIdPrefix: userId ? String(userId).slice(0, 8) : null,
-            tokenIsJwt,
-            lastLogin: lastLogin || null,
-          });
+      buildAuthDebugPayload()
+        .then((payload) => {
+          sendResponse(payload);
         })
         .catch((error) => {
           sendResponse({
@@ -1914,6 +1962,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ["focals_user_id", "focals_sb_access_token", "focals_last_sync_by_thread_key"],
         async (data) => {
           if (!data?.focals_user_id) {
+            triggerAuthRecovery("sync-missing-user");
             sendResponse({
               ok: false,
               status: 401,
@@ -2296,6 +2345,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           if (!userId) {
             console.error("[Focals][BG] Missing userId for GENERATE_REPLY");
+            triggerAuthRecovery("generate-reply-missing-user");
             sendResponse({ success: false, error: "Missing userId" });
             return;
           }
@@ -2408,6 +2458,26 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
     senderOrigin: sender?.origin,
     senderId: sender?.id,
   });
+
+  if (
+    IS_DEV &&
+    (message?.type === "FOCALS_DEBUG_AUTH_STATE" ||
+      message?.type === "FOCALS_DEBUG_DUMP_STORAGE")
+  ) {
+    const handler =
+      message?.type === "FOCALS_DEBUG_DUMP_STORAGE"
+        ? buildStorageDebugPayload
+        : buildAuthDebugPayload;
+    handler()
+      .then((payload) => sendResponse(payload))
+      .catch((error) => {
+        sendResponse({
+          ok: false,
+          error: error?.message || "Failed to read auth state",
+        });
+      });
+    return true;
+  }
 
   if (message?.type === "FOCALS_LOGIN_SUCCESS" && message?.userId) {
     const accessToken = message?.accessToken || message?.access_token || null;
