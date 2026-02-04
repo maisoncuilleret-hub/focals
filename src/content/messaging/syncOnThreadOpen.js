@@ -102,10 +102,6 @@ export function initLinkedInThreadSync({
 
   const runSync = async (threadUrl) => {
     if (!threadUrl || !isThreadUrl(threadUrl)) return;
-    if (await shouldThrottle(threadUrl)) {
-      log("throttled threadUrl=", threadUrl);
-      return;
-    }
 
     const extractor = await loadExtractor();
     if (!extractor) {
@@ -126,6 +122,24 @@ export function initLinkedInThreadSync({
     const messages = payload?.messages || [];
     if (!payload?.candidate || !payload?.me || !Array.isArray(messages) || !messages.length) {
       warn("invalid payload");
+      return;
+    }
+
+    let userId = null;
+    try {
+      const authData = await chrome.storage.local.get(["focals_user_id"]);
+      userId = authData?.focals_user_id || null;
+    } catch (error) {
+      warn("auth storage read failed", error?.message || error);
+    }
+
+    if (!userId) {
+      warn("AUTH_MISSING: skip throttle + skip sync");
+      return;
+    }
+
+    if (await shouldThrottle(threadUrl)) {
+      log("throttled threadUrl=", threadUrl);
       return;
     }
 

@@ -24,12 +24,8 @@
   ],
   "externally_connectable": {
     "matches": [
-      "https://app.focals.ai/*",
-      "https://focals.ai/*",
-      "https://*.focals.ai/*",
       "https://mvp-recrutement.lovable.app/*",
       "https://*.lovable.app/*",
-      "https://*.lovableproject.com/*",
       "http://localhost:*/*",
       "https://localhost:*/*"
     ]
