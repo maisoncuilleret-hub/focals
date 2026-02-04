@@ -383,17 +383,42 @@ async function relayLiveMessageToSupabase(payload) {
 
   if (cleanText.length < 2) return;
 
-  const normalizeConversationUrn = (value) => {
-    const fallback = "urn:li:msg_conversation:unknown";
-    if (!value) return fallback;
-    const raw = String(value).trim();
-    if (!raw) return fallback;
-    if (raw.startsWith("urn:li:msg_conversation:")) return raw;
-    if (raw.startsWith("msg_conversation:")) return `urn:li:${raw}`;
-    if (raw.includes("msg_conversation:")) {
-      const idx = raw.indexOf("msg_conversation:");
-      return `urn:li:${raw.slice(idx)}`;
+  const extractProfileId = (url) => {
+    if (!url) return null;
+    try {
+      const parsed = new URL(url);
+      const match = parsed.pathname.match(/\/in\/([^/]+)/i);
+      return match?.[1] || null;
+    } catch {
+      return null;
     }
+  };
+
+  const extractThreadKey = (value) => {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const urlMatch = raw.match(/\/messaging\/thread\/([^/?#]+)/i);
+    if (urlMatch?.[1]) return urlMatch[1];
+    if (/^2-[\w-]+$/i.test(raw)) return raw;
+    return null;
+  };
+
+  const normalizeConversationUrn = (value, profileUrl) => {
+    const fallback = "urn:li:msg_conversation:unknown";
+    const raw = String(value || "").trim();
+    if (raw) {
+      if (raw.startsWith("urn:li:msg_conversation:")) return raw;
+      if (raw.startsWith("msg_conversation:")) return `urn:li:${raw}`;
+      if (raw.includes("msg_conversation:")) {
+        const idx = raw.indexOf("msg_conversation:");
+        return `urn:li:${raw.slice(idx)}`;
+      }
+      const threadKey = extractThreadKey(raw);
+      if (threadKey) return `urn:li:msg_conversation:${threadKey}`;
+    }
+    const profileId = extractProfileId(profileUrl);
+    if (profileId) return `urn:li:msg_conversation:ext_${profileId}`;
     return fallback;
   };
 
@@ -428,17 +453,40 @@ async function relayLiveMessageToSupabase(payload) {
     matchName = "LinkedIn User";
   }
 
+  const conversationUrn = normalizeConversationUrn(
+    conversation_urn || payload?.conversationUrn || payload?.thread_key,
+    profileUrl
+  );
+
   const cleanPayload = {
     text: cleanText,
     match_name: matchName,
     profile_url: profileUrl,
-    conversation_urn: normalizeConversationUrn(conversation_urn || payload?.conversationUrn),
+    conversation_urn: conversationUrn,
     type: type || "linkedin_live",
     received_at: new Date().toISOString(),
   };
 
+  const DEDUP_TTL_MS = 30_000;
+  const DEDUP_BUCKET_MS = 2_000;
+  if (!relayLiveMessageToSupabase.recentMessages) {
+    relayLiveMessageToSupabase.recentMessages = new Map();
+  }
+  const recentMessages = relayLiveMessageToSupabase.recentMessages;
+  const bucket = Math.floor(Date.now() / DEDUP_BUCKET_MS);
+  const dedupKey = `${conversationUrn}::${cleanText}::${bucket}`;
+  const lastSeenAt = recentMessages.get(dedupKey);
+  if (lastSeenAt && Date.now() - lastSeenAt < DEDUP_TTL_MS) {
+    return { ok: true, status: 200, data: "duplicate_skipped" };
+  }
+  recentMessages.set(dedupKey, Date.now());
+  for (const [key, ts] of recentMessages.entries()) {
+    if (Date.now() - ts > DEDUP_TTL_MS) {
+      recentMessages.delete(key);
+    }
+  }
+
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
-  console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
   const { userId, accessToken, tokenIsJwt } = await getAuthFromStorage();
   if (!userId) {
