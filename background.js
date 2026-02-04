@@ -53,6 +53,9 @@ const expLog = (...a) => console.log(EXP_TAG, ...a);
 const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
 const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const LOVABLE_SESSION_STORAGE_KEY = "focals_supabase_session";
+const LOVABLE_AUTH_STORAGE_KEY = "sb-ppawceknsedxaejpeylu-auth-token";
+const LOVABLE_ACCESS_TOKEN_KEYS = ["sb_access_token", "supabase_access_token"];
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -269,7 +272,7 @@ const getLastMessagesForBackend = (messages, limit = 3) => {
   return sorted.slice(-limit);
 };
 
-function withStorage(area = "sync") {
+function withStorage(area = "local") {
   return {
     async get(keys) {
       return new Promise((resolve) => {
@@ -303,6 +306,60 @@ function withStorage(area = "sync") {
     },
   };
 }
+
+const parseJson = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const decodeJwtUserId = (token) => {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const normalized = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  try {
+    const payload = JSON.parse(atob(padded));
+    return payload?.sub || payload?.user_id || null;
+  } catch {
+    return null;
+  }
+};
+
+const extractLovableUserId = (storage) => {
+  const session =
+    parseJson(storage?.[LOVABLE_SESSION_STORAGE_KEY]) ||
+    parseJson(storage?.[LOVABLE_AUTH_STORAGE_KEY]) ||
+    parseJson(storage?.session);
+  const fromSession =
+    session?.user?.id ||
+    decodeJwtUserId(session?.access_token || session?.accessToken || "");
+  if (fromSession) return fromSession;
+  const accessToken = LOVABLE_ACCESS_TOKEN_KEYS.map((key) => storage?.[key]).find(Boolean);
+  return decodeJwtUserId(accessToken);
+};
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const localStore = withStorage("local");
+  const stored = await localStore.get([
+    "focals_user_id",
+    LOVABLE_SESSION_STORAGE_KEY,
+    LOVABLE_AUTH_STORAGE_KEY,
+    "session",
+    ...LOVABLE_ACCESS_TOKEN_KEYS,
+  ]);
+  if (stored?.focals_user_id) return;
+  const userId = extractLovableUserId(stored);
+  if (userId) {
+    await localStore.set({ focals_user_id: userId });
+  }
+});
 
 const buildDetailsCacheKey = (profileKey) => `focals_details_cache:${profileKey}`;
 const isCacheFresh = (ts) => Number.isFinite(ts) && Date.now() - ts < DETAILS_CACHE_TTL_MS;
@@ -358,7 +415,7 @@ async function saveProfileToSupabase(profile) {
 }
 
 async function askGPT(prompt, { system, temperature = 0.2, maxTokens = 500 } = {}) {
-  const syncStore = withStorage("sync");
+  const syncStore = withStorage("local");
   const stored = await syncStore.get(STORAGE_KEYS.apiKey);
   const apiKey = stored?.[STORAGE_KEYS.apiKey];
   if (!apiKey) {
@@ -1791,7 +1848,7 @@ async function saveProfileToSupabaseExternal(profileData) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const syncStore = withStorage("sync");
+  const syncStore = withStorage("local");
   const localStore = withStorage("local");
 
   switch (message?.type) {

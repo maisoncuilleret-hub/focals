@@ -67,6 +67,8 @@ const cleanUrl = (url) => {
   }
 };
 
+const isTechnicalLinkedinUrl = (url) => /ACoA/i.test(url || "");
+
 const idFromInUrl = (href) => {
   if (!href) return null;
   const match = href.match(/linkedin\.com\/in\/([^/?#]+)/i) ||
@@ -374,19 +376,26 @@ export const extractLinkedinConversation = (root, options = {}) => {
 
   let candidateTechnicalUrl = null;
   let myTechnicalUrl = null;
+  const headerUrl = header.linkedinPublicUrl
+    ? cleanUrl(header.linkedinPublicUrl)
+    : null;
+  const technicalHrefs = uniqHrefs.filter((link) => isTechnicalLinkedinUrl(link));
   if (uniqHrefs.length >= 2) {
-    const headerUrl = header.linkedinPublicUrl
-      ? cleanUrl(header.linkedinPublicUrl)
-      : null;
-    candidateTechnicalUrl =
-      (headerUrl && uniqHrefs.includes(headerUrl) && headerUrl) || uniqHrefs[0];
-    myTechnicalUrl = uniqHrefs.find((href) => href !== candidateTechnicalUrl) || null;
+    if (technicalHrefs.length) {
+      candidateTechnicalUrl =
+        (headerUrl && technicalHrefs.includes(headerUrl) && headerUrl) || technicalHrefs[0];
+      myTechnicalUrl = uniqHrefs.find((href) => href !== candidateTechnicalUrl) || null;
+    } else {
+      candidateTechnicalUrl =
+        (headerUrl && uniqHrefs.includes(headerUrl) && headerUrl) || uniqHrefs[0];
+      myTechnicalUrl = uniqHrefs.find((href) => href !== candidateTechnicalUrl) || null;
+    }
   } else if (uniqHrefs.length === 1) {
-    candidateTechnicalUrl = cleanUrl(header.linkedinPublicUrl) || uniqHrefs[0];
+    candidateTechnicalUrl = technicalHrefs[0] || headerUrl || uniqHrefs[0];
     myTechnicalUrl = null;
     warnings.push({ code: "MISSING_MY_TECH_URL" });
   } else {
-    candidateTechnicalUrl = cleanUrl(header.linkedinPublicUrl) || null;
+    candidateTechnicalUrl = headerUrl || null;
     myTechnicalUrl = null;
     warnings.push({ code: "MISSING_MY_TECH_URL" });
   }
