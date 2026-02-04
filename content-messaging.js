@@ -313,13 +313,21 @@ console.log(
     };
 
     let syncModulePromise = null;
+    let syncImportFailedLogged = false;
     const loadSyncModule = () => {
       if (syncModulePromise) return syncModulePromise;
       const moduleUrl = chrome.runtime.getURL(
         "src/content/messaging/syncOnThreadOpen.js"
       );
       syncModulePromise = import(moduleUrl).catch((err) => {
-        warn("SYNC_IMPORT_FAILED", err?.message || err);
+        if (!syncImportFailedLogged) {
+          syncImportFailedLogged = true;
+          warn("SYNC_IMPORT_FAILED", {
+            message: err?.message || err,
+            stack: err?.stack,
+            url: moduleUrl,
+          });
+        }
         return null;
       });
       return syncModulePromise;
