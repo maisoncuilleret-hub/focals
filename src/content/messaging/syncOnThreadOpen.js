@@ -140,7 +140,14 @@ export function initLinkedInThreadSync({
       me: payload?.me?.fullName || payload?.me?.name || "unknown",
       messages: messages.length,
     });
-    const response = await sendSync({ threadUrl, payload });
+    const enrichedPayload = {
+      ...payload,
+      meta: {
+        ...(payload?.meta || {}),
+        href: payload?.meta?.href || threadUrl || window.location.href,
+      },
+    };
+    const response = await sendSync({ threadUrl, payload: enrichedPayload });
     if (response?.ok) {
       log(
         "status=",

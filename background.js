@@ -53,6 +53,64 @@ const expLog = (...a) => console.log(EXP_TAG, ...a);
 const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
 const detailsScrapeInFlight = new Map();
 const DETAILS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const FOCALS_THREAD_SYNC_THROTTLE_MS = 30_000;
+
+const isJwt = (token) =>
+  typeof token === "string" &&
+  token.length > 10 &&
+  /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/.test(token);
+
+const normalizePersonName = (name = "") => {
+  const raw = String(name || "");
+  if (!raw) return "";
+  const lines = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const blacklist = [
+    /g[ée]rer le prospect/i,
+    /le statut est/i,
+    /en activit[ée]/i,
+    /en ligne/i,
+    /voir le profil/i,
+    /voir plus/i,
+    /manage prospect/i,
+    /status is/i,
+    /active now/i,
+  ];
+  const firstValid = lines.find((line) => !blacklist.some((rule) => rule.test(line)));
+  if (!firstValid) return "";
+  return firstValid.slice(0, 80).trim();
+};
+
+const deriveThreadKey = (href = "") => {
+  const normalized = String(href || "").trim();
+  if (!normalized) return "unknown";
+  const match = normalized.match(/\/messaging\/thread\/([^/?#]+)/i);
+  if (match?.[1]) return match[1];
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash = (hash << 5) - hash + normalized.charCodeAt(i);
+    hash |= 0;
+  }
+  return `h_${(hash >>> 0).toString(16)}`;
+};
+
+const getAuthFromStorage = async () => {
+  const stored = await chrome.storage.local.get([
+    "focals_user_id",
+    "focals_sb_access_token",
+    "focals_last_login",
+  ]);
+  const userId = stored?.focals_user_id || null;
+  const accessToken = stored?.focals_sb_access_token || null;
+  return {
+    userId,
+    accessToken,
+    tokenIsJwt: isJwt(accessToken),
+    lastLogin: stored?.focals_last_login || null,
+  };
+};
 
 function debugLog(stage, details) {
   if (!FOCALS_DEBUG) return;
@@ -210,20 +268,26 @@ async function relayLiveMessageToSupabase(payload) {
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
   console.log("🚀 PAYLOAD FINAL:", cleanPayload);
 
-  const { focals_user_id } = await chrome.storage.local.get("focals_user_id");
-  if (!focals_user_id) {
-    console.error("❌ Sync avorté : focals_user_id introuvable dans le storage");
+  const { userId, accessToken, tokenIsJwt } = await getAuthFromStorage();
+  if (!userId) {
+    console.error("❌ [RADAR] Sync avorté : focals_user_id introuvable dans le storage");
     return { ok: false, status: 401, error: "Missing focals_user_id" };
   }
   const headers = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${focals_user_id}`,
   };
+  if (accessToken && tokenIsJwt) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  console.log("🎯 [RADAR] Auth header ready", {
+    hasUserId: !!userId,
+    hasJwtToken: !!accessToken && tokenIsJwt,
+  });
 
   const response = await fetch(`${API_BASE_URL}/focals-incoming-message`, {
     method: "POST",
     headers,
-    body: JSON.stringify(cleanPayload),
+    body: JSON.stringify({ ...cleanPayload, user_id: userId }),
   });
   const responseBody = await response.text();
 
@@ -1795,6 +1859,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const localStore = withStorage("local");
 
   switch (message?.type) {
+    case "FOCALS_DEBUG_PING": {
+      sendResponse({ ok: true, version: chrome.runtime.getManifest().version });
+      return true;
+    }
+    case "FOCALS_DEBUG_AUTH_STATE": {
+      getAuthFromStorage()
+        .then(({ userId, accessToken, tokenIsJwt, lastLogin }) => {
+          sendResponse({
+            ok: true,
+            hasUserId: !!userId,
+            hasToken: !!accessToken,
+            userIdPrefix: userId ? String(userId).slice(0, 8) : null,
+            tokenIsJwt,
+            lastLogin: lastLogin || null,
+          });
+        })
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error?.message || "Failed to read auth state",
+          });
+        });
+      return true;
+    }
     case "API_REQUEST": {
       const { endpoint, method = "GET", params, body, headers } = message;
       if (!endpoint) {
@@ -1823,7 +1911,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "FOCALS_SYNC_LINKEDIN_THREAD": {
       const { threadUrl } = message || {};
       chrome.storage.local.get(
-        ["focals_user_id", "focals_sb_access_token"],
+        ["focals_user_id", "focals_sb_access_token", "focals_last_sync_by_thread_key"],
         async (data) => {
           if (!data?.focals_user_id) {
             sendResponse({
@@ -1850,13 +1938,52 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return;
           }
 
+          const href = threadUrl || payload?.meta?.href || null;
+          const threadKey = deriveThreadKey(href);
+          const lastSyncByThread =
+            data?.focals_last_sync_by_thread_key &&
+            typeof data.focals_last_sync_by_thread_key === "object"
+              ? data.focals_last_sync_by_thread_key
+              : {};
+          const lastSync = lastSyncByThread?.[threadKey] || 0;
+          if (Date.now() - lastSync < FOCALS_THREAD_SYNC_THROTTLE_MS) {
+            console.log("[FOCALS][SYNC] throttled", { threadKey, href });
+            sendResponse({
+              ok: true,
+              status: 202,
+              json: { throttled: true, threadKey },
+            });
+            return;
+          }
+
+          const normalizedCandidate = payload?.candidate
+            ? (() => {
+                const normalizedFullName = normalizePersonName(
+                  payload.candidate.fullName ||
+                    payload.candidate.name ||
+                    payload.candidate.firstName ||
+                    ""
+                );
+                return {
+                  ...payload.candidate,
+                  fullName: normalizedFullName || payload.candidate.fullName || payload.candidate.name || "",
+                };
+              })()
+            : payload?.candidate;
+
           const body = {
-            ...payload,
             user_id: data.focals_user_id,
-            threadUrl: threadUrl || payload.meta?.href || null,
+            candidate: normalizedCandidate,
+            me: payload?.me,
+            messages: payload?.messages || [],
+            meta: {
+              ...(payload?.meta || {}),
+              href,
+            },
           };
+
           const headers = { "Content-Type": "application/json" };
-          if (data.focals_sb_access_token) {
+          if (data.focals_sb_access_token && isJwt(data.focals_sb_access_token)) {
             headers.Authorization = `Bearer ${data.focals_sb_access_token}`;
           }
 
@@ -1876,16 +2003,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             } catch {
               json = { raw: text, parseError: true };
             }
-            const threadKey = threadUrl || payload.meta?.href || payload.meta?.threadUrl;
-            if (res.ok && threadKey) {
+            if (res.ok) {
+              lastSyncByThread[threadKey] = Date.now();
               await chrome.storage.local.set({
-                [`last_sync_${threadKey}`]: Date.now(),
+                focals_last_sync_by_thread_key: lastSyncByThread,
               });
             }
             console.log("[FOCALS][SYNC]", {
               hasUserId: !!data.focals_user_id,
               hasToken: !!data.focals_sb_access_token,
+              tokenIsJwt: isJwt(data.focals_sb_access_token),
               messagesCount: payload.messages?.length,
+              metaHref: href,
               status: res.status,
             });
             sendResponse({ ok: res.ok, status: res.status, json });
@@ -2273,16 +2402,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  console.log("[Focals] Message externe reçu:", message?.type, "depuis:", sender?.origin);
+  console.log("[Focals] Message externe reçu:", {
+    type: message?.type,
+    senderUrl: sender?.url,
+    senderOrigin: sender?.origin,
+    senderId: sender?.id,
+  });
 
   if (message?.type === "FOCALS_LOGIN_SUCCESS" && message?.userId) {
+    const accessToken = message?.accessToken || message?.access_token || null;
     chrome.storage.local.set(
       {
         focals_user_id: message.userId,
         focals_last_login: new Date().toISOString(),
+        ...(accessToken ? { focals_sb_access_token: accessToken } : {}),
       },
       () => {
-        console.log("✅ Auth automatisée: ID utilisateur sauvegardé");
+        console.log("✅ [FOCALS][AUTH] Auth automatisée: ID utilisateur sauvegardé");
+        if (accessToken) {
+          console.log("✅ [FOCALS][AUTH] Token Supabase sauvegardé");
+        }
         sendResponse({ success: true });
       }
     );
