@@ -62,8 +62,12 @@ export function initLinkedInThreadSync({
   };
 
   const sendSync = async ({ threadUrl, payload, attempt = 0 }) => {
-    if (!payload?.messages || !Array.isArray(payload.messages)) {
-      warn("[FOCALS] Invalid payload - missing messages array");
+    if (
+      !payload?.messages ||
+      !Array.isArray(payload.messages) ||
+      payload.messages.length === 0
+    ) {
+      warn("[FOCALS] Invalid payload - messages array required");
       return { ok: false, error: "Invalid payload: missing messages array" };
     }
 
