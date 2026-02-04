@@ -2336,7 +2336,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
+// ===== HANDLERS MESSAGES EXTERNES (Fusionnés et Uniques) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   console.log("📥 Message externe reçu de :", sender.url, "Type:", message?.type);
 
@@ -2476,29 +2476,4 @@ async function handleScrapeRequest(linkedinUrl, sendResponse) {
   }
 }
 
-console.log("[Focals] External message handlers registered");
-
-// Écoute les messages venant de ton app Lovable (localhost ou app.lovable.app)
-chrome.runtime.onMessageExternal.addListener(
-  (message, sender, sendResponse) => {
-    console.log("📥 Message externe reçu de :", sender.url);
-
-    if (message.type === "FOCALS_LOGIN_SUCCESS" && message.userId) {
-      // On sauvegarde l'ID utilisateur de façon permanente
-      chrome.storage.local.set(
-        {
-          focals_user_id: message.userId,
-          focals_last_login: new Date().toISOString(),
-        },
-        () => {
-          console.log("✅ Auth automatisée : ID utilisateur sauvegardé.");
-          sendResponse({
-            success: true,
-            message: "Extension synchronisée avec succès",
-          });
-        }
-      );
-      return true; // Garde le canal ouvert pour la réponse
-    }
-  }
-);
+console.log("[Focals] External message handlers registered and unified");
