@@ -2338,7 +2338,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ===== HANDLERS MESSAGES EXTERNES (depuis l'app web) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  console.log("[Focals] Message externe reçu:", message?.type, "depuis:", sender?.origin);
+  console.log("📥 Message externe reçu de :", sender.url, "Type:", message?.type);
+
+  if (message?.type === "FOCALS_LOGIN_SUCCESS" && message.userId) {
+    chrome.storage.local.set(
+      {
+        focals_user_id: message.userId,
+        focals_last_login: new Date().toISOString(),
+      },
+      () => {
+        console.log("✅ Auth automatisée : ID utilisateur sauvegardé.");
+        sendResponse({ success: true, message: "Extension synchronisée" });
+      }
+    );
+    return true;
+  }
 
   if (message?.type === "PING_TEST" || message?.type === "PING") {
     console.log("[Focals] PING reçu, réponse PONG");
