@@ -1867,609 +1867,92 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return false;
       }
 
-      fetchApi({ endpoint, method, params, body, headers })
-        .then((result) => {
-          if (!result?.ok) {
-            console.warn("[Focals][API_REQUEST] Request failed", {
-              endpoint,
-              status: result?.status,
-              error: result?.error,
-            });
-          }
-          sendResponse(result);
-        })
-        .catch((error) => {
-          console.error("[Focals][API_REQUEST] Network error", error);
-          sendResponse({ ok: false, error: error?.message || "API request failed" });
-        });
-
-      return true;
-    }
-    case "FOCALS_SYNC_LINKEDIN_THREAD": {
-      const { threadUrl } = message || {};
-      chrome.storage.local.get(
-        ["focals_user_id", "focals_sb_access_token"],
-        async (data) => {
-          if (!data?.focals_user_id) {
-            sendResponse({
-              ok: false,
-              status: 401,
-              error: "Missing focals_user_id",
-              json: { error: "Missing focals_user_id" },
-            });
-            return;
-          }
-
-          let payload;
-          if (message?.payload?.messages) {
-            payload = message.payload;
-          } else if (message?.payload?.payload?.messages) {
-            payload = message.payload.payload;
-          } else {
-            sendResponse({
-              ok: false,
-              status: 400,
-              error: "Invalid payload: missing messages",
-              json: { error: "Invalid payload: missing messages" },
-            });
-            return;
-          }
-
-          const body = {
-            ...payload,
-            user_id: data.focals_user_id,
-            threadUrl: threadUrl || payload.meta?.href || null,
-          };
-          const headers = { "Content-Type": "application/json" };
-          if (data.focals_sb_access_token) {
-            headers.Authorization = `Bearer ${data.focals_sb_access_token}`;
-          }
-
-          try {
-            const res = await fetch(
-              "https://ppawceknsedxaejpeylu.supabase.co/functions/v1/sync-linkedin-conversation",
-              {
-                method: "POST",
-                headers,
-                body: JSON.stringify(body),
-              }
-            );
-            const text = await res.text();
-            let json;
-            try {
-              json = JSON.parse(text);
-            } catch {
-              json = { raw: text, parseError: true };
-            }
-            const threadKey = threadUrl || payload.meta?.href || payload.meta?.threadUrl;
-            if (res.ok && threadKey) {
-              await chrome.storage.local.set({
-                [`last_sync_${threadKey}`]: Date.now(),
-              });
-            }
-            console.log("[FOCALS][SYNC]", {
-              hasUserId: !!data.focals_user_id,
-              hasToken: !!data.focals_sb_access_token,
-              messagesCount: payload.messages?.length,
-              status: res.status,
-            });
-            sendResponse({ ok: res.ok, status: res.status, json });
-          } catch (error) {
-            console.warn("[FOCALS][SYNC] ERROR", error?.message || error);
-            sendResponse({
-              ok: false,
-              status: 0,
-              error: error?.message || "Sync failed",
-              json: { error: error?.message || "Sync failed" },
-            });
-          }
-        }
-      );
-      return true;
-    }
-    case "NEW_LIVE_MESSAGE": {
-      const payload = message?.data || null;
-      if (!payload) {
-        sendResponse({ ok: false, error: "Missing live message payload" });
-        return false;
-      }
-
-      console.log("🎯 [RADAR] Incoming live relay :", payload?.text);
-      relayLiveMessageToSupabase(payload)
-        .then((result) => {
-          console.log("🎯 [RADAR] Live message synced to Supabase");
-          sendResponse(result);
-        })
-        .catch((err) => {
-          console.error("🎯 [RADAR] Live relay failed", err?.message || err);
-          sendResponse({ ok: false, error: err?.message || "Relay failed" });
-        });
-      return true;
-    }
-    case "FOCALS_INCOMING_RELAY": {
-      const payload = message?.payload || null;
-      if (!payload) {
-        sendResponse({ ok: false, error: "Missing incoming relay payload" });
-        return false;
-      }
-
-      console.log("🎯 [RADAR] Incoming network/dom relay :", payload?.text);
-      relayLiveMessageToSupabase(payload)
-        .then((result) => {
-          console.log("🎯 [RADAR] Incoming message synced to Supabase");
-          sendResponse(result);
-        })
-        .catch((err) => {
-          console.error("🎯 [RADAR] Incoming relay failed", err?.message || err);
-          sendResponse({ ok: false, error: err?.message || "Relay failed" });
-        });
-      return true;
-    }
-    case "BOUNCER_REQUEST": {
-      const { endpoint, options = {} } = message || {};
-      if (!endpoint) {
-        sendResponse({ ok: false, error: "Missing endpoint" });
-        return false;
-      }
-
-      const { method = "GET", headers = {}, body, params } = options;
-      let parsedBody = body;
-      if (typeof body === "string") {
-        try {
-          parsedBody = JSON.parse(body);
-        } catch (e) {
-          parsedBody = body;
-        }
-      }
-
-      fetchApi({ endpoint, method, headers, body: parsedBody, params })
-        .then((result) => sendResponse(result))
-        .catch((error) => sendResponse({ ok: false, error: error?.message || "Local request failed" }));
-      return true;
-    }
-    case "FOCALS_SCRAPE_PROFILE_URL": {
-      const { url } = message || {};
-      if (!url) {
-        sendResponse({ ok: false, error: "Missing URL" });
-        return false;
-      }
-
-      chrome.tabs.create({ url, active: false }, (tab) => {
-        if (chrome.runtime.lastError || !tab?.id) {
-          sendResponse({
-            ok: false,
-            error: chrome.runtime.lastError?.message || "Failed to open tab",
-          });
-          return;
-        }
-        sendResponse({ ok: true, tabId: tab.id });
-      });
-      return true;
-    }
-    case "FOCALS_SCRAPE_DETAILS_EXPERIENCE": {
-      const { detailsUrl, profileKey, reason } = message || {};
-      if (!detailsUrl) {
-        sendResponse({ ok: false, error: "Missing detailsUrl" });
-        return false;
-      }
-
-      scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reason)
-        .then((experiences) => sendResponse({ ok: true, experiences }))
-        .catch((error) =>
-          sendResponse({ ok: false, error: error?.message || "Details scrape failed" })
-        );
-      return true;
-    }
-    case "FOCALS_CLOSE_TAB": {
-      const { tabId } = message || {};
-      if (!tabId) {
-        sendResponse({ ok: false, error: "Missing tabId" });
-        return false;
-      }
-
-      chrome.tabs.remove(tabId, () => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-        sendResponse({ ok: true });
-      });
-
-      return true;
-    }
-    case "SUPABASE_SESSION": {
-      const session = message.session;
-      debugLog("BG_SUPABASE_SESSION", {
-        hasAccessToken: !!session?.access_token,
-        hasUser: !!session?.user,
-      });
-      chrome.storage.local.set({ focals_supabase_session: session }, () => {
-        debugLog("BG_SUPABASE_SESSION_STORED", true);
-        sendResponse({ ok: true });
-      });
-      return true;
-    }
-    case "FOCALS_GET_STATE": {
-      Promise.all([
-        syncStore.get([STORAGE_KEYS.tone, STORAGE_KEYS.templates, STORAGE_KEYS.selectedTemplate]),
-        syncStore.get([STORAGE_KEYS.jobs, STORAGE_KEYS.selectedJob]),
-      ]).then(([syncValues, jobValues]) => {
-        sendResponse({
-          tone: syncValues?.[STORAGE_KEYS.tone] || DEFAULT_TONE,
-          templates: syncValues?.[STORAGE_KEYS.templates] || [],
-          selectedTemplate: syncValues?.[STORAGE_KEYS.selectedTemplate] || null,
-          jobs: jobValues?.[STORAGE_KEYS.jobs] || [],
-          selectedJob: jobValues?.[STORAGE_KEYS.selectedJob] || null,
-        });
-      });
-      return true;
-    }
-    case "FOCALS_SET_TONE": {
-      syncStore.set({ [STORAGE_KEYS.tone]: message.value || DEFAULT_TONE }).then(() =>
-        sendResponse({ ok: true })
-      );
-      return true;
-    }
-    case "FOCALS_SAVE_TEMPLATE": {
-      syncStore.get([STORAGE_KEYS.templates]).then((values) => {
-        const templates = Array.isArray(values?.[STORAGE_KEYS.templates])
-          ? values[STORAGE_KEYS.templates]
-          : [];
-        const existingIndex = templates.findIndex((t) => t.id === message.template.id);
-        if (existingIndex >= 0) {
-          templates[existingIndex] = message.template;
-        } else {
-          templates.push(message.template);
-        }
-        syncStore
-          .set({
-            [STORAGE_KEYS.templates]: templates,
-            [STORAGE_KEYS.selectedTemplate]: message.template.id,
-          })
-          .then(() => sendResponse({ ok: true, templates }));
-      });
-      return true;
-    }
-    case "FOCALS_DELETE_TEMPLATE": {
-      syncStore.get([STORAGE_KEYS.templates]).then((values) => {
-        const templates = Array.isArray(values?.[STORAGE_KEYS.templates])
-          ? values[STORAGE_KEYS.templates]
-          : [];
-        const filtered = templates.filter((t) => t.id !== message.id);
-        syncStore
-          .set({ [STORAGE_KEYS.templates]: filtered })
-          .then(() => sendResponse({ ok: true, templates: filtered }));
-      });
-      return true;
-    }
-    case "FOCALS_SELECT_TEMPLATE": {
-      syncStore.set({ [STORAGE_KEYS.selectedTemplate]: message.id || null }).then(() =>
-        sendResponse({ ok: true })
-      );
-      return true;
-    }
-    case "FOCALS_SAVE_JOB": {
-      syncStore.get([STORAGE_KEYS.jobs]).then((values) => {
-        const jobs = Array.isArray(values?.[STORAGE_KEYS.jobs]) ? values[STORAGE_KEYS.jobs] : [];
-        const existingIndex = jobs.findIndex((j) => j.id === message.job.id);
-        if (existingIndex >= 0) {
-          jobs[existingIndex] = message.job;
-        } else {
-          jobs.push(message.job);
-        }
-        syncStore
-          .set({
-            [STORAGE_KEYS.jobs]: jobs,
-            [STORAGE_KEYS.selectedJob]: message.job.id,
-          })
-          .then(() => sendResponse({ ok: true, jobs }));
-      });
-      return true;
-    }
-    case "FOCALS_DELETE_JOB": {
-      syncStore.get([STORAGE_KEYS.jobs]).then((values) => {
-        const jobs = Array.isArray(values?.[STORAGE_KEYS.jobs]) ? values[STORAGE_KEYS.jobs] : [];
-        const filtered = jobs.filter((j) => j.id !== message.id);
-        syncStore
-          .set({ [STORAGE_KEYS.jobs]: filtered })
-          .then(() => sendResponse({ ok: true, jobs: filtered }));
-      });
-      return true;
-    }
-    case "FOCALS_SELECT_JOB": {
-      syncStore.set({ [STORAGE_KEYS.selectedJob]: message.id || null }).then(() =>
-        sendResponse({ ok: true })
-      );
-      return true;
-    }
-    case "FOCALS_ASK_GPT": {
-      askGPT(message.prompt, {
-        system: message.system,
-        temperature: message.temperature,
-        maxTokens: message.maxTokens,
-      }).then((result) => sendResponse(result));
-      return true;
-    }
-    case "FOCALS_SET_API_KEY": {
-      syncStore.set({ [STORAGE_KEYS.apiKey]: message.apiKey || "" }).then(() =>
-        sendResponse({ ok: true })
-      );
-      return true;
-    }
-    case "SAVE_PROFILE_TO_SUPABASE": {
-      (async () => {
-        try {
-          const result = await saveProfileToSupabase(message.profile);
-          sendResponse({ success: true, result });
-        } catch (err) {
-          debugLog("SUPABASE_SAVE_ERROR", err?.message || String(err));
-          sendResponse({ error: err?.message || "Enregistrement Supabase impossible" });
-        }
-      })();
-      return true;
-    }
-    case "GENERATE_REPLY": {
-      console.log("[Focals] Requête génération réponse:", message);
-
-      (async () => {
-        try {
-          const {
-            userId: userIdFromMessage,
-            conversation,
-            toneOverride,
-            promptReply,
-            jobId,
-            templateId,
-            messages: directMessages,
-            context = {},
-            customInstructions,
-            systemPromptOverride,
-          } = message;
-
-          const stored = await chrome.storage.local.get(["focals_user_id"]);
-          const userIdFromStorage = stored.focals_user_id;
-          const userId = userIdFromMessage || userIdFromStorage;
-
-          if (!userId) {
-            console.error("[Focals][BG] Missing userId for GENERATE_REPLY");
-            sendResponse({ success: false, error: "Missing userId" });
-            return;
-          }
-
-          const rawMessages = Array.isArray(directMessages)
-            ? directMessages
-            : Array.isArray(conversation?.messages)
-              ? conversation.messages
-              : Array.isArray(conversation)
-                ? conversation
-                : [];
-
-          const conversationMessages = getLastMessagesForBackend(rawMessages);
-
-          if (!conversationMessages.length) {
-            console.warn("[Focals][BG] Empty conversation in GENERATE_REPLY");
-            sendResponse({ success: false, error: "Empty conversation" });
-            return;
-          }
-
-          const normalizedSystemPrompt =
-            (context?.systemPromptOverride && context.systemPromptOverride.trim()) ||
-            (systemPromptOverride && systemPromptOverride.trim()) ||
-            (customInstructions && customInstructions.trim()) ||
-            (promptReply && promptReply.trim()) ||
-            null;
-
-          const payloadContext = { ...context };
-
-          if (conversation?.language && !payloadContext.language) {
-            payloadContext.language = conversation.language;
-          }
-          if (toneOverride && !payloadContext.tone) {
-            payloadContext.tone = toneOverride;
-          }
-          const candidateName =
-            payloadContext.candidateName ||
-            conversation?.candidateFirstName ||
-            conversation?.candidateName ||
-            null;
-          payloadContext.candidateName = candidateName;
-
-          if (normalizedSystemPrompt !== null) {
-            payloadContext.systemPromptOverride = normalizedSystemPrompt;
-          }
-
-          const payload = {
-            userId,
-            messages: conversationMessages,
-            context: payloadContext,
-            toneOverride,
-            jobId,
-            templateId,
-          };
-
-          console.log("[Focals][BG] Calling focals-generate-reply with payload", {
-            ...payload,
-            conversationLength: conversationMessages.length,
-            hasSystemPromptOverride: !!payloadContext.systemPromptOverride,
-          });
-
-          const apiResponse = await fetchApi({
-            endpoint: "focals-generate-reply",
-            method: "POST",
-            body: payload,
-          });
-
-          if (!apiResponse.ok) {
-            console.error("[Focals][BG] focals-generate-reply failed", apiResponse);
-            sendResponse({ success: false, error: apiResponse.error || "focals-generate-reply failed" });
-            return;
-          }
-
-          const data = apiResponse.data;
-          const replyText =
-            data?.reply?.text ||
-            (typeof data?.reply === "string" ? data.reply : null) ||
-            data?.replyText;
-
-          console.log("[Focals] Réponse générée:", replyText?.substring(0, 100) + "...");
-
-          sendResponse({
-            success: true,
-            replyText,
-            model: data.model,
-          });
-        } catch (error) {
-          console.error("[Focals] Erreur génération:", error);
-          sendResponse({
-            success: false,
-            error: error?.message || "Erreur réseau",
-          });
-        }
-      })();
-
-      return true;
-    }
-    default:
-      break;
-  }
-
-  return false;
-});
-
-// ===== HANDLERS MESSAGES EXTERNES (Fusionnés et Uniques) =====
+      // ===== HANDLERS MESSAGES EXTERNES (Version Unifiée & Stable) =====
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
   console.log("📥 Message externe reçu de :", sender.url, "Type:", message?.type);
 
+  // 1. LOGIN SUCCESS
   if (message?.type === "FOCALS_LOGIN_SUCCESS" && message.userId) {
-    chrome.storage.local.set(
-      {
-        focals_user_id: message.userId,
-        focals_last_login: new Date().toISOString(),
-      },
-      () => {
-        console.log("✅ Auth automatisée : ID utilisateur sauvegardé.");
-        sendResponse({ success: true, message: "Extension synchronisée" });
-      }
-    );
-    return true;
+    chrome.storage.local.set({
+      focals_user_id: message.userId,
+      focals_last_login: new Date().toISOString(),
+    }, () => {
+      console.log("✅ Auth automatisée : ID utilisateur sauvegardé.");
+      sendResponse({ success: true, message: "Extension synchronisée" });
+    });
+    return true; // Obligatoire car sendResponse est dans le callback
   }
 
+  // 2. PING
   if (message?.type === "PING_TEST" || message?.type === "PING") {
-    console.log("[Focals] PING reçu, réponse PONG");
     sendResponse({ status: "pong", version: chrome.runtime.getManifest().version });
-    return true;
+    return false; // Réponse immédiate
   }
 
+  // 3. SCRAPE UNIQUE
   if (message?.type === "SCRAPE_PROFILE") {
-    console.log("[Focals] SCRAPE_PROFILE reçu:", message.linkedinUrl);
     handleScrapeRequest(message.linkedinUrl, sendResponse);
-    return true;
+    return true; // Obligatoire car handleScrapeRequest est async
   }
 
+  // 4. BATCH SCRAPE
   if (message?.type === "SCRAPE_PROFILES_BATCH") {
-    console.log("[Focals] SCRAPE_PROFILES_BATCH reçu:", message.linkedinUrls?.length, "URLs");
-
     const { linkedinUrls } = message;
-
     if (!linkedinUrls || !Array.isArray(linkedinUrls) || linkedinUrls.length === 0) {
       sendResponse({ success: false, error: "URLs LinkedIn manquantes" });
-      return true;
+      return false;
     }
 
+    // ON RÉPOND TOUT DE SUITE (Pour libérer le site web)
     sendResponse({ success: true, status: "started", total: linkedinUrls.length });
 
+    // ON LANCE LA LOGIQUE EN ARRIÈRE-PLAN
     (async () => {
       let successCount = 0;
-      let errorCount = 0;
-
       for (let i = 0; i < linkedinUrls.length; i++) {
-        const url = linkedinUrls[i];
-        console.log(`[Focals] Batch scraping ${i + 1}/${linkedinUrls.length}: ${url}`);
-
         try {
+          const url = linkedinUrls[i];
           const tab = await chrome.tabs.create({ url, active: true });
-
           await waitForComplete(tab.id);
           await wait(2500);
-
           await ensureContentScript(tab.id);
-          await wait(500);
-
           const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
-
           await chrome.tabs.remove(tab.id);
-
           if (response?.data) {
             await saveProfileToSupabaseExternal(response.data);
             successCount++;
-            console.log(`[Focals] ✅ Profil ${i + 1} sauvegardé`);
-          } else {
-            errorCount++;
-            console.warn(`[Focals] ⚠️ Profil ${i + 1}: pas de données`);
           }
-
-          if (i < linkedinUrls.length - 1) {
-            const delay = 2000 + Math.random() * 2000;
-            console.log(`[Focals] Attente ${Math.round(delay)}ms avant prochain profil...`);
-            await wait(delay);
-          }
-        } catch (error) {
-          console.error(`[Focals] ❌ Erreur profil ${i + 1}:`, error);
-          errorCount++;
-        }
+        } catch (e) { console.error(`[Focals] Erreur batch profil ${i}:`, e); }
       }
-
-      console.log(`[Focals] Batch terminé: ${successCount} succès, ${errorCount} erreurs`);
+      console.log(`[Focals] Batch terminé: ${successCount} succès`);
     })();
 
-    return true;
+    return false; // ON A DÉJÀ RÉPONDU, donc false pour fermer le canal.
   }
 
   return false;
 });
 
+// FONCTION HELPER (Toujours en dehors du listener)
 async function handleScrapeRequest(linkedinUrl, sendResponse) {
   try {
     if (!linkedinUrl) {
       sendResponse({ success: false, error: "URL LinkedIn manquante" });
       return;
     }
-
     const tab = await chrome.tabs.create({ url: linkedinUrl, active: true });
-    console.log("[Focals] Onglet créé:", tab.id);
-
     await waitForComplete(tab.id);
-    console.log("[Focals] Page chargée");
-
     await wait(2500);
-
     await ensureContentScript(tab.id);
-    await wait(500);
-
-    console.log("[Focals] Demande GET_CANDIDATE_DATA...");
     const response = await chrome.tabs.sendMessage(tab.id, { type: "GET_CANDIDATE_DATA" });
-
     await chrome.tabs.remove(tab.id);
-    console.log("[Focals] Onglet fermé");
 
-    if (response?.error) {
-      console.error("[Focals] Erreur scraping:", response.error);
-      sendResponse({ success: false, error: response.error });
-      return;
-    }
-
-    if (!response?.data) {
-      console.error("[Focals] Aucune donnée récupérée");
+    if (response?.data) {
+      await saveProfileToSupabaseExternal(response.data);
+      sendResponse({ success: true, profile: response.data });
+    } else {
       sendResponse({ success: false, error: "Aucune donnée récupérée" });
-      return;
     }
-
-    console.log("[Focals] Données scrapées:", response.data.name || response.data.fullName);
-
-    await saveProfileToSupabaseExternal(response.data);
-    console.log("[Focals] ✅ Profil sauvegardé");
-
-    sendResponse({ success: true, profile: response.data });
   } catch (error) {
     console.error("[Focals] ❌ Erreur SCRAPE_PROFILE:", error);
     sendResponse({ success: false, error: error.message });
