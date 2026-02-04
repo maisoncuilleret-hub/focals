@@ -26,6 +26,7 @@
     "matches": [
       "https://mvp-recrutement.lovable.app/*",
       "https://*.lovable.app/*",
+      "https://*.lovableproject.com/*",
       "http://localhost:*/*",
       "https://localhost:*/*"
     ]

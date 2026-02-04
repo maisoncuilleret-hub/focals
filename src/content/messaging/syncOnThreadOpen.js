@@ -134,7 +134,12 @@ export function initLinkedInThreadSync({
     }
 
     if (!userId) {
-      warn("AUTH_MISSING: skip throttle + skip sync");
+      warn("AUTH_MISSING => request auth bridge");
+      chrome.runtime.sendMessage({
+        type: "FOCALS_AUTH_REQUIRED",
+        reason: "thread_sync",
+        href: window.location.href,
+      });
       return;
     }
 
