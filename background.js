@@ -1635,87 +1635,42 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
       const prepResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
           const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-          const getMain = () =>
-            document.querySelector('main[role="main"]') ||
-            document.querySelector("main") ||
-            document.querySelector('[role="main"]') ||
-            document.body;
-          const findExperienceSectionRoot = (main) => {
-            if (!main) return null;
-            const heading = Array.from(main.querySelectorAll("h1, h2, h3")).find((el) =>
-              /exp[ée]rience/i.test(clean(el.textContent))
-            );
-            if (!heading) return null;
-            return heading.closest("section");
-          };
-          const getTopLis = (scope) =>
-            Array.from(scope?.querySelectorAll("li") || []).filter((li) => {
-              if (li.closest(".pvs-entity__sub-components")) return false;
-              if (!li.querySelector("div.t-bold, span.t-bold")) return false;
-              if (clean(li.textContent).length <= 25) return false;
-              return true;
-            });
-          const getRoleLisCount = (scope) =>
-            Array.from(scope?.querySelectorAll(".pvs-entity__sub-components li") || []).length;
-          const waitForContent = async () => {
-            for (let i = 0; i < 40; i += 1) {
-              const main = getMain();
-              const section = findExperienceSectionRoot(main);
-              if (main && section) {
-                return { main, section };
-              }
-              await sleep(250);
-            }
-            const main = getMain();
-            const section = findExperienceSectionRoot(main);
-            return { main, section };
-          };
+          const main = document.querySelector("main,[role='main']") || document.body;
 
-          await waitForContent();
-          let topLisExp = 0;
-          let rolesCount = 0;
-          const steps = rand(12, 18);
-          for (let i = 0; i < steps; i += 1) {
-            window.scrollTo(0, document.body.scrollHeight);
-            window.dispatchEvent(
-              new WheelEvent("wheel", { deltaY: 900, bubbles: true, cancelable: true })
-            );
-            document.dispatchEvent(
-              new WheelEvent("wheel", { deltaY: 900, bubbles: true, cancelable: true })
-            );
-            await sleep(rand(250, 450));
-            const main = getMain();
-            const section = findExperienceSectionRoot(main);
-            const root = section || main;
-            if (root) {
-              topLisExp = getTopLis(root).length;
-              rolesCount = getRoleLisCount(root);
-              if (topLisExp >= 3 && rolesCount >= 3) break;
-            }
-          }
-          window.scrollTo(0, 0);
-          await sleep(250);
-          const main = getMain();
-          const section = findExperienceSectionRoot(main);
-          const liCountMain = main ? main.querySelectorAll("li").length : 0;
+          const root =
+            main.querySelector('[data-testid*="ExperienceDetailsSection"]') ||
+            main.querySelector('[componentkey*="ExperienceDetailsSection"]');
+
+          const items = root
+            ? [
+                ...root.querySelectorAll(
+                  '[componentkey^="entity-collection-item-"],[componentkey^="entity-collection-item--"]'
+                ),
+              ]
+            : [];
+
+          const descBoxes = root ? root.querySelectorAll('[data-testid="expandable-text-box"]').length : 0;
+
           return {
-            topLisExp,
-            rolesCount,
-            liCountMain,
+            hasMain: !!main,
+            hasRoot: !!root,
+            itemsCount: items.length,
+            descBoxes,
+            rootPreview: root ? clean(root.innerText).slice(0, 120) : null,
           };
         },
       });
       const prepPayload = Array.isArray(prepResults) ? prepResults?.[0]?.result : null;
       detailsLog(
-        "PREP_COUNTS",
+        "PREP_SDUI_PROBE",
         JSON.stringify(
           {
-            topLisExp: prepPayload?.topLisExp ?? null,
-            rolesCount: prepPayload?.rolesCount ?? null,
-            liCountMain: prepPayload?.liCountMain ?? null,
+            hasMain: prepPayload?.hasMain ?? null,
+            hasRoot: prepPayload?.hasRoot ?? null,
+            itemsCount: prepPayload?.itemsCount ?? null,
+            descBoxes: prepPayload?.descBoxes ?? null,
+            rootPreview: prepPayload?.rootPreview ?? null,
             profileKey,
           },
           null,
@@ -1726,492 +1681,59 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         target: { tabId: tab.id },
         func: () => {
           const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-          const collapseDouble = (s) => {
-            const t = clean(s);
-            if (!t) return "";
-            if (t.length % 2 === 0) {
-              const h = t.length / 2;
-              const a = t.slice(0, h),
-                b = t.slice(h);
-              if (a === b) return a;
-            }
-            const m = t.match(/^(.+?)\1$/);
-            if (m && m[1]) return clean(m[1]);
-            return t;
-          };
-          const monthToken =
-            /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|january|february|march|april|may|june|july|august|september|october|november|december)/i;
-          const looksLikeDates = (t) => {
-            const s = clean(t);
-            if (!s) return false;
-            const hasRange = /-|–|—| to /i.test(s);
-            if (!hasRange) return false;
-            const hasYear = /\b(19\d{2}|20\d{2})\b/.test(s);
-            const hasMonth = monthToken.test(s);
-            const hasPresent = /aujourd|present|présent/i.test(s);
-            return (hasMonth && (hasYear || hasPresent)) || (hasYear && hasRange);
-          };
-          // --- DESC HELPERS ---
-          function normalizeDescText(raw, { looksLikeDates, clean }) {
-            const text = (raw || "")
-              .replace(/\u00a0/g, " ")
-              .replace(/[ \t]+\n/g, "\n")
-              .replace(/\n{3,}/g, "\n\n")
-              .trim();
+          const main = document.querySelector("main,[role='main']") || document.body;
 
-            if (!text) return null;
+          const root =
+            main.querySelector('[data-testid*="ExperienceDetailsSection"]') ||
+            main.querySelector('[componentkey*="ExperienceDetailsSection"]');
 
-            const lines = text.split("\n").map(clean).filter(Boolean);
+          const items = root
+            ? [
+                ...root.querySelectorAll(
+                  '[componentkey^="entity-collection-item-"],[componentkey^="entity-collection-item--"]'
+                ),
+              ]
+            : [];
 
-            // filtre agressif: on ne garde PAS header/dates/location/contrat
-            const filtered = lines.filter((l) => {
-              if (!l) return false;
-              if (looksLikeDates(l)) return false;
-              if (/^logo de\s/i.test(l)) return false;
-              if (
-                /^\s*(cdi|cdd|stage|alternance|freelance|indépendant|independant|full[- ]time|part[- ]time|contract)\b/i.test(
-                  l
-                )
-              )
-                return false;
-              if (/^\d+\s+(mois|ans?)$/i.test(l)) return false;
-              return true;
-            });
+          const experiences = items
+            .map((el) => {
+              const ps = [...el.querySelectorAll("p")]
+                .map((p) => clean(p.innerText))
+                .filter(Boolean);
 
-            const out = filtered.join("\n\n").trim();
+              const title = ps[0] || "";
+              const company = ps[1] || "";
 
-            // seuil anti-bruit: en dessous => on considère que ce n’est pas une description
-            if (!out || out.length < 40) return null;
-            return out;
-          }
+              const dates =
+                ps.find((x) => /\b(19|20)\d{2}\b|aujourd’hui|today|présent/i.test(x)) || "";
 
-          function findDescriptionBlocks(scope) {
-            // Sur LinkedIn details/experience, les descriptions sont souvent dans:
-            // - div.t-14.t-normal.t-black
-            // - .display-flex .t-14.t-normal.t-black
-            // parfois avec span[aria-hidden] + span.visually-hidden
-            // IMPORTANT: on ne prend pas tous les spans aria-hidden du scope (trop bruité),
-            // on cible uniquement les conteneurs “body”.
-            const containers = Array.from(
-              scope.querySelectorAll("div.t-14.t-normal.t-black, div.display-flex .t-14.t-normal.t-black")
-            );
+              const desc = clean(el.querySelector('[data-testid="expandable-text-box"]')?.innerText || "");
 
-            // On retourne les spans internes (visually-hidden en priorité), sinon le container.
-            const blocks = [];
-            for (const c of containers) {
-              const vh = c.querySelector(".visually-hidden");
-              if (vh) {
-                blocks.push(vh);
-                continue;
-              }
-              const ah = c.querySelector("span[aria-hidden='true']");
-              if (ah) {
-                blocks.push(ah);
-                continue;
-              }
-              blocks.push(c);
-            }
-            return blocks;
-          }
-
-          function extractDescriptionFromScope(scope, ctx, { looksLikeDates, clean }) {
-            const blocks = findDescriptionBlocks(scope);
-            if (!blocks.length) return null;
-
-            const candidates = blocks
-              .map((n) => normalizeDescText(n.textContent || "", { looksLikeDates, clean }))
-              .filter(Boolean);
-
-            if (!candidates.length) return null;
-
-            // Prendre le plus long (en général le bon, surtout avec visually-hidden)
-            candidates.sort((a, b) => b.length - a.length);
-            return candidates[0];
-          }
-          const looksLikeLocation = (t) => {
-            const s = clean(t);
-            if (!s) return false;
-            if (looksLikeDates(s)) return false;
-            if (s.includes("·")) return false;
-            return /(,| Area\b|Région|Île-de-France|France)\b/i.test(s) && s.length <= 140;
-          };
-          const EMPLOYMENT_RE =
-            /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
-          const looksLikeEmploymentType = (s) => {
-            const t = clean(s);
-            if (!t) return false;
-            return EMPLOYMENT_RE.test(t);
-          };
-          const looksLikePlainLocationFallback = (s) => {
-            const t = clean(s);
-            if (!t) return false;
-            if (t.length > 80) return false;
-            if (looksLikeDates(t)) return false;
-            if (looksLikeEmploymentType(t)) return false;
-            if (/compétences|competences|skills/i.test(t)) return false;
-            return /^[\p{L}\s,'’.\-]+$/u.test(t);
-          };
-          const isNoise = (t) => {
-            const s = clean(t);
-            if (!s) return true;
-            if (/^(afficher plus|see more|show more)$/i.test(s)) return true;
-            if (/^\d+\s+(mois|ans?)$/i.test(s)) return true;
-            if (/^de\s/i.test(s) && monthToken.test(s)) return true;
-            return false;
-          };
-          const getLines = (scope) => {
-            const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
-            const raw = nodes.map((n) => collapseDouble(n.textContent)).map(clean).filter(Boolean);
-            const out = [];
-            for (const r of raw) {
-              if (!r) continue;
-              if (out[out.length - 1] === r) continue;
-              out.push(r);
-            }
-            return out;
-          };
-          const pickTitle = (li) => {
-            const n = li.querySelector("div.t-bold span[aria-hidden='true'], div.t-bold, span.t-bold");
-            return collapseDouble(clean(n?.textContent));
-          };
-          const pickHeaderCompany = (groupLi) => {
-            const nodes = Array.from(groupLi.querySelectorAll("div.t-bold, span.t-bold"))
-              .filter((n) => !n.closest(".pvs-entity__sub-components"))
-              .map((n) => collapseDouble(n.textContent))
-              .map(clean)
-              .filter(Boolean);
-            return nodes[0] || "";
-          };
-          const pickDates = (scope, title = "") => {
-            const lines = getLines(scope).filter((l) => l && l !== title);
-            const candidates = lines.filter(looksLikeDates).filter((l) => l.length <= 120);
-            if (!candidates.length) return "";
-            const scored = candidates
-              .map((l) => {
-                let score = 0;
-                if (/\s-\s| - /.test(l)) score += 3;
-                if (/\b(19\d{2}|20\d{2})\b/.test(l)) score += 2;
-                if (/aujourd|present/i.test(l)) score += 1;
-                if (/^De\s/i.test(l)) score -= 1;
-                return [l, score];
-              })
-              .sort((a, b) => b[1] - a[1]);
-            return scored[0][0];
-          };
-          const pickCompanyFromDotLine = (scope, title = "") => {
-            const lines = getLines(scope);
-            const dotLine = lines.find((l) => l.includes("·") && !looksLikeDates(l) && l.length <= 160);
-            if (!dotLine) return "";
-            const first = collapseDouble(clean(dotLine.split("·")[0]));
-            if (!first) return "";
-            if (title && first.toLowerCase() === title.toLowerCase()) return "";
-            if (looksLikeLocation(first)) return "";
-            return first;
-          };
-          const pickCompanyFallback = (scope, title = "") => {
-            const lines = getLines(scope);
-            const idx = lines.findIndex((l) => clean(l).toLowerCase() === clean(title).toLowerCase());
-            if (idx >= 0) {
-              const next = lines[idx + 1] || "";
-              const c = collapseDouble(next);
-              if (c && !looksLikeDates(c) && !looksLikeLocation(c) && !isNoise(c) && c.length <= 120) {
-                return clean(c.split("·")[0]);
-              }
-            }
-            const candidates = lines.filter((l) => {
-              const s = clean(l);
-              if (!s) return false;
-              if (title && s.toLowerCase() === title.toLowerCase()) return false;
-              if (looksLikeDates(s) || looksLikeLocation(s) || isNoise(s)) return false;
-              if (s.length > 140) return false;
-              return true;
-            });
-            if (!candidates.length) return "";
-            return clean(candidates[0].split("·")[0]);
-          };
-          const pickLocation = (scope) =>
-            (getLines(scope).find(looksLikeLocation)
-              ? collapseDouble(getLines(scope).find(looksLikeLocation))
-              : "");
-          const normalizeInfosText = (s) =>
-            (s || "")
-              .replace(/\u00a0/g, " ")
-              .replace(/[ \t]+\n/g, "\n")
-              .replace(/[ \t]{2,}/g, " ")
-              .replace(/\n{3,}/g, "\n\n")
-              .trim();
-          const fixSpacedUrls = (t) =>
-            t.replace(/\bhttps?:\/\/[^\s)]+/gi, (url) => url.replace(/\s+/g, ""));
-          const SEE_MORE_REGEX = /(voir plus|see more|show more|afficher la suite)/i;
-          const extractTextWithBreaks = (node) => {
-            if (!node) return "";
-            const html = node.innerHTML || "";
-            const withBreaks = html
-              .replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
-              .replace(/<li[^>]*>/gi, "\n- ");
-            const container = document.createElement("div");
-            container.innerHTML = withBreaks;
-            return container.textContent || container.innerText || "";
-          };
-          const normalizeDescriptionText = (text) => {
-            let normalized = normalizeInfosText(text || "");
-            normalized = normalized.replace(/…\s*(voir plus|see more|show more|afficher la suite)\s*$/i, "").trim();
-            normalized = fixSpacedUrls(normalized);
-            if (!normalized) return null;
-
-            const lines = normalized
-              .split("\n")
-              .map((line) => line.replace(/\s+/g, " ").trim())
-              .filter(Boolean);
-
-            const seen = new Set();
-            const deduped = [];
-            for (const line of lines) {
-              const key = line.toLowerCase();
-              if (seen.has(key)) continue;
-              seen.add(key);
-              deduped.push(line);
-            }
-
-            const finalText = deduped.join("\n").trim();
-            if (!finalText || finalText.length < 30) return null;
-            return finalText;
-          };
-          const extractDescriptionBullets = (text) => {
-            if (!text) return null;
-            const lines = text
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean);
-            const bullets = lines
-              .filter((line) => /^[-•]\s+/.test(line))
-              .map((line) => line.replace(/^[-•]\s+/, "").trim())
-              .filter(Boolean);
-            return bullets.length ? bullets : null;
-          };
-          const stripExperienceMetaFromDescription = (description, exp) => {
-            if (!description) return null;
-            const lines = description
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean);
-            if (!lines.length) return null;
-            const metaTokens = [exp?.title, exp?.company, exp?.dates, exp?.location]
-              .map((x) => clean(x).toLowerCase())
-              .filter(Boolean);
-            const companyToken = clean(exp?.company).toLowerCase();
-            const employmentLineRe =
-              /\b(cdi|cdd|stage|alternance|freelance|indépendant|independant|temps plein|temps partiel|full[- ]time|part[- ]time|internship|apprenticeship|contract)\b/i;
-            const metaSet = new Set(metaTokens);
-            const filtered = lines.filter((line) => {
-              const key = clean(line).toLowerCase();
-              if (!key) return false;
-              if (metaSet.has(key)) return false;
-              if (companyToken && key.includes(companyToken) && (key.includes("·") || employmentLineRe.test(key))) {
-                return false;
-              }
-              if (looksLikeDates(line)) return false;
-              if (looksLikeLocation(line)) return false;
-              if (looksLikePlainLocationFallback(line)) return false;
-              return true;
-            });
-            if (!filtered.length) return null;
-            const finalText = filtered.join("\n").trim();
-            if (!finalText || finalText.length < 30) return null;
-            return finalText;
-          };
-          const clickSeeMoreInItem = (item) => {
-            if (!item) return false;
-            const scope = item.querySelector(".pvs-entity__sub-components") || item;
-            if (!scope || scope.dataset?.focalsSeeMoreClicked) return false;
-            const buttons = Array.from(scope.querySelectorAll("button, a"))
-              .map((el) => ({
-                el,
-                label: `${el.getAttribute("aria-label") || ""} ${el.textContent || ""}`.trim(),
-              }))
-              .filter(({ label }) => SEE_MORE_REGEX.test(label));
-            const target = buttons.find(({ el }) => !el.disabled)?.el;
-            if (target) {
-              target.click();
-              scope.dataset.focalsSeeMoreClicked = "true";
-              return true;
-            }
-            return false;
-          };
-          const extractExperienceDescription = (item) => {
-            if (!item) return { description: null, descriptionBullets: null };
-            const scope = item.querySelector(".pvs-entity__sub-components") || item;
-            if (!scope) return { description: null, descriptionBullets: null };
-
-            clickSeeMoreInItem(item);
-
-            const candidates = [];
-            const inlineNodes = scope.querySelectorAll(
-              'div[class*="inline-show-more-text"] span[aria-hidden="true"]'
-            );
-            if (inlineNodes.length) {
-              inlineNodes.forEach((node) => candidates.push(node));
-            } else {
-              scope.querySelectorAll('div[class*="inline-show-more-text"]').forEach((node) => candidates.push(node));
-              scope.querySelectorAll("span[aria-hidden='true']").forEach((node) => candidates.push(node));
-            }
-            scope.querySelectorAll("ul li, ol li").forEach((node) => candidates.push(node));
-
-            const raw = candidates.map(extractTextWithBreaks).filter(Boolean).join("\n");
-            const description = normalizeDescriptionText(raw);
-            if (!description) return { description: null, descriptionBullets: null };
-
-            return { description, descriptionBullets: extractDescriptionBullets(description) };
-          };
-
-          function parseGroupedV6(groupLi) {
-            const headerCompany = pickHeaderCompany(groupLi);
-            const roleLis = Array.from(groupLi.querySelectorAll(".pvs-entity__sub-components li")).filter(
-              (li) => !!li.querySelector("div.t-bold, span.t-bold")
-            );
-
-            if (!roleLis.length) {
-              const title = pickTitle(groupLi) || "";
-              const dates = pickDates(groupLi, title) || "";
-              let company = headerCompany || pickCompanyFromDotLine(groupLi, title) || "";
-              if (!company || (title && company.toLowerCase() === title.toLowerCase())) {
-                company = pickCompanyFallback(groupLi, title) || company;
-              }
-              const location = pickLocation(groupLi) || "";
-              if (!title || !dates) return [];
-              return [
-                {
-                  title,
-                  company: collapseDouble(company),
-                  dates,
-                  location: collapseDouble(location),
-                  _scope: groupLi,
-                },
-              ];
-            }
-
-            const out = [];
-            for (const roleLi of roleLis) {
-              const title = pickTitle(roleLi);
-              const dates = pickDates(roleLi, title) || pickDates(groupLi, title);
-              if (!title || !dates) continue;
-
-              let company = headerCompany || "";
-              if (!company || company.toLowerCase() === title.toLowerCase()) {
-                company = pickCompanyFromDotLine(groupLi, title) || pickCompanyFromDotLine(roleLi, title) || "";
-              }
-              if (!company || company.toLowerCase() === title.toLowerCase()) {
-                company = pickCompanyFallback(groupLi, title) || company;
-              }
-              const location = pickLocation(groupLi) || pickLocation(roleLi) || "";
-              out.push({
-                title,
-                company: collapseDouble(company),
-                dates,
-                location: collapseDouble(location),
-                _scope: roleLi,
-              });
-            }
-
-            const seen = new Set();
-            return out.filter((e) => {
-              const k = [e.title, e.company, e.dates, e.location]
-                .map((x) => clean(x).toLowerCase())
-                .join("||");
-              if (seen.has(k)) return false;
-              seen.add(k);
-              return true;
-            });
-          }
-
-          const buildExpKey = (exp) =>
-            [exp?.title, exp?.company, exp?.dates, exp?.location].map((x) => clean(x)).join("||").toLowerCase();
-          const enrichDescriptionsFromScopes = (v6Parsed) => {
-            if (!Array.isArray(v6Parsed)) return [];
-            const descByKey = new Map();
-            const enriched = v6Parsed.map((item) => {
-              const key = buildExpKey(item);
-              let entry = descByKey.get(key);
-              if (!entry) {
-                let description = null;
-                try {
-                  if (item?._scope) {
-                    description = extractDescriptionFromScope(item._scope, item, { looksLikeDates, clean });
-                  }
-                } catch (err) {
-                  description = null;
-                }
-                entry = { description };
-                descByKey.set(key, entry);
-              }
-              const hasDesc = !!entry?.description;
-              console.log("[FOCALS][DESC] MATCH", {
-                title: item?.title || null,
-                company: item?.company || null,
-                dates: item?.dates || null,
-                hasDesc,
-                descLen: entry?.description ? entry.description.length : 0,
-              });
               return {
-                ...item,
-                Description: entry?.description || null,
-                DescriptionBullets: null,
+                title,
+                company,
+                dates,
+                description: desc || null,
               };
-            });
-            const total = enriched.length;
-            const withDesc = enriched.filter((item) => item.Description).length;
-            console.log("[FOCALS][DESC] SUMMARY", { total, withDesc });
-            return enriched;
+            })
+            .filter((e) => e.title || e.company || e.dates || e.description);
+
+          const debug = {
+            hasRoot: !!root,
+            itemsCount: items.length,
+            descBoxes: root ? root.querySelectorAll('[data-testid="expandable-text-box"]').length : 0,
+            firstItemPreview: items[0] ? clean(items[0].innerText).slice(0, 160) : null,
           };
 
-          function findExperienceSectionRoot(main) {
-            if (!main) return null;
-            const heading = Array.from(main.querySelectorAll("h1, h2, h3")).find((el) =>
-              /exp[ée]rience/i.test(clean(el.textContent))
-            );
-            if (!heading) return null;
-            return heading.closest("section");
-          }
-
-          function parseExperiencesWithV6(root) {
-            if (!root) return [];
-            const topLis = Array.from(root.querySelectorAll("li")).filter((li) => {
-              if (li.closest(".pvs-entity__sub-components")) return false;
-              if (!li.querySelector("div.t-bold, span.t-bold")) return false;
-              if (clean(li.textContent).length <= 25) return false;
-              return true;
-            });
-            const parsed = topLis.flatMap((li) => parseGroupedV6(li));
-            const enriched = enrichDescriptionsFromScopes(parsed);
-            return enriched.map((x) => ({
-              Titre: x.title,
-              Entreprise: x.company,
-              Dates: x.dates,
-              Lieu: x.location || null,
-              Description: x.Description || null,
-              DescriptionBullets: x.DescriptionBullets || null,
-            }));
-          }
-
-          const main =
-            document.querySelector('main[role="main"]') ||
-            document.querySelector("main") ||
-            document.querySelector('[role="main"]') ||
-            document.body;
-          const expRoot = findExperienceSectionRoot(main) || main;
-          return parseExperiencesWithV6(expRoot);
+          return { experiences, debug };
         },
       });
       const payload = Array.isArray(results) ? results?.[0]?.result : null;
-      const experiences = Array.isArray(payload?.experiences)
-        ? payload.experiences
-        : Array.isArray(payload)
-          ? payload
-          : [];
+      const experiences = Array.isArray(payload?.experiences) ? payload.experiences : [];
+      const debug = payload?.debug || null;
       console.log(
         "[FOCALS][DETAILS] DESC_COUNT",
-        JSON.stringify({ count: experiences.filter((e) => e?.Description).length }, null, 2)
+        JSON.stringify({ count: experiences.filter((e) => e?.description).length }, null, 2)
       );
       const experienceCount = experiences?.length || 0;
       detailsLog("SCRAPED_COUNT", JSON.stringify({ profileKey, count: experienceCount }, null, 2));
@@ -2234,7 +1756,7 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         JSON.stringify(
           {
             count: experienceCount,
-            debug: payload?.debug || null,
+            debug,
             detailsUrl,
             profileKey,
           },
