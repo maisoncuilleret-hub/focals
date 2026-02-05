@@ -8,6 +8,7 @@
       return false;
     }
   })();
+  const DEBUG_LIVE_DOM_RELAY = false;
 
   const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
   const log = (...a) => console.log(TAG, ...a);
@@ -165,7 +166,9 @@
     observer.observe(document.body, { childList: true, subtree: true });
   };
 
-  setupLiveObserver();
+  if (DEBUG_LIVE_DOM_RELAY) {
+    setupLiveObserver();
+  }
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
   const normalizeProfilePath = (pathname = "") => {

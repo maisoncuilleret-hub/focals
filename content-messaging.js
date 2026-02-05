@@ -543,6 +543,57 @@ console.log(
       return { linkedinProfile, cachedProfile: usableProfile, candidateProfileUrl: targetUrl };
     };
 
+    const canonicalizeProfileUrl = (href) => {
+      if (!href) return null;
+      try {
+        const url = new URL(href, window.location.origin);
+        const match = url.pathname.match(/\/in\/[^/]+/i);
+        if (!match) return null;
+        url.pathname = match[0];
+        url.search = "";
+        url.hash = "";
+        return url.toString();
+      } catch {
+        return null;
+      }
+    };
+
+    const extractProfileId = (url) => {
+      if (!url) return null;
+      try {
+        const parsed = new URL(url);
+        const match = parsed.pathname.match(/\/in\/([^/]+)/i);
+        return match?.[1] || null;
+      } catch {
+        return null;
+      }
+    };
+
+    const buildVirtualConversationUrn = (profileUrl) => {
+      const profileId = extractProfileId(profileUrl);
+      return profileId ? `urn:li:msg_conversation:ext_${profileId}` : null;
+    };
+
+    const normalizeConversationUrn = ({ conversationUrn, threadKey, profileUrl }) => {
+      if (conversationUrn) {
+        const raw = String(conversationUrn).trim();
+        if (raw.startsWith("urn:li:msg_conversation:")) return raw;
+        if (raw.startsWith("msg_conversation:")) return `urn:li:${raw}`;
+        if (raw.includes("msg_conversation:")) {
+          const idx = raw.indexOf("msg_conversation:");
+          return `urn:li:${raw.slice(idx)}`;
+        }
+        if (/^2-[\w-]+$/i.test(raw)) {
+          return `urn:li:msg_conversation:${raw}`;
+        }
+      }
+      if (threadKey) {
+        const raw = String(threadKey).trim();
+        if (raw) return `urn:li:msg_conversation:${raw}`;
+      }
+      return buildVirtualConversationUrn(profileUrl) || "urn:li:msg_conversation:unknown";
+    };
+
     const findConversationProfileLink = (conversationRoot = document) => {
       const headerSelectors = [
         ".msg-overlay-bubble-header",
@@ -577,9 +628,9 @@ console.log(
           if (anchor.closest("div.msg-s-event-listitem")) continue;
 
           const rawHref = href.split(/[?#]/)[0];
-          const profileUrl = rawHref.startsWith("/in/")
-            ? `https://www.linkedin.com${rawHref}`
-            : rawHref;
+          const profileUrl = canonicalizeProfileUrl(
+            rawHref.startsWith("/in/") ? `https://www.linkedin.com${rawHref}` : rawHref
+          );
 
           const nameNode =
             anchor.querySelector(".hoverable-link-text") || anchor.querySelector("span");
@@ -592,6 +643,38 @@ console.log(
       }
 
       return null;
+    };
+
+    const getCandidateIdentity = (conversationRoot = document) => {
+      const profileAnchor =
+        conversationRoot.querySelector("a.msg-entity-lockup__link") ||
+        conversationRoot.querySelector("a[href*='/in/']");
+      const rawProfileUrl = profileAnchor?.getAttribute("href") || profileAnchor?.href || "";
+      const profileUrl = rawProfileUrl
+        ? new URL(rawProfileUrl, window.location.origin).toString().split("?")[0]
+        : "unknown";
+
+      const nameNode =
+        conversationRoot.querySelector(".msg-entity-lockup__entity-title") ||
+        conversationRoot.querySelector(".msg-titlebar__title");
+      const matchName = normalizeText(nameNode?.textContent || "") || "LinkedIn User";
+
+      const threadMatch = window.location.href.match(/\/messaging\/thread\/([^/?#]+)/i);
+      let conversationUrn = "urn:li:msg_conversation:unknown";
+      if (threadMatch?.[1]) {
+        conversationUrn = `urn:li:msg_conversation:${threadMatch[1]}`;
+      } else {
+        const profileIdMatch = profileUrl.match(/\/in\/([^/?]+)/i);
+        if (profileIdMatch?.[1]) {
+          conversationUrn = `urn:li:msg_conversation:ext_${profileIdMatch[1]}`;
+        }
+      }
+
+      return {
+        match_name: matchName,
+        profile_url: profileUrl,
+        conversation_urn: conversationUrn,
+      };
     };
 
     const openProfileTabInBackground = (profileUrl) =>
@@ -1751,11 +1834,13 @@ console.log(
         emitInitial = false,
         emitTail = 0,
         debounceMs = 200,
+        throttleMs = 350,
         debug = false,
       } = {}) {
         this.emitInitial = emitInitial;
         this.emitTail = emitTail;
         this.debounceMs = debounceMs;
+        this.throttleMs = throttleMs;
         this.debug = debug;
         this.seenUrn = new Set();
         this.seenPair = new Set();
@@ -1771,6 +1856,7 @@ console.log(
         this.hasInitialScan = false;
         this.currentThreadKey = this.getThreadKeyFromHref();
         this.stopped = false;
+        this.lastRescanAt = 0;
       }
 
       log(message, details) {
@@ -1882,9 +1968,12 @@ console.log(
       schedule(reason) {
         if (this.stopped) return;
         clearTimeout(this.timer);
+        const now = Date.now();
+        const elapsed = now - this.lastRescanAt;
+        const delay = Math.max(this.debounceMs, this.throttleMs - elapsed, 0);
         this.timer = setTimeout(() => {
           this.rescan({ reason });
-        }, this.debounceMs);
+        }, delay);
       }
 
       remember(item, pairKey) {
@@ -1916,13 +2005,7 @@ console.log(
           this.root?.closest(
             "section.msg-thread, div.msg-thread, section.msg-conversation-container, .msg-overlay-conversation-bubble"
           ) || document;
-        const profile = findConversationProfileLink(conversationRoot);
-        const conversationName = resolveConversationName(conversationRoot);
-        const identity = {
-          match_name: profile?.candidateName || conversationName,
-          profile_url: profile?.profileUrl || null,
-        };
-        const conversationId = resolveConversationId(conversationRoot);
+        const identity = getCandidateIdentity(conversationRoot);
 
         items.forEach((item) => {
           this.log("new message", {
@@ -1935,7 +2018,9 @@ console.log(
               text: item.text,
               type: "linkedin_dom_radar",
               received_at: new Date().toISOString(),
-              conversation_urn: conversationId || this.currentThreadKey || null,
+              match_name: identity.match_name,
+              profile_url: identity.profile_url,
+              conversation_urn: identity.conversation_urn,
               identity,
             },
           });
@@ -1944,6 +2029,7 @@ console.log(
 
       rescan({ reason } = {}) {
         if (this.stopped) return;
+        this.lastRescanAt = Date.now();
         if (this.root && !document.contains(this.root)) {
           this.root = null;
           this.scheduleRebind();
@@ -1981,8 +2067,6 @@ console.log(
 
         if (newItems.length) {
           this.emitMessages(newItems);
-        } else if (this.debug) {
-          this.log("rescan noop", { reason, count: items.length });
         }
       }
 
