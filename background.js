@@ -50,6 +50,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 const logger = createLogger("Background");
 const FOCALS_DEBUG = IS_DEV;
 const DEBUG_KEEP_DETAILS_TAB = false;
+const DETAILS_HYDRATION_TIMEOUT_MS = 45_000;
 const EXP_TAG = "[FOCALS][EXPERIENCE]";
 const expLog = (...a) => console.log(EXP_TAG, ...a);
 const detailsLog = (...a) => console.log("[FOCALS][DETAILS]", ...a);
@@ -721,6 +722,163 @@ function waitForComplete(tabId, timeoutMs = 30000) {
 
     chrome.tabs.onUpdated.addListener(listener);
   });
+}
+
+async function waitForHydratedExperience(
+  tabId,
+  { timeoutMs = DETAILS_HYDRATION_TIMEOUT_MS, pollMs = 500 } = {}
+) {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let didKick = false;
+  let lastProbe = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    attempt += 1;
+    try {
+      const probeResults = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          const main =
+            document.querySelector('main[role="main"]') ||
+            document.querySelector("main") ||
+            document.querySelector('[role="main"]') ||
+            null;
+          const mainText = (main?.innerText || "").trim();
+          const normalizedText = mainText.replace(/\u00a0/g, " ");
+          const datesRegex =
+            /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|january|february|march|april|june|july|august|september|october|november|december|\b(19\d{2}|20\d{2})\b|present|présent|aujourd['’]hui)/i;
+          return {
+            href: location.href,
+            hasMain: Boolean(main),
+            mainTextLen: normalizedText.length,
+            hasDates: datesRegex.test(normalizedText),
+            htmlLen: (main?.innerHTML || "").length,
+          };
+        },
+      });
+
+      const probe = Array.isArray(probeResults) ? probeResults?.[0]?.result : null;
+      lastProbe = probe;
+      detailsLog("HYDRATION_PROBE", JSON.stringify({ tabId, attempt, probe }, null, 2));
+
+      const isReady = Boolean(probe?.hasMain) && (Number(probe?.mainTextLen || 0) > 1000 || probe?.hasDates);
+      if (isReady) {
+        return { ready: true, probe, attempts: attempt, elapsedMs: Date.now() - startedAt };
+      }
+
+      if (probe?.hasMain && Number(probe?.mainTextLen || 0) < 300 && !didKick) {
+        didKick = true;
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+              window.scrollTo(0, 600);
+              window.scrollTo(0, 0);
+            },
+          });
+          detailsLog("HYDRATION_KICK", JSON.stringify({ tabId, attempt }, null, 2));
+        } catch (kickErr) {
+          detailsLog(
+            "HYDRATION_KICK_FAILED",
+            JSON.stringify({ tabId, attempt, error: kickErr?.message || String(kickErr) }, null, 2)
+          );
+        }
+      }
+    } catch (err) {
+      const message = err?.message || String(err);
+      if (/frame with id .* was removed|No tab with id/i.test(message)) {
+        detailsLog(
+          "HYDRATION_RETRYABLE_ERROR",
+          JSON.stringify({ tabId, attempt, error: message }, null, 2)
+        );
+        await wait(pollMs);
+        continue;
+      }
+      throw err;
+    }
+
+    await wait(pollMs);
+  }
+
+  return {
+    ready: false,
+    timeout: true,
+    attempts: attempt,
+    elapsedMs: Date.now() - startedAt,
+    probe: lastProbe,
+  };
+}
+
+async function safeCloseTab(tabId) {
+  if (!tabId) return;
+  try {
+    await chrome.tabs.get(tabId);
+  } catch (err) {
+    detailsLog("DETAILS_TAB_ALREADY_CLOSED", JSON.stringify({ tabId }, null, 2));
+    return;
+  }
+
+  try {
+    await chrome.tabs.remove(tabId);
+    expLog("DETAILS_TAB_CLOSED", JSON.stringify({ tabId }, null, 2));
+  } catch (err) {
+    const message = err?.message || String(err);
+    if (/No tab with id/i.test(message)) return;
+    expLog("DETAILS_TAB_CLOSE_FAILED", JSON.stringify({ tabId, error: message }, null, 2));
+  }
+}
+
+async function dumpDetailsSnapshot(tabId) {
+  let tab = null;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch (err) {
+    return {
+      tabId,
+      tabError: err?.message || String(err),
+    };
+  }
+
+  try {
+    const probeResults = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const main =
+          document.querySelector('main[role="main"]') ||
+          document.querySelector("main") ||
+          document.querySelector('[role="main"]') ||
+          null;
+        const mainText = (main?.innerText || "").trim().replace(/\u00a0/g, " ");
+        const datesRegex =
+          /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|jan|feb|mar|apr|may|jun|jul|aug|sep|january|february|march|april|june|july|august|september|october|november|december|\b(19\d{2}|20\d{2})\b|present|présent|aujourd['’]hui)/i;
+        return {
+          hasMain: Boolean(main),
+          mainTextLen: mainText.length,
+          htmlLen: (main?.innerHTML || "").length,
+          hasDates: datesRegex.test(mainText),
+          first300: mainText.slice(0, 300),
+        };
+      },
+    });
+
+    const dom = Array.isArray(probeResults) ? probeResults?.[0]?.result : null;
+    return {
+      tab: {
+        url: tab?.url || null,
+        status: tab?.status || null,
+      },
+      ...(dom || {}),
+    };
+  } catch (err) {
+    return {
+      tab: {
+        url: tab?.url || null,
+        status: tab?.status || null,
+      },
+      domError: err?.message || String(err),
+    };
+  }
 }
 
 async function ensureContentScript(tabId) {
@@ -1445,10 +1603,35 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
       throw new Error("Failed to open details tab");
     }
 
-    detailsLog("TAB_CREATED", { tabId: tab.id, url: detailsUrl, profileKey });
+    detailsLog("TAB_CREATED", JSON.stringify({ tabId: tab.id, url: detailsUrl, profileKey }, null, 2));
 
     try {
-      await waitForComplete(tab.id, 15000);
+      try {
+        await chrome.tabs.update(tab.id, { active: true });
+        if (tab.windowId != null) {
+          await chrome.windows.update(tab.windowId, { focused: true });
+        }
+        detailsLog("HYDRATION_FOCUS_APPLIED", JSON.stringify({ tabId: tab.id }, null, 2));
+      } catch (focusErr) {
+        detailsLog(
+          "HYDRATION_FOCUS_SKIPPED",
+          JSON.stringify({ tabId: tab.id, error: focusErr?.message || String(focusErr) }, null, 2)
+        );
+      }
+
+      const hydration = await waitForHydratedExperience(tab.id, {
+        timeoutMs: DETAILS_HYDRATION_TIMEOUT_MS,
+      });
+      detailsLog("HYDRATION_RESULT", JSON.stringify({ tabId: tab.id, hydration }, null, 2));
+      if (!hydration?.ready) {
+        const snapshot = await dumpDetailsSnapshot(tab.id);
+        expLog(
+          "DETAILS_SCRAPE_FAIL",
+          JSON.stringify({ reason: "hydration-timeout", profileKey, snapshot }, null, 2)
+        );
+        throw new Error("Experience details hydration timeout");
+      }
+
       const prepResults = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: async () => {
@@ -1526,12 +1709,19 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         },
       });
       const prepPayload = Array.isArray(prepResults) ? prepResults?.[0]?.result : null;
-      detailsLog("PREP_COUNTS", {
-        topLisExp: prepPayload?.topLisExp ?? null,
-        rolesCount: prepPayload?.rolesCount ?? null,
-        liCountMain: prepPayload?.liCountMain ?? null,
-        profileKey,
-      });
+      detailsLog(
+        "PREP_COUNTS",
+        JSON.stringify(
+          {
+            topLisExp: prepPayload?.topLisExp ?? null,
+            rolesCount: prepPayload?.rolesCount ?? null,
+            liCountMain: prepPayload?.liCountMain ?? null,
+            profileKey,
+          },
+          null,
+          2
+        )
+      );
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
@@ -2019,35 +2209,49 @@ async function scrapeExperienceDetailsInBackground(detailsUrl, profileKey, reaso
         : Array.isArray(payload)
           ? payload
           : [];
-      console.log("[FOCALS][DETAILS] DESC_COUNT", {
-        count: experiences.filter((e) => e?.Description).length,
-      });
+      console.log(
+        "[FOCALS][DETAILS] DESC_COUNT",
+        JSON.stringify({ count: experiences.filter((e) => e?.Description).length }, null, 2)
+      );
       const experienceCount = experiences?.length || 0;
-      detailsLog("SCRAPED_COUNT", { profileKey, count: experienceCount });
-      expLog("DETAILS_SCRAPED", { count: experienceCount, detailsUrl, profileKey });
+      detailsLog("SCRAPED_COUNT", JSON.stringify({ profileKey, count: experienceCount }, null, 2));
+      expLog(
+        "DETAILS_SCRAPED",
+        JSON.stringify({ count: experienceCount, detailsUrl, profileKey }, null, 2)
+      );
       if (!experienceCount) {
-        expLog("DETAILS_EMPTY", { detailsUrl, profileKey });
+        const snapshot = await dumpDetailsSnapshot(tab.id);
+        expLog(
+          "DETAILS_SCRAPE_FAIL",
+          JSON.stringify({ reason: "No experiences parsed", profileKey, snapshot }, null, 2)
+        );
+        expLog("DETAILS_EMPTY", JSON.stringify({ detailsUrl, profileKey }, null, 2));
       } else {
         await setDetailsCache(profileKey, experiences);
       }
-      expLog("DETAILS_SCRAPE_RESULT", {
-        count: experienceCount,
-        debug: payload?.debug || null,
-        detailsUrl,
-        profileKey,
-      });
+      expLog(
+        "DETAILS_SCRAPE_RESULT",
+        JSON.stringify(
+          {
+            count: experienceCount,
+            debug: payload?.debug || null,
+            detailsUrl,
+            profileKey,
+          },
+          null,
+          2
+        )
+      );
       return Array.isArray(experiences) ? experiences : [];
     } catch (err) {
-      expLog("DETAILS_SCRAPE_ERROR", err?.message || err);
+      expLog(
+        "DETAILS_SCRAPE_ERROR",
+        JSON.stringify({ profileKey, error: err?.message || String(err) }, null, 2)
+      );
       throw err;
     } finally {
       if (!DEBUG_KEEP_DETAILS_TAB) {
-        try {
-          await chrome.tabs.remove(tab.id);
-          expLog("DETAILS_TAB_CLOSED", { tabId: tab.id });
-        } catch (err) {
-          expLog("DETAILS_TAB_CLOSE_FAILED", err?.message || err);
-        }
+        await safeCloseTab(tab.id);
       }
     }
   })();

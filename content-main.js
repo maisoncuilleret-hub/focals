@@ -1802,7 +1802,7 @@
     }
 
     if (!result.experiences.length) {
-      expWarn("No experiences parsed. Debug:", result.debug);
+      expWarn("No experiences parsed. Debug:", JSON.stringify(result.debug, null, 2));
     } else if (DEBUG) {
       console.table(
         result.experiences.map((e) => ({
