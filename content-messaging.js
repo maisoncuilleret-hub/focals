@@ -1,15 +1,14 @@
-console.log('[FOCALS DEBUG] messaging content script loaded – v3');
-console.log(
-  '[FOCALS DEBUG] messaging content script context:',
-  'href=',
-  window.location.href,
-  'isTop=',
-  window.top === window,
-  'frameElement=',
-  window.frameElement
-);
-
 (() => {
+  if (window !== window.top) return;
+  if (!location.pathname.startsWith("/messaging/")) {
+    try {
+      if (localStorage.getItem("FOCALS_DEBUG_MSG") === "true") {
+        console.log("[FOCALS][MSG] skip non-messaging", location.pathname);
+      }
+    } catch (err) {}
+    return;
+  }
+
   const FOCALS_DEBUG = (() => {
     try {
       return localStorage.getItem("FOCALS_DEBUG_MSG") === "true";
@@ -36,7 +35,7 @@ console.log(
     // Sur certaines sessions, LinkedIn met la messagerie dans un Shadow DOM
     const outlet = document.getElementById("interop-outlet");
     if (outlet && outlet.shadowRoot) {
-      console.log("[FOCALS][SHADOW] using interop-outlet.shadowRoot as messaging root");
+      debugLog("SHADOW", "using interop-outlet.shadowRoot as messaging root");
       return outlet.shadowRoot;
     }
 

@@ -16,6 +16,16 @@
   const DEBUG = isDebugEnabled();
   const DEBUG_LIVE_DOM_RELAY = false;
 
+  if (isDebugEnabled()) {
+    console.log("[FOCALS][WORLD]", {
+      file: "content-main.js",
+      href: location.href,
+      hasChrome: typeof chrome !== "undefined",
+      hasRuntime: !!chrome?.runtime?.id,
+      hasStorage: !!chrome?.storage?.local,
+    });
+  }
+
   const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
   const log = (...a) => console.log(TAG, ...a);
   const dlog = (...a) => isDebugEnabled() && console.log(TAG, ...a);
@@ -201,6 +211,7 @@
     return `${base.replace(/\/$/, "")}/details/experience/`;
   };
   const isDetailsExperiencePath = (pathname) => /\/details\/experience\/?$/i.test(pathname || "");
+  const isDetailsExperienceProfilePath = (pathname) => /\/in\/[^/]+\/details\/experience\/?/i.test(pathname || "");
   const buildLastResultCacheKey = (profileKey) => `focals_last_result:${profileKey}`;
 
   const getStorageValue = (key) =>
@@ -1691,7 +1702,7 @@
     }
 
     const debug = { rootMode: pick.mode, counts };
-    if (isDetailsExperiencePath(location.pathname)) {
+    if (isDetailsExperienceProfilePath(location.pathname)) {
       experiences.slice(0, 3).forEach((entry) => {
         expLog("DETAILS_SKILLS", {
           title: entry?.title || null,
@@ -1794,17 +1805,18 @@
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
+    const isDetailsExperience = isDetailsExperienceProfilePath(location.pathname);
     const profileCanonicalUrl = canonicalProfileUrl(href);
     // Always try details url from canonical profile (more reliable than DOM anchor)
     const detailsUrl = buildDetailsExperienceUrlFromProfile(href) || getExperienceDetailsUrl();
-    const willScrapeDetails = !!detailsUrl && !isDetailsExperiencePath(location.pathname);
+    const willScrapeDetails = !!detailsUrl && !isDetailsExperience;
     expLog("DETAILS_USAGE", { reason, detailsUrl: detailsUrl || null, willScrapeDetails });
 
     let detailsExperiences = [];
     let detailsDebug = null;
     if (detailsUrl) {
       try {
-        if (isDetailsExperiencePath(location.pathname)) {
+        if (isDetailsExperience) {
           const detailsResult = scrapeDetailsExperienceDocument(document);
           detailsExperiences = detailsResult.experiences || [];
           detailsDebug = detailsResult.debug || null;
@@ -1940,6 +1952,8 @@
     dlog("DEBUG (full)", result);
     return result;
   }
+
+  window.FOCALS_RUN = async () => handleScrape("manual");
 
   function normalizeForUi(result) {
     if (!result || !result.ok) return null;
