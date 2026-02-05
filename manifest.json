@@ -38,12 +38,18 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.linkedin.com/*",
-        "https://linkedin.com/*",
-        "https://*.linkedin.com/*"
+        "https://www.linkedin.com/in/*"
       ],
       "js": [
-        "content-main.js",
+        "content-main.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.linkedin.com/messaging/*"
+      ],
+      "js": [
         "content-messaging.js"
       ],
       "run_at": "document_idle"
