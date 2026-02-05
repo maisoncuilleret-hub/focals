@@ -24,6 +24,20 @@ console.log("🎯 [RADAR] Content Script Loaded");
   const dlog = (...a) => logger.debug(...a);
   const warn = (...a) => logger.warn(...a);
   const DEBUG = false;
+  const FOCALS_DEBUG = (() => {
+    if (DEBUG) return true;
+    try {
+      const raw = String(localStorage.getItem("FOCALS_DEBUG") || "").toLowerCase();
+      return raw === "1" || raw === "true" || raw === "yes";
+    } catch {
+      return false;
+    }
+  })();
+
+  const focalsDebugLog = (...args) => {
+    if (!FOCALS_DEBUG) return;
+    console.log("[FOCALS]", ...args);
+  };
 
   const signatures = new Set();
 
@@ -317,6 +331,7 @@ console.log("🎯 [RADAR] Content Script Loaded");
   }
 
   const isProfileUrl = (u) => /linkedin\.com\/in\//i.test(u);
+  const isMainProfileUrl = (u) => /linkedin\.com\/in\/[^/?#]+\/?(?:$|[?#])/i.test(u || "");
   const canonicalProfileUrl = (u) => {
     try {
       const url = new URL(u);
@@ -489,6 +504,122 @@ console.log("🎯 [RADAR] Content Script Loaded");
   };
 
   // ---------------- Top card ----------------
+  const TOPCARD_NOISE_RE =
+    /(se connecter|voir dans recruiter|ajouter [àa]|coordonn[ée]es|message|suivre|plus d’actions|more actions|open to work|bloquer|signaler)/i;
+  const NAME_PREFIX_RE = /^([A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ'’-]+)\s+([A-ZÀ-ÖØ-Ý][a-zà-öø-ÿ'’-]+)/;
+  const LOCATION_HINT_RE =
+    /(france|paris|île-de-france|ile-de-france|remote|hybride|sur site|on[- ]site|région|region|belgique|suisse|canada|london|berlin|madrid)/i;
+
+  const getVisibleLines = (scope = null) => {
+    const root = scope || document.querySelector('main,[role="main"]') || document.body;
+    if (!root) return [];
+    const lines = [];
+    const nodes = root.querySelectorAll("span,div,p");
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (node.offsetParent === null) continue;
+      const text = clean(node.innerText || "");
+      if (!text) continue;
+      if (text.length < 25 || text.length > 160) continue;
+      if (TOPCARD_NOISE_RE.test(text)) continue;
+      lines.push(text);
+    }
+    return uniq(lines);
+  };
+
+  function scrapeTopCardVisible() {
+    const lines = getVisibleLines();
+    let fullName = null;
+    let headline = null;
+    let localisation = null;
+
+    for (const line of lines) {
+      const m = line.match(NAME_PREFIX_RE);
+      if (!m) continue;
+      fullName = m[0];
+      headline = clean(
+        line
+          .slice(m[0].length)
+          .replace(/\sI\s/g, " | ")
+          .replace(/^[\s\-–|·]+/, "")
+      );
+      break;
+    }
+
+    const locationLine = lines.find((line) => line.length < 80 && LOCATION_HINT_RE.test(line));
+    if (locationLine) {
+      localisation = clean(locationLine.split("·")[0]);
+    }
+
+    return {
+      fullName: fullName || null,
+      headline: headline || null,
+      localisation: localisation || null,
+    };
+  }
+
+  const findSectionByHeading = (re) => {
+    const heading = Array.from(document.querySelectorAll("h2, h3, span")).find((el) =>
+      re.test(clean(el.innerText || el.textContent || ""))
+    );
+    return heading?.closest("section") || null;
+  };
+
+  function scrapeSkillsVisible() {
+    const section = findSectionByHeading(/comp[ée]tences/i);
+    if (!section) return [];
+    const tokens = Array.from(section.querySelectorAll("a, span, div"))
+      .map((n) => clean(n.innerText || n.textContent || ""))
+      .filter(Boolean)
+      .filter((t) => t.length >= 2 && t.length <= 40)
+      .filter((t) => !/comp[ée]tences|tout afficher|recommandations? de comp[ée]tences?/i.test(t))
+      .filter((t) => !/\d+\s+recommandations?/i.test(t))
+      .filter((t) => /^[\p{L}0-9+&\-\s/.]+$/u.test(t));
+    return uniqCaseInsensitive(tokens).slice(0, 20);
+  }
+
+  function scrapeEducationVisible() {
+    const section = findSectionByHeading(/formation/i);
+    if (!section) return [];
+
+    const yearRe = /\b(19|20)\d{2}\b/;
+    const rangeRe = /\b(19|20)\d{2}\s*[–-]\s*((19|20)\d{2}|aujourd'hui|présent|present)\b/i;
+    const rows = [];
+
+    const items = Array.from(section.querySelectorAll("li, article, .pvs-entity"));
+    for (const item of items) {
+      const lines = uniq(
+        Array.from(item.querySelectorAll("span, div, p"))
+          .map((n) => clean(n.innerText || n.textContent || ""))
+          .filter(Boolean)
+      );
+      if (!lines.length) continue;
+      const dates = lines.find((line) => rangeRe.test(line)) || lines.find((line) => yearRe.test(line)) || "";
+      if (!dates || !/\b(19|20)\d{2}\b/.test(dates)) continue;
+
+      const school =
+        lines.find((line) => /university|universit[ée]|lyc[ée]e|school|coll[èe]ge|institut|[ée]cole/i.test(line)) ||
+        lines.find((line) => line.length >= 6 && line.length <= 80 && !yearRe.test(line)) ||
+        "";
+
+      if (!school) continue;
+      if (/osca winner|https?:\/\/|\blink\b/i.test(school)) continue;
+
+      rows.push({ school, degree: "", dates: clean(dates), raw: lines.join(" · ") });
+    }
+
+    const seen = new Set();
+    const deduped = [];
+    for (const row of rows) {
+      const key = `${clean(row.school)}||${clean(row.dates)}`.toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(row);
+    }
+
+    return deduped.slice(0, 8);
+  }
+
   function pickBestProfileRoot() {
     return (
       document.querySelector('section[componentkey*="Topcard"]') ||
@@ -933,6 +1064,10 @@ console.log("🎯 [RADAR] Content Script Loaded");
     const relationDegree = getRelationDegree(profileRoot);
     const linkedinUrl = canonicalProfileUrl(href);
     const infos = scrapeInfosSection();
+    const isMainProfile = isMainProfileUrl(href);
+    const topCard = isMainProfile ? scrapeTopCardVisible() : { fullName: null, headline: null, localisation: null };
+    const skillsVisible = isMainProfile ? scrapeSkillsVisible() : [];
+    const educationVisible = isMainProfile ? scrapeEducationVisible() : [];
 
     const ready = await waitForExperienceReady(6500);
 
@@ -941,11 +1076,15 @@ console.log("🎯 [RADAR] Content Script Loaded");
       mode: "OK",
       reason,
       startedAt,
-      fullName,
+      fullName: topCard.fullName || fullName,
+      headline: topCard.headline,
+      localisation: topCard.localisation,
       photoUrl,
       linkedinUrl,
       relationDegree,
       infos,
+      skills: skillsVisible,
+      education: educationVisible,
       experiences: ready.collected.experiences,
       debug: {
         experienceRootMode: ready.pick.mode,
@@ -956,6 +1095,14 @@ console.log("🎯 [RADAR] Content Script Loaded");
     };
 
     window.__FOCALS_LAST = result;
+
+    focalsDebugLog("topcard ok", {
+      fullName: topCard.fullName || fullName || null,
+      headline: topCard.headline || null,
+      localisation: topCard.localisation || null,
+    });
+    focalsDebugLog("skills count", skillsVisible.length);
+    focalsDebugLog("education count", educationVisible.length);
 
     dlog(`SCRAPE (${reason})`, {
       fullName: result.fullName,
@@ -1013,12 +1160,14 @@ console.log("🎯 [RADAR] Content Script Loaded");
 
     return {
       name: result.fullName || "",
-      headline: "",
-      localisation: "",
+      headline: result.headline || "",
+      localisation: result.localisation || "",
       profileImageUrl: result.photoUrl || "",
       photoUrl: result.photoUrl || "",
       photo_url: result.photoUrl || "",
       experiences,
+      skills: Array.isArray(result.skills) ? result.skills : [],
+      education: Array.isArray(result.education) ? result.education : [],
       infos,
       about: infos,
       current_job: experiences[0] || {},
