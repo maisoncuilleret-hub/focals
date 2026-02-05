@@ -487,6 +487,7 @@
       return u;
     }
   };
+  const isExperienceDetailsPath = (pathname) => /\/in\/[^/]+\/details\/experience\/?$/i.test(pathname || "");
 
   function elementPath(el) {
     if (!el) return null;
@@ -901,6 +902,63 @@
       DescriptionBullets: x.DescriptionBullets || null,
     }));
     return experiences;
+  }
+
+  function parseExperiencesFromDetailsPage(root) {
+    if (!root) return { experiences: [], debug: { hasRoot: false, itemsCount: 0, rootSelectorUsed: null } };
+
+    const selectors = [
+      '[data-testid*="ExperienceDetailsSection"]',
+      '[componentkey*="ExperienceDetailsSection"]',
+    ];
+    let detailsRoot = null;
+    let rootSelectorUsed = null;
+    for (const selector of selectors) {
+      detailsRoot = root.querySelector(selector);
+      if (detailsRoot) {
+        rootSelectorUsed = selector;
+        break;
+      }
+    }
+
+    const items = detailsRoot
+      ? Array.from(
+          detailsRoot.querySelectorAll(
+            '[componentkey^="entity-collection-item-"],[componentkey^="entity-collection-item--"]'
+          )
+        )
+      : [];
+
+    const experiences = items
+      .map((item) => {
+        const ps = Array.from(item.querySelectorAll("p"))
+          .map((p) => clean(p.innerText || p.textContent || ""))
+          .filter(Boolean);
+        const title = ps[0] || "";
+        const company = ps[1] || "";
+        const dates = ps[2] || "";
+        const description = clean(item.querySelector('[data-testid="expandable-text-box"]')?.innerText || "");
+        if (!(title && company && dates)) return null;
+        return {
+          Titre: title,
+          Entreprise: company,
+          Dates: dates,
+          Lieu: null,
+          Description: description || null,
+          DescriptionBullets: extractDescriptionBullets(description),
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      experiences: dedupeExperiences(experiences),
+      debug: {
+        hasRoot: !!detailsRoot,
+        itemsCount: items.length,
+        rootSelectorUsed,
+        firstItemTextPreview: clean(items[0]?.innerText || "").slice(0, 140) || null,
+      },
+    };
   }
 
   function parseExperienceFromRoot(root) {
@@ -1389,6 +1447,24 @@
     return { mode: "V6", experiences: ok, counts };
   }
 
+  async function navigateToDetailsExperienceIfNeeded(currentExperiences) {
+    const isProfileSummary = /\/in\/[^/]+\/?$/i.test(location.pathname || "");
+    const hasMissingDescriptions = (currentExperiences || []).some((exp) => !clean(exp?.Description || ""));
+    if (!isProfileSummary) return false;
+    if ((currentExperiences || []).length >= 6 && !hasMissingDescriptions) return false;
+
+    const detailsLink = document.querySelector('a[href*="/details/experience"]');
+    if (!detailsLink) return false;
+    detailsLink.click();
+
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      if (isExperienceDetailsPath(location.pathname)) return true;
+      await sleep(150);
+    }
+    return false;
+  }
+
   async function waitForExperienceReady(timeoutMs = 6500) {
     const deadline = Date.now() + timeoutMs;
 
@@ -1430,6 +1506,23 @@
     const infos = scrapeInfosSection();
 
     const ready = await waitForExperienceReady(6500);
+    let activeExperienceMode = isExperienceDetailsPath(location.pathname) ? "DETAILS" : "PROFILE";
+    let experiences = ready.collected.experiences;
+    let detailsDebug = null;
+
+    if (activeExperienceMode === "DETAILS") {
+      const detailsParsed = parseExperiencesFromDetailsPage(document.querySelector("main") || document.body);
+      experiences = detailsParsed.experiences;
+      detailsDebug = detailsParsed.debug;
+    } else {
+      const navigated = await navigateToDetailsExperienceIfNeeded(experiences);
+      if (navigated) {
+        activeExperienceMode = "DETAILS";
+        const detailsParsed = parseExperiencesFromDetailsPage(document.querySelector("main") || document.body);
+        experiences = detailsParsed.experiences;
+        detailsDebug = detailsParsed.debug;
+      }
+    }
 
     const result = {
       ok: true,
@@ -1440,7 +1533,7 @@
       photoUrl,
       linkedinUrl,
       relationDegree,
-      experiences: ready.collected.experiences,
+      experiences,
       education,
       skills,
       infos,
@@ -1449,6 +1542,8 @@
         experienceCollectionMode: ready.collected.mode,
         experienceCounts: ready.collected.counts,
         experienceRootPath: elementPath(ready.pick.root),
+        activeExperienceMode,
+        detailsParser: detailsDebug,
       },
     };
 
@@ -1463,7 +1558,18 @@
     });
 
     if (!result.experiences.length) {
-      warn("No experiences parsed. Debug:", result.debug);
+      if (DEBUG) {
+        warn("No experiences parsed", {
+          mode: result.debug.activeExperienceMode,
+          pathname: location.pathname,
+          hasRoot: !!result.debug.detailsParser?.hasRoot,
+          itemsCount: result.debug.detailsParser?.itemsCount || 0,
+          rootSelectorUsed: result.debug.detailsParser?.rootSelectorUsed || null,
+          firstItemTextPreview: result.debug.detailsParser?.firstItemTextPreview || null,
+        });
+      } else {
+        warn("No experiences parsed");
+      }
     } else {
       if (DEBUG) {
         console.table(
