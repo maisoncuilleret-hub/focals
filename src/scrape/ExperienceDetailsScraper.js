@@ -34,8 +34,12 @@ const monthToken =
 const looksLikeDates = (t) => {
   const s = clean(t);
   if (!s) return false;
-  if (!monthToken.test(s)) return false;
-  return /-/.test(s) && (/\b(19\d{2}|20\d{2})\b/.test(s) || /aujourd|present/i.test(s));
+  const hasRange = /-|–|—| to /i.test(s);
+  if (!hasRange) return false;
+  const hasYear = /\b(19\d{2}|20\d{2})\b/.test(s);
+  const hasMonth = monthToken.test(s);
+  const hasPresent = /aujourd|present|présent/i.test(s);
+  return (hasMonth && (hasYear || hasPresent)) || (hasYear && hasRange);
 };
 
 const collapseDouble = (s) => {
