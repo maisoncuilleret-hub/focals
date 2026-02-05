@@ -1,22 +1,28 @@
 (() => {
   const TAG = "🧪 FOCALS CONSOLE";
   const EXP_TAG = "[FOCALS][EXPERIENCE]";
-  const DEBUG = (() => {
+  const safeStorageGet = (storage, key) => {
     try {
-      return localStorage.getItem("FOCALS_DEBUG") === "true";
+      return storage?.getItem?.(key) ?? null;
     } catch (err) {
-      return false;
+      return null;
     }
-  })();
+  };
+
+  const isDebugEnabled = () =>
+    safeStorageGet(localStorage, "FOCALS_DEBUG") === "true" ||
+    safeStorageGet(sessionStorage, "FOCALS_DEBUG") === "true";
+
+  const DEBUG = isDebugEnabled();
   const DEBUG_LIVE_DOM_RELAY = false;
 
   const SKDBG = (...a) => DEBUG && console.log("[FOCALS][SKILLS][DBG]", ...a);
   const log = (...a) => console.log(TAG, ...a);
-  const dlog = (...a) => DEBUG && console.log(TAG, ...a);
+  const dlog = (...a) => isDebugEnabled() && console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
 
   const expLog = (...a) => console.log(EXP_TAG, ...a);
-  const expDlog = (...a) => DEBUG && console.log(EXP_TAG, ...a);
+  const expDlog = (...a) => isDebugEnabled() && console.log(EXP_TAG, ...a);
   const expWarn = (...a) => console.warn(EXP_TAG, ...a);
 
   const clean = (t) => (t ? String(t).replace(/\s+/g, " ").trim() : "");
@@ -968,37 +974,87 @@
 
   // ---------------- Experience root picking ----------------
   function pickExperienceSection() {
-    const legacyAnchor = document.querySelector("#experience");
+    const main =
+      document.querySelector('main[role="main"]') ||
+      document.querySelector("main") ||
+      document.querySelector('[role="main"]') ||
+      document.body;
+    if (!main) return { mode: "NOT_FOUND", root: null, selector: null, main: null };
+
+    const rootByTestId = main.querySelector(
+      '[data-component-type="LazyColumn"][data-testid*="ExperienceDetailsSection"]'
+    );
+    if (rootByTestId) {
+      return {
+        mode: "EXPERIENCE_DETAILS_TESTID",
+        selector: '[data-component-type="LazyColumn"][data-testid*="ExperienceDetailsSection"]',
+        root: rootByTestId,
+        main,
+      };
+    }
+
+    const rootByComponentKey = main.querySelector('[componentkey*="ExperienceDetailsSection"]');
+    if (rootByComponentKey) {
+      return {
+        mode: "EXPERIENCE_DETAILS_COMPONENTKEY",
+        selector: '[componentkey*="ExperienceDetailsSection"]',
+        root: rootByComponentKey,
+        main,
+      };
+    }
+
+    const legacyAnchor = main.querySelector("#experience");
     if (legacyAnchor) {
       const section =
         legacyAnchor.closest("section.artdeco-card") ||
         legacyAnchor.closest("section") ||
         legacyAnchor.parentElement;
-      if (section) return { mode: "LEGACY_ANCHOR", root: section };
+      if (section) return { mode: "LEGACY_ANCHOR", selector: "#experience", root: section, main };
     }
 
-    const sduiCard = document.querySelector('[data-view-name="profile-card-experience"]');
-    if (sduiCard) return { mode: "SDUI_CARD", root: sduiCard.querySelector("section") || sduiCard };
+    const sduiCard = main.querySelector('[data-view-name="profile-card-experience"]');
+    if (sduiCard) {
+      return {
+        mode: "SDUI_CARD",
+        selector: '[data-view-name="profile-card-experience"]',
+        root: sduiCard.querySelector("section") || sduiCard,
+        main,
+      };
+    }
 
-    const sduiTopSection = document.querySelector('section[componentkey*="ExperienceTopLevelSection"]');
-    if (sduiTopSection) return { mode: "SDUI_COMPONENTKEY", root: sduiTopSection };
+    const sduiTopSection = main.querySelector('section[componentkey*="ExperienceTopLevelSection"]');
+    if (sduiTopSection) {
+      return {
+        mode: "SDUI_COMPONENTKEY",
+        selector: 'section[componentkey*="ExperienceTopLevelSection"]',
+        root: sduiTopSection,
+        main,
+      };
+    }
 
-    const h2 = Array.from(document.querySelectorAll("h2")).find((x) =>
-      /expérience/i.test(clean(x.textContent))
-    );
+    const h2 = Array.from(main.querySelectorAll("h2")).find((x) => /expérience/i.test(clean(x.textContent)));
     if (h2) {
       const sec = h2.closest("section");
-      if (sec) return { mode: "HEADING_FALLBACK", root: sec };
+      if (sec) return { mode: "HEADING_FALLBACK", selector: "h2:experience", root: sec, main };
     }
 
-    return { mode: "NOT_FOUND", root: null };
+    return { mode: "MAIN_FALLBACK", selector: "main", root: main, main };
   }
 
   function looksLikeDates(s) {
     const t = clean(s);
     if (!t) return false;
-    return /-/.test(t) && (/\b(19\d{2}|20\d{2})\b/.test(t) || /aujourd/i.test(t));
+    const hasRange = /-|–|—| to /i.test(t);
+    if (!hasRange) return false;
+    const hasYear = /\b(19\d{2}|20\d{2})\b/.test(t);
+    const hasPresent = /aujourd|present|présent/i.test(t);
+    const hasMonth =
+      /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(
+        t
+      );
+    return (hasMonth && (hasYear || hasPresent)) || (hasYear && hasRange);
   }
+
 
   const WORKPLACE_TYPE_RULES = [
     { regex: /\bsur site\b/i, value: "Sur site" },
@@ -1296,59 +1352,16 @@
     return scored[0]?.a || null;
   }
 
-  function parseSduiExperienceItem(item, index) {
-    const subComponents = item.querySelector(".pvs-entity__sub-components");
-    const groupedRoles = subComponents
-      ? Array.from(subComponents.querySelectorAll("li")).filter(
-          (li) => li.querySelector("div.t-bold") && li.querySelector(".pvs-entity__caption-wrapper")
-        )
-      : [];
+  function getItemTextLines(scope) {
+    if (!scope) return [];
+    const nodes = Array.from(scope.querySelectorAll("p, span[aria-hidden='true']"));
+    const lines = nodes.map((n) => clean(n.textContent)).filter(Boolean);
+    return uniq(lines);
+  }
 
-    if (groupedRoles.length > 1) {
-      const headerTitle = extractTitleFromContainer(item);
-      const headerCompanyLine = extractCompanyLineFromContainer(item);
-      const headerCompany =
-        extractGroupCompanyName(item) ||
-        splitCompanyLine(headerCompanyLine).company ||
-        headerTitle ||
-        null;
-      if (!headerCompany) {
-        expLog("DETAILS_GROUPED_COMPANY_MISSING", {
-          headerTitle,
-          headerCompanyLine,
-        });
-      }
-
-      return groupedRoles
-        .map((roleItem, roleIndex) => {
-          const title = extractTitleFromContainer(roleItem);
-          const dates = extractDatesFromContainer(roleItem);
-          const { extras } = splitCompanyLine(extractCompanyLineFromContainer(roleItem));
-          const metaLines = uniq([...collectMetaLines(roleItem), ...extras]);
-          const { location, workplaceType } = extractLocationAndWorkplaceType(
-            metaLines.filter((t) => t && t !== dates && t !== title && t !== headerCompany)
-          );
-
-          const { description, descriptionBullets } = extractExperienceDescription(roleItem);
-
-          const company = headerCompany;
-          const ok = !!(title && company && dates);
-
-          return {
-            _idx: `${index}.${roleIndex}`,
-            _ok: ok,
-            Titre: title,
-            Entreprise: company,
-            Dates: dates,
-            Lieu: location,
-            WorkplaceType: workplaceType,
-            Description: description,
-            DescriptionBullets: descriptionBullets,
-          };
-        })
-        .filter((x) => x._ok);
-    }
-
+  function parseSduiSingleExperience(item, index, options = {}) {
+    const warnings = [];
+    const key = item?.getAttribute?.("componentkey") || `idx-${index}`;
     const link =
       bestSduiLinkForItem(item) ||
       item.querySelector('a[href*="/company/"]') ||
@@ -1359,51 +1372,104 @@
       item.querySelector('a[href^="https://www.linkedin.com/school/"]') ||
       null;
 
-    const title = extractTitleFromContainer(item) || extractTitleFromContainer(link);
-    const dates = extractDatesFromContainer(item) || extractDatesFromContainer(link);
+    const title = extractTitleFromContainer(item) || extractTitleFromContainer(link) || null;
+    if (!title) warnings.push("missing_title");
+
     const companyLine = extractCompanyLineFromContainer(item) || extractCompanyLineFromContainer(link);
-    const { company, extras } = splitCompanyLine(companyLine);
+    const split = splitCompanyLine(companyLine);
+    const rawLines = getItemTextLines(link || item);
 
-    const pNodes = (link ? link.querySelectorAll("p") : item.querySelectorAll("p")) || [];
-    let ps = Array.from(pNodes)
-      .map((p) => clean(p.textContent))
-      .filter(Boolean)
-      .filter((t) => !/compétences de plus|competences de plus|skills|programming language/i.test(t));
+    const dates =
+      extractDatesFromContainer(item) ||
+      extractDatesFromContainer(link) ||
+      rawLines.find((line) => looksLikeDates(line)) ||
+      null;
+    if (!dates) warnings.push("missing_dates");
 
-    ps = uniq(ps);
+    let company = options.companyOverride || split.company || null;
+    if (!company && title) {
+      const titleIdx = rawLines.findIndex((line) => line === title);
+      if (titleIdx >= 0 && rawLines[titleIdx + 1] && !looksLikeDates(rawLines[titleIdx + 1])) {
+        company = rawLines[titleIdx + 1];
+      }
+    }
 
-    const metaCandidates = uniq([...collectMetaLines(item), ...extras, ...ps]).filter(
+    if (!company) {
+      company = rawLines.find(
+        (line) =>
+          line &&
+          line !== title &&
+          line !== dates &&
+          !looksLikeDates(line) &&
+          !looksLikeEmploymentType(line) &&
+          line.length <= 120
+      );
+    }
+
+    if (!company) warnings.push("missing_company");
+
+    const metaCandidates = uniq([...collectMetaLines(item), ...split.extras, ...rawLines]).filter(
       (t) => t && t !== title && t !== company && t !== dates && !looksLikeEmploymentType(t)
     );
-
     const { location, workplaceType } = extractLocationAndWorkplaceType(metaCandidates);
 
     const { description, descriptionBullets } = extractExperienceDescription(item);
+    const rawText = clean(item?.innerText || item?.textContent || "");
 
-    const ok = !!(title && company && dates);
-    return {
+    const result = {
       _idx: index,
-      _ok: ok,
+      _key: key,
+      _ok: !!(title || company || dates),
+      parseWarnings: warnings,
+      rawText,
       Titre: title,
-      Entreprise: company,
+      Entreprise: company || null,
       Dates: dates,
       Lieu: location,
       WorkplaceType: workplaceType,
-      Description: description,
+      Description: description || null,
       DescriptionBullets: descriptionBullets,
     };
+
+    if (!description && !descriptionBullets?.length) result.parseWarnings.push("missing_description");
+    return result;
   }
 
+  function parseSduiExperienceItem(item, index) {
+    const subComponents = item.querySelector(".pvs-entity__sub-components");
+    const groupedRoles = subComponents
+      ? Array.from(subComponents.querySelectorAll("li")).filter(
+          (li) => li.querySelector("div.t-bold") || li.querySelector(".pvs-entity__caption-wrapper")
+        )
+      : [];
+
+    if (groupedRoles.length) {
+      const headerTitle = extractTitleFromContainer(item);
+      const headerCompanyLine = extractCompanyLineFromContainer(item);
+      const headerCompany =
+        extractGroupCompanyName(item) ||
+        splitCompanyLine(headerCompanyLine).company ||
+        headerTitle ||
+        null;
+
+      return groupedRoles.map((roleItem, roleIndex) => {
+        const parsed = parseSduiSingleExperience(roleItem, `${index}.${roleIndex}`, {
+          companyOverride: headerCompany,
+        });
+        if (!headerCompany) parsed.parseWarnings.push("missing_group_company_header");
+        return parsed;
+      });
+    }
+
+    return parseSduiSingleExperience(item, index);
+  }
+
+
   function collectExperiences(expSection) {
-    if (!expSection) return { mode: "NO_ROOT", experiences: [], counts: {} };
+    if (!expSection) return { mode: "NO_ROOT", experiences: [], parsedItems: [], counts: {}, parseWarningsCount: 0 };
 
-    const sduiItems = Array.from(
-      expSection.querySelectorAll('[componentkey^="entity-collection-item-"], [componentkey*="entity-collection-item-"]')
-    );
-
-    const sduiLikely = sduiItems.filter((it) =>
-      Array.from(it.querySelectorAll("p")).some((p) => looksLikeDates(p.textContent))
-    );
+    const itemSelector = '[componentkey^="entity-collection-item-"], [componentkey^="entity-collection-item--"]';
+    const sduiItems = Array.from(expSection.querySelectorAll(itemSelector));
 
     const { ul: legacyUl, score: legacyScore } = bestUlForLegacy(expSection);
     const legacyLis = legacyUl
@@ -1412,25 +1478,26 @@
 
     const counts = {
       sduiItems: sduiItems.length,
-      sduiLikely: sduiLikely.length,
       legacyUlScore: legacyScore,
       legacyLis: legacyLis.length,
     };
 
-    if (sduiLikely.length) {
-      const parsed = sduiLikely.flatMap((it, i) => parseSduiExperienceItem(it, i));
-      const ok = parsed.filter((x) => x._ok);
-      return { mode: "SDUI_ITEMS", experiences: ok, counts };
+    if (sduiItems.length) {
+      const parsedItems = sduiItems.flatMap((it, i) => parseSduiExperienceItem(it, i));
+      const experiences = parsedItems.filter((x) => x._ok);
+      const parseWarningsCount = parsedItems.reduce((n, item) => n + (item.parseWarnings?.length || 0), 0);
+      return { mode: "SDUI_ITEMS", experiences, parsedItems, counts, parseWarningsCount };
     }
 
     if (legacyLis.length) {
-      const parsed = legacyLis.flatMap((li, i) => parseLegacyExperienceLiExpanded(li, i));
-      const ok = parsed.filter((x) => x._ok);
-      return { mode: "LEGACY_LIS", experiences: ok, counts };
+      const parsedItems = legacyLis.flatMap((li, i) => parseLegacyExperienceLiExpanded(li, i));
+      const experiences = parsedItems.filter((x) => x._ok);
+      return { mode: "LEGACY_LIS", experiences, parsedItems, counts, parseWarningsCount: 0 };
     }
 
-    return { mode: "EMPTY", experiences: [], counts };
+    return { mode: "EMPTY", experiences: [], parsedItems: [], counts, parseWarningsCount: 0 };
   }
+
 
   function pickDetailsExperienceSection(root = document) {
     const main =
@@ -1636,24 +1703,74 @@
     return { experiences, debug };
   }
 
-  async function waitForExperienceReady(timeoutMs = 6500) {
-    const deadline = Date.now() + timeoutMs;
+  async function waitForExperienceReady(timeoutMs = 7000) {
+    const startedAt = Date.now();
+    const dateLikeToken = /(janv\.?|févr\.?|f[ée]v\.?|mars|avr\.?|mai|juin|juil\.?|ao[uû]t|sept\.?|oct\.?|nov\.?|d[ée]c\.?|present|aujourd|19\d{2}|20\d{2})/i;
 
-    while (Date.now() < deadline) {
+    const snapshot = () => {
       const pick = pickExperienceSection();
-      if (pick.root) {
-        const collected = collectExperiences(pick.root);
-        if (collected.experiences.length > 0) return { pick, collected, waited: true };
-      }
-      await sleep(250);
-    }
+      const main = pick.main || document.querySelector("main") || document.body;
+      const textLenMain = clean(main?.innerText || main?.textContent || "").length;
+      const collected = pick.root
+        ? collectExperiences(pick.root)
+        : { mode: "NO_ROOT", experiences: [], parsedItems: [], counts: {}, parseWarningsCount: 0 };
+      const hasDateLike = dateLikeToken.test(clean(main?.innerText || ""));
+      const sduiItems = collected.counts?.sduiItems || 0;
+      const ready = sduiItems >= 1 && (textLenMain > 1000 || hasDateLike);
+      return { pick, collected, textLenMain, hasDateLike, ready, sduiItems };
+    };
 
-    const pick = pickExperienceSection();
-    const collected = pick.root
-      ? collectExperiences(pick.root)
-      : { mode: "NO_ROOT", experiences: [], counts: {} };
-    return { pick, collected, waited: true };
+    return new Promise((resolve) => {
+      let settled = false;
+      let polls = 0;
+      let observer = null;
+      let interval = null;
+      let timeout = null;
+
+      const finish = (state, reason) => {
+        if (settled) return;
+        settled = true;
+        if (observer) observer.disconnect();
+        if (interval) clearInterval(interval);
+        if (timeout) clearTimeout(timeout);
+        const waitedMs = Date.now() - startedAt;
+        expLog("WAIT_READY", {
+          reason,
+          waitedMs,
+          polls,
+          rootMode: state.pick?.mode || null,
+          rootSelector: state.pick?.selector || null,
+          sduiItems: state.sduiItems || 0,
+          textLenMain: state.textLenMain || 0,
+          hasDateLike: !!state.hasDateLike,
+        });
+        resolve({ ...state, waited: true, waitedMs, waitReason: reason, polls });
+      };
+
+      const maybeReady = (reason) => {
+        polls += 1;
+        const state = snapshot();
+        if (state.ready) finish(state, reason);
+      };
+
+      timeout = setTimeout(() => finish(snapshot(), "timeout"), timeoutMs);
+      interval = setInterval(() => maybeReady("poll"), 250);
+
+      try {
+        observer = new MutationObserver(() => maybeReady("mutation"));
+        observer.observe(document.documentElement || document.body, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      } catch (err) {
+        expDlog("WAIT_READY_OBSERVER_ERROR", err?.message || err);
+      }
+
+      maybeReady("initial");
+    });
   }
+
 
   // ---------------- Runner + SPA watcher ----------------
   async function runOnce(reason) {
@@ -1773,6 +1890,10 @@
         experienceRootMode: ready.pick.mode,
         experienceCollectionMode: ready.collected.mode,
         experienceCounts: ready.collected.counts,
+        experienceParseWarningsCount: ready.collected.parseWarningsCount || 0,
+        experienceWaitMs: ready.waitedMs || 0,
+        experienceWaitReason: ready.waitReason || null,
+        experienceWaitPolls: ready.polls || 0,
         experienceRootPath: elementPath(ready.pick.root),
         experienceDetailsUrl: detailsUrl || null,
         experienceDetailsCount: detailsNormalized.length,
@@ -2055,10 +2176,39 @@
   }
 
   function debugScrapeExperiences() {
-    const experiences = window.__FOCALS_LAST?.experiences || [];
-    log("Experiences JSON:", experiences);
-    return experiences;
+    const pick = pickExperienceSection();
+    const collected = pick?.root
+      ? collectExperiences(pick.root)
+      : { mode: "NO_ROOT", experiences: [], parsedItems: [], counts: {}, parseWarningsCount: 0 };
+
+    console.groupCollapsed("[FOCALS][EXPERIENCE] debugScrapeExperiences");
+    console.log("url", location.href);
+    console.log("root", {
+      mode: pick?.mode || null,
+      selector: pick?.selector || null,
+      path: pick?.root ? elementPath(pick.root) : null,
+      collectionMode: collected?.mode || null,
+    });
+    console.log("counts", collected?.counts || {});
+
+    (collected?.parsedItems || []).forEach((item) => {
+      console.groupCollapsed(`item ${item._key || item._idx}`);
+      console.log({
+        key: item._key || null,
+        title: item.Titre || null,
+        company: item.Entreprise || null,
+        date: item.Dates || null,
+        descLen: clean(item.Description || "").length,
+        parseWarnings: item.parseWarnings || [],
+        rawTextPreview: clean(item.rawText || "").slice(0, 240),
+      });
+      console.groupEnd();
+    });
+
+    console.groupEnd();
+    return collected?.experiences || [];
   }
+
 
   window.FOCALS = {
     run: () => handleScrapeRequest("manual_call"),
