@@ -70,6 +70,11 @@ const isJwt = (token) =>
   token.length > 10 &&
   /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/.test(token);
 
+const getUserIdFromStorage = async () => {
+  const data = await chrome.storage.local.get(["focals_user_id"]);
+  return data?.focals_user_id || null;
+};
+
 const resolveSenderOrigin = (sender) => {
   if (sender?.origin) return sender.origin;
   if (sender?.url) {
@@ -318,6 +323,19 @@ async function resolveAuthHeaders(headers = {}) {
 
 async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }) {
   const url = new URL(buildApiUrl(endpoint));
+  let resolvedBody = body;
+
+  if (method !== "GET") {
+    const storageUserId = await getUserIdFromStorage();
+    if (!storageUserId) {
+      return { ok: false, status: 401, error: "Utilisateur non connecté" };
+    }
+    if (resolvedBody && typeof resolvedBody === "object" && !Array.isArray(resolvedBody)) {
+      resolvedBody = { ...resolvedBody, user_id: storageUserId };
+    } else if (resolvedBody == null) {
+      resolvedBody = { user_id: storageUserId };
+    }
+  }
 
   if (method === "GET" && params) {
     Object.entries(params).forEach(([key, value]) => {
@@ -335,7 +353,7 @@ async function fetchApi({ endpoint, method = "GET", params, body, headers = {} }
       "Content-Type": "application/json",
       ...resolvedHeaders,
     },
-    body: method && method !== "GET" ? JSON.stringify(body ?? {}) : undefined,
+    body: method && method !== "GET" ? JSON.stringify(resolvedBody ?? {}) : undefined,
   });
 
   const contentType = response.headers.get("content-type") || "";
@@ -489,7 +507,12 @@ async function relayLiveMessageToSupabase(payload) {
 
   console.log("🎯 [RADAR] SUPABASE relay payload :", cleanPayload);
 
-  const { userId, accessToken, tokenIsJwt } = await getAuthFromStorage();
+  const { focals_sb_access_token: accessToken } = await chrome.storage.local.get([
+    "focals_user_id",
+    "focals_sb_access_token",
+  ]);
+  const userId = await getUserIdFromStorage();
+  const tokenIsJwt = isJwt(accessToken);
   if (!userId) {
     if (!hasLoggedMissingLiveAuth) {
       hasLoggedMissingLiveAuth = true;
@@ -507,7 +530,7 @@ async function relayLiveMessageToSupabase(payload) {
       type: "FOCALS_AUTH_REQUIRED",
       reason: "radar_live",
     });
-    return { ok: false, status: 401, error: "Missing focals_user_id" };
+    return { ok: false, status: 401, error: "Utilisateur non connecté" };
   }
   const headers = {
     "Content-Type": "application/json",
@@ -1905,8 +1928,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({
               ok: false,
               status: 401,
-              error: "Missing focals_user_id",
-              json: { error: "Missing focals_user_id" },
+              error: "Utilisateur non connecté",
+              json: { error: "Utilisateur non connecté" },
             });
             return;
           }
